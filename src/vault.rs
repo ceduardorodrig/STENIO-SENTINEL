@@ -150,6 +150,35 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
         }
     }
 
+    // Validação 4: Nomenclatura Estrita de Pastas em projects/ (AAMMDD-nome-contratante)
+    let projects_dir = vault_root.join("projects");
+    if projects_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&projects_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+                    let dir_name = entry.file_name().to_string_lossy().to_string();
+                    let is_valid_project_name = dir_name.len() >= 8
+                        && dir_name[0..6].chars().all(|c| c.is_ascii_digit())
+                        && dir_name.chars().nth(6) == Some('-')
+                        && dir_name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+
+                    if !is_valid_project_name && !dir_name.starts_with('.') {
+                        violations.push(Violation {
+                            rule_id: "PROJECT-NAMING-CONVENTION".to_string(),
+                            rule_name: "Nomenclatura Canônica de Projetos (AAMMDD-...)".to_string(),
+                            severity: Severity::Warning,
+                            file_path: format!("projects/{}", dir_name),
+                            line_number: 1,
+                            snippet: dir_name.clone(),
+                            message: format!("Pasta de projeto 'projects/{}' desvia do padrão canônico AAMMDD-nome-contratante.", dir_name),
+                            suggestion: Some("Renomeie para o formato AAMMDD-nome-contratante em lowercase e com hífens.".to_string()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     if violations.is_empty() {
         messages.push(format!("✅ {} notas do vault Obsidian auditadas e íntegras.", scanned_count));
     } else {
