@@ -36,13 +36,15 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
             for line in content.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("- `#") || trimmed.starts_with("- `") {
-                    let tag_clean = trimmed
-                        .trim_start_matches("- `")
-                        .trim_start_matches('#')
-                        .trim_end_matches('`')
-                        .trim();
-                    if !tag_clean.is_empty() {
-                        valid_tags.insert(tag_clean.to_string());
+                    if let Some(first_tick) = trimmed.find('`') {
+                        if let Some(second_tick) = trimmed[first_tick + 1..].find('`') {
+                            let tag_clean = trimmed[first_tick + 1..first_tick + 1 + second_tick]
+                                .trim_start_matches('#')
+                                .trim();
+                            if !tag_clean.is_empty() {
+                                valid_tags.insert(tag_clean.to_string());
+                            }
+                        }
                     }
                 }
             }
