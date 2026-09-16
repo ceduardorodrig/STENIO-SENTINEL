@@ -211,7 +211,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                                     line_number: 1,
                                     snippet: format!("Inativo há {} dias", days),
                                     message: format!("O projeto 'projects/{}' não tem modificações há mais de {} dias.", dir_name, days),
-                                    suggestion: Some("Arquive para /mnt/NVME_PCI/cold-storage/projects/ conforme governance/cold-storage.md.".to_string()),
+                                    suggestion: Some("Arquive para projects/cold-storage/ conforme governance/cold-storage.md e execute stenio --scope all para validar integridade.".to_string()),
                                 });
                             }
                         }

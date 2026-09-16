@@ -124,16 +124,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     ));
 
     // ── 3. Proibição de Sudo Puro (AGENTS.md Regra 10) ──────────────────────
+    // Padrão cobre QUALQUER comando executado via sudo, sem lista branca.
+    // O fix substitui apenas "sudo " por "pkexec ", preservando o comando e args intactos.
     rules.push(Rule::new(
         "SEC-SUDO",
         "sec",
         Severity::Error,
         "Proibição de sudo puro",
         "Regra 10 do AGENTS.md: Use pkexec em vez de sudo em scripts sem TTY.",
-        r"(?m)\bsudo\s+(systemctl|apt|rm|docker|chown|chmod)\b",
+        r"(?m)\bsudo\s+",
         &["sh", "bash"],
         Some("Substitua 'sudo <comando>' por 'pkexec <comando>' ou execute dentro de container com privilégios configurados."),
-    ).with_fix("pkexec $1"));
+    ).with_fix("pkexec "));
 
     // ── 4. Scanner Universal de Credenciais & Segredos ──────────────────────
     rules.push(Rule::new(
@@ -243,7 +245,22 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Substitua println!/eprintln! por tracing::info!, tracing::warn! ou tracing::error!."),
     ));
 
-    // ── 13. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+    // ── 13. Soberania Rust: Proibição de Chamadas a Ferramentas GNU em Código .rs ──
+    // Garante que o próprio código Rust não invoque binários GNU via Command::new().
+    // O Stênio é o guardião; ele não pode violar as regras que impõe.
+    rules.push(Rule::new(
+        "ARCH-RUST-CMD-LEGACY",
+        "arch",
+        Severity::Warning,
+        "Ferramenta GNU Legada Invocada em Código Rust",
+        "Command::new() com ferramentas GNU viola AGENTS.md. Use equivalentes Rust: xh (curl), walkdir (find), regex (grep), statvfs/nix (df).",
+        r#"Command::new\("(df|curl|find|grep|ls|cat|sed|du|awk|ps|top)"\)"#,
+        &["rs"],
+        Some("Substitua pela alternativa Rust nativa: curl→xh, df→/proc/statvfs ou nix crate, find→walkdir, grep→regex."),
+    ));
+
+    // ── 14. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+
     if let Some(custom_rules) = &config.custom_rules {
         for cr in custom_rules {
             let sev = match cr.severity.as_deref().map(|s| s.to_lowercase()).as_deref() {

@@ -131,11 +131,18 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!("Tokio Sleep Válido", "RUST-ASYNC-SLEEP", "tokio::time::sleep(Duration::from_millis(100)).await;", false);
     check_case!("Segredo Hardcoded", "SEC-SECRETS", "api_key = \"ghp_123456789012345678901234567890123456\"", true); // stenio-ignore: SEC-SECRETS
     check_case!("Sudo Desprotegido", "SEC-SUDO", "sudo systemctl restart nginx", true);
+    check_case!("Sudo curl Desprotegido", "SEC-SUDO", "sudo curl https://example.com", true); // Novo: captura qualquer comando
+    check_case!("Sudo useradd Desprotegido", "SEC-SUDO", "sudo useradd -m user", true);     // Novo: era ponto cego
     check_case!("Pkexec Válido", "SEC-SUDO", "pkexec systemctl restart nginx", false);
     check_case!("Bare Except Proibido", "SEC-EXCEPT", "except:\n    pass", true);
     check_case!("Except Tipado", "SEC-EXCEPT", "except ValueError:\n    pass", false);
+    check_case!("GNU Tools em Shell", "ARCH-RUST-TOOLS", "grep -r pattern .", true);    // Novo: AGENTS.md regra de terminal
+    check_case!("Rust Tools Válido", "ARCH-RUST-TOOLS", "rg 'pattern' .", false);       // Novo: rg não dispara
+    check_case!("Curl em Rust Proibido", "ARCH-RUST-CMD-LEGACY", r#"Command::new("curl")"#, true);  // Novo: regra ARCH-RUST-CMD-LEGACY
+    check_case!("XH em Rust OK", "ARCH-RUST-CMD-LEGACY", r#"Command::new("xh")"#, false);           // Novo: xh não dispara
+    check_case!("Console.log Proibido", "FRONT-LOGS", "  console.log('debug info')", true);          // Novo: FRONT-LOGS
 
-    // Teste sintético de Auto-Fix
+    // Teste sintético de Auto-Fix para SEC-SUDO (regex expandido: captura qualquer comando)
     total += 1;
     let sudo_rule = rules.iter().find(|r| r.id == "SEC-SUDO");
     if let Some(rule) = sudo_rule {
@@ -145,9 +152,26 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             let fixed = re.replace_all(sample, fix.as_str());
             if fixed == "pkexec systemctl restart nginx" {
                 passed += 1;
-                println!("   ✅ Teste {:<22} [{}] - OK", "Auto-Fix Substituição", "SEC-SUDO".cyan());
+                println!("   ✅ Teste {:<22} [{}] - OK", "Auto-Fix SEC-SUDO", "SEC-SUDO".cyan());
             } else {
                 println!("   ❌ Teste Auto-Fix gerou resultado inesperado: {}", fixed);
+            }
+        }
+    }
+
+    // Teste Auto-Fix para comando não listado anteriormente (sudo curl — era ponto cego)
+    total += 1;
+    let sudo_rule2 = rules.iter().find(|r| r.id == "SEC-SUDO");
+    if let Some(rule) = sudo_rule2 {
+        if let Some(ref fix) = rule.fix_replacement {
+            let re = regex::Regex::new(&rule.pattern)?;
+            let sample = "sudo curl https://example.com";
+            let fixed = re.replace_all(sample, fix.as_str());
+            if fixed == "pkexec curl https://example.com" {
+                passed += 1;
+                println!("   ✅ Teste {:<22} [{}] - OK", "Auto-Fix sudo curl", "SEC-SUDO".cyan());
+            } else {
+                println!("   ❌ Teste Auto-Fix (sudo curl) gerou: {}", fixed);
             }
         }
     }
@@ -162,6 +186,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     println!();
     Ok(())
 }
+
 
 fn main() -> Result<()> {
     let args = Args::parse();

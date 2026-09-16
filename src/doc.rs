@@ -1,3 +1,4 @@
+use ignore::WalkBuilder;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -325,17 +326,31 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
 }
 
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
-                files.push(path);
-            } else if path.is_dir() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if !name.starts_with('.') && name != "target" && name != "node_modules" {
-                    collect_md_files(&path, files);
-                }
-            }
+    // Usa WalkBuilder (crate ignore) para respeitar .gitignore e .stignore do Syncthing.
+    // Isso evita auditar arquivos em .stversions/, .smart-env/ e outros diretórios ignorados.
+    let mut walker = WalkBuilder::new(dir);
+    walker.hidden(true).git_ignore(true).parents(true);
+
+    for result in walker.build().flatten() {
+        if !result.file_type().map_or(false, |ft| ft.is_file()) {
+            continue;
+        }
+        let path = result.into_path();
+        let path_str = path.to_string_lossy();
+
+        // Exclusões explícitas adicionais (proteção contra stversions não cobertos por .stignore)
+        if path_str.contains("/.stversions/")
+            || path_str.contains("/.smart-env/")
+            || path_str.contains("/target/")
+            || path_str.contains("/node_modules/")
+            || path_str.contains("/.venv/")
+        {
+            continue;
+        }
+
+        if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            files.push(path);
         }
     }
 }
+

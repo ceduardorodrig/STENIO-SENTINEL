@@ -29,38 +29,100 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         messages.push(format!("🔐 Executável Nativo Íntegro: {} (SHA-256: {})", exe_path.display(), binary_hash));
     }
 
-    // 2. Auto-auditoria de código: impedir enfraquecimento das regras fundamentais
-    let critical_files = ["rule.rs", "infra.rs", "vault.rs", "mesh.rs", "main.rs"];
-    for file in &critical_files {
-        let p = stenio_src_dir.join("src").join(file);
+    // 2. Auto-auditoria abrangente: cada módulo crítico tem strings obrigatórias.
+    //    Remoção de qualquer string dispara alerta imediato.
+    let critical_modules: &[(&str, &[&str])] = &[
+        ("rule.rs", &[
+            "ARCH-NO-PYTHON",
+            "SEC-SUDO",
+            "SEC-SECRETS",
+            "ARCH-RUST-CMD-LEGACY",
+            "RUST-ASYNC-SLEEP",
+            r"(?m)\bsudo\s+",          // regex expandido — não pode ser revertido para lista curta
+        ]),
+        ("infra.rs", &[
+            "SEC-SOPS-UNENCRYPTED",
+            "SEC-PRIVATE-KEY-CLEARTEXT",
+            "SEC-PLAINTEXT-SECRET",
+            "SEC-PERM-LEAK",
+            "INFRA-BASH-STRICT",
+        ]),
+        ("vault.rs", &[
+            "PROJECT-AUTO-COLD-STORAGE",
+            "VAULT-TAG-TAXONOMY",
+            "VAULT-FRONTMATTER",
+            "PROJECT-NAMING-CONVENTION",
+            "projects/cold-storage",  // cold-storage deve estar isento da regra de nomenclatura
+        ]),
+        ("homelab.rs", &[
+            "HOMELAB-NFS-SOFT",
+            "HOMELAB-FRONTMATTER",
+            "HOMELAB-TAG-ROOT",
+        ]),
+        ("doc.rs", &[
+            "DOC-SERVICE-MISSING-HOST",
+            "DOC-COLD-STORAGE-INCOMPLETE",
+            "DOC-SERVICE-UNINDEXED",
+            "DOC-BROKEN-LINK",
+        ]),
+        ("baseline.rs", &[
+            "stenio-ignore",
+            "nosemgrep",
+            "SEC-",                  // regras SEC-* nunca podem ser ignoráveis por nosemgrep
+            "starts_with(\"SEC-\")", // a guarda explícita de segurança deve existir
+        ]),
+        ("main.rs", &[
+            "run_self_tests",
+            "audit_stenio_integrity",
+            "audit_governance",
+            "audit_homelab",
+            "audit_infrastructure",
+        ]),
+    ];
+
+    for (module, required_strings) in critical_modules {
+        let p = stenio_src_dir.join("src").join(module);
         if p.exists() {
             files_checked += 1;
             if let Ok(content) = fs::read_to_string(&p) {
-                // Checagem Anti-Tampering 1: Remoção de regras fundamentais
-                if file == &"rule.rs" && !content.contains("ARCH-NO-PYTHON") {
-                    tamper_alerts.push("Alerta Crítico: Regra ARCH-NO-PYTHON foi suprimida do código-fonte!".to_string());
-                }
-                if file == &"infra.rs" && !content.contains("SEC-SOPS-UNENCRYPTED") {
-                    tamper_alerts.push("Alerta Crítico: Scanner de segredos SOPS foi desativado em infra.rs!".to_string());
-                }
-                if file == &"infra.rs" && !content.contains("SEC-PRIVATE-KEY-CLEARTEXT") {
-                    tamper_alerts.push("Alerta Crítico: Bloqueio de chaves privadas em texto claro foi alterado!".to_string());
+                // Checar presença de todas as strings obrigatórias
+                for required in *required_strings {
+                    if !content.contains(required) {
+                        tamper_alerts.push(format!(
+                            "🚨 ALERTA CRÍTICO [{}]: string obrigatória '{}' foi removida ou alterada!",
+                            module, required
+                        ));
+                    }
                 }
 
-                // Checagem Anti-Tampering 2: Injeção de skips indiscriminados
+                // Checagem Anti-Tampering: bypass global explícito
                 let bypass_count = content.matches("// stenio-ignore-all").count();
                 if bypass_count > 0 {
-                    tamper_alerts.push(format!("Alerta de Segurança: Tentativa de bypass global em '{}'", file));
+                    tamper_alerts.push(format!(
+                        "🚨 ALERTA DE SEGURANÇA [{}]: {} ocorrência(s) de bypass global detectada(s)!",
+                        module, bypass_count
+                    ));
                 }
             }
+        } else {
+            tamper_alerts.push(format!(
+                "🚨 ALERTA CRÍTICO: módulo '{}' foi removido do código-fonte do Stênio!",
+                module
+            ));
         }
     }
 
     let is_intact = tamper_alerts.is_empty();
     if is_intact {
-        messages.push(format!("🛡️ Guardian: {} módulos do núcleo do Stênio auditados com Zero Adulteração.", files_checked));
+        messages.push(format!(
+            "🛡️ Guardian: {} módulos do núcleo do Stênio auditados com Zero Adulteração.",
+            files_checked
+        ));
     } else {
-        messages.push(format!("🚨 Guardian: {} violação(ões) de adulteração/tampering detectadas!", tamper_alerts.len()));
+        messages.push(format!(
+            "🚨 Guardian: {} violação(ões) de adulteração/tampering detectadas!",
+            tamper_alerts.len()
+        ));
     }
 
     GuardianReport {
@@ -71,3 +133,4 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         tamper_alerts,
     }
 }
+

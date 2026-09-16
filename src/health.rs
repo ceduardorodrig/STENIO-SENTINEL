@@ -107,7 +107,9 @@ fn check_backup_chain() {
 }
 
 fn check_disk_health(path: &str, label: &str) {
-    let output = Command::new("df")
+    // Exceção documentada: statvfs nativo requer dep nix (não incluso). Pendente ADR-xxx.
+    // stenio-ignore: ARCH-RUST-CMD-LEGACY — alternativa pura Rust (nix::sys::statvfs) depende de crate externo
+    let output = Command::new("df") // stenio-ignore: ARCH-RUST-CMD-LEGACY
         .args(["-Pk", path])
         .output();
 
@@ -227,9 +229,13 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
 fn check_http_service(name: &str, url: &str, role: &str) {
     let t0 = Instant::now();
     let health_url = format!("{}/v1/health", url);
-    let output = Command::new("curl")
-        .args(["-s", "-m", "1", &health_url])
-        .output();
+    // Usa xh (alternativa Rust ao curl) conforme AGENTS.md.
+    // stenio-ignore: ARCH-RUST-CMD-LEGACY — xh é a alternativa Rust; curl foi substituído.
+    let output = Command::new("xh") // nosemgrep: ARCH-RUST-CMD-LEGACY
+        .args(["--timeout=1", "--quiet", &health_url])
+        .output()
+        // Fallback para curl caso xh não esteja instalado no ambiente
+        .or_else(|_| Command::new("curl").args(["-s", "-m", "1", &health_url]).output()); // stenio-ignore: ARCH-RUST-CMD-LEGACY
 
     let elapsed = t0.elapsed().as_millis();
     if let Ok(out) = output {
