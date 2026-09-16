@@ -180,7 +180,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                         if let Ok(mod_time) = meta.modified() {
                             if let Ok(elapsed) = mod_time.elapsed() {
                                 let days = elapsed.as_secs() / (3600 * 24);
-                                if days > 30 && !dir_name.contains("miracena") {
+                                if days > 30 {
                                     violations.push(Violation {
                                         rule_id: "PROJECT-AUTO-COLD-STORAGE".to_string(),
                                         rule_name: "Projeto Inativo há mais de 30 dias".to_string(),
