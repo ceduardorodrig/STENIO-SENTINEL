@@ -294,9 +294,9 @@ fn main() -> Result<()> {
     let should_audit_gov = is_hub_active
         && (tag_lower.as_deref() == Some("gov") || tag_lower.is_none())
         && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("GOV-AGENT-LAWS")).unwrap_or(false));
-    let should_audit_doc = is_hub_active
+    let should_audit_doc = (is_hub_active || is_homelab_active || is_vault_active)
         && (tag_lower.as_deref() == Some("doc") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("DOC-BROKEN-LINK")).unwrap_or(false));
+        && (only_rule.is_none() || only_rule.map(|s| s.starts_with("DOC-")).unwrap_or(false));
     let should_audit_mig = is_hub_active
         && (tag_lower.as_deref() == Some("db") || tag_lower.as_deref() == Some("migrations") || tag_lower.is_none())
         && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("DB-MIGRATION-INTEGRITY")).unwrap_or(false));
@@ -392,21 +392,14 @@ fn main() -> Result<()> {
     let mut doc_messages = Vec::new();
     if let Some(doc) = doc_res {
         doc_messages = doc.messages;
-        if !doc.broken_links.is_empty() {
-            report.error_count += doc.broken_links.len();
-            report.total_violations += doc.broken_links.len();
-            for link_err in doc.broken_links {
-                report.violations.push(engine::Violation {
-                    rule_id: "DOC-BROKEN-LINK".to_string(),
-                    rule_name: "Link Quebrado na Documentação".to_string(),
-                    severity: Severity::Error,
-                    file_path: "docs/".to_string(),
-                    line_number: 1,
-                    snippet: "".to_string(),
-                    message: link_err,
-                    suggestion: Some("Atualize o link ou âncora markdown para um arquivo existente em docs/.".to_string()),
-                });
+        for v in doc.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
             }
+            report.total_violations += 1;
+            report.violations.push(v);
         }
     }
 

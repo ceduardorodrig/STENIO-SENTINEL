@@ -159,6 +159,9 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
             for entry in entries.flatten() {
                 if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                     let dir_name = entry.file_name().to_string_lossy().to_string();
+                    if dir_name == "cold-storage" {
+                        continue;
+                    }
                     let is_valid_project_name = dir_name.len() >= 8
                         && dir_name[0..6].chars().all(|c| c.is_ascii_digit())
                         && dir_name.chars().nth(6) == Some('-')
