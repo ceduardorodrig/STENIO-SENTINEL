@@ -176,22 +176,38 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                     }
 
                     // Validação 5: Alerta de Inatividade > 30 Dias (PROJECT-AUTO-COLD-STORAGE)
-                    if let Ok(meta) = entry.metadata() {
-                        if let Ok(mod_time) = meta.modified() {
-                            if let Ok(elapsed) = mod_time.elapsed() {
-                                let days = elapsed.as_secs() / (3600 * 24);
-                                if days > 30 {
-                                    violations.push(Violation {
-                                        rule_id: "PROJECT-AUTO-COLD-STORAGE".to_string(),
-                                        rule_name: "Projeto Inativo há mais de 30 dias".to_string(),
-                                        severity: Severity::Warning,
-                                        file_path: format!("projects/{}", dir_name),
-                                        line_number: 1,
-                                        snippet: format!("Inativo há {} dias", days),
-                                        message: format!("O projeto 'projects/{}' não tem modificações há mais de {} dias.", dir_name, days),
-                                        suggestion: Some("Arquive para /mnt/NVME_PCI/cold-storage/projects/ conforme governance/cold-storage.md.".to_string()),
-                                    });
+                    // Calcula a modificação mais recente recursivamente em todos os arquivos do projeto
+                    let mut latest_mod_time = entry.metadata().ok().and_then(|m| m.modified().ok());
+                    let project_walker = WalkBuilder::new(entry.path())
+                        .hidden(true)
+                        .parents(false)
+                        .git_ignore(true)
+                        .build();
+
+                    for sub_entry in project_walker.flatten() {
+                        if let Ok(sub_meta) = sub_entry.metadata() {
+                            if let Ok(sub_mtime) = sub_meta.modified() {
+                                if latest_mod_time.map_or(true, |cur| sub_mtime > cur) {
+                                    latest_mod_time = Some(sub_mtime);
                                 }
+                            }
+                        }
+                    }
+
+                    if let Some(mod_time) = latest_mod_time {
+                        if let Ok(elapsed) = mod_time.elapsed() {
+                            let days = elapsed.as_secs() / (3600 * 24);
+                            if days > 30 {
+                                violations.push(Violation {
+                                    rule_id: "PROJECT-AUTO-COLD-STORAGE".to_string(),
+                                    rule_name: "Projeto Inativo há mais de 30 dias".to_string(),
+                                    severity: Severity::Warning,
+                                    file_path: format!("projects/{}", dir_name),
+                                    line_number: 1,
+                                    snippet: format!("Inativo há {} dias", days),
+                                    message: format!("O projeto 'projects/{}' não tem modificações há mais de {} dias.", dir_name, days),
+                                    suggestion: Some("Arquive para /mnt/NVME_PCI/cold-storage/projects/ conforme governance/cold-storage.md.".to_string()),
+                                });
                             }
                         }
                     }
