@@ -18,11 +18,13 @@ mod health;
 mod homelab;
 mod infra;
 mod learner;
+mod mcp;
 mod mesh;
 mod migrations;
 mod rule;
 mod typegen;
 mod vault;
+mod watch;
 
 use guardian::audit_stenio_integrity;
 
@@ -156,6 +158,19 @@ struct Args {
         help = "Saída ultra-compacta de uma linha por violação (otimizada para agentes de IA e LLMs)"
     )]
     compact: bool,
+
+    #[arg(
+        long,
+        help = "Modo Daemon Watchdog: monitora o sistema de arquivos via inotify e audita instantaneamente (<5ms) qualquer arquivo salvo"
+    )]
+    watch: bool,
+
+    #[arg(
+        long,
+        alias = "mcp-server",
+        help = "Modo Servidor MCP: executa como servidor Model Context Protocol (stdio/JSON-RPC 2.0) para OpenCode, Claude Code, Antigravity, Cursor"
+    )]
+    mcp: bool,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -516,6 +531,21 @@ fn main() -> Result<()> {
     // Carrega configuração canônica steniocheck.toml
     let steniocheck_cfg = SteniocheckConfig::load_from_dir(&args.path);
     let rules = get_rules_from_config(&steniocheck_cfg);
+
+    // ── Modo MCP Server (Protocolo JSON-RPC 2.0 stdio para OpenCode, Antigravity, Claude) ──
+    if args.mcp {
+        mcp::run_mcp_server(&args.path, rules, whitelist)?;
+        return Ok(());
+    }
+
+    // ── Modo Watchdog em Tempo Real (--watch com inotify) ─────────────────
+    if args.watch {
+        let engine = Engine::new(rules, whitelist)?;
+        let tag_lower = args.tag.as_ref().map(|s| s.to_lowercase());
+        let only_rule = args.only.as_deref();
+        watch::start_watch_mode(&args.path, &engine, tag_lower.as_deref(), only_rule)?;
+        return Ok(());
+    }
 
     // ── Modo Listagem (--list) ─────────────────────────────────────────────
     if args.list {

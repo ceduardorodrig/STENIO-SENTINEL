@@ -290,7 +290,7 @@ impl Engine {
         files
     }
 
-    fn scan_file(
+    pub fn scan_file(
         &self,
         path: &Path,
         tag_filter: Option<&str>,
