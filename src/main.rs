@@ -48,7 +48,7 @@ use vault::audit_vault;
 #[command(
     name = "stenio",
     author = "Sumænimá Platform",
-    version = "3.0.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust"
 )]
 struct Args {
@@ -1498,7 +1498,10 @@ fn main() -> Result<()> {
     );
     println!(
         "{} {}",
-        "StenioSentinel (Rust Engine v3.0) — Sistema Universal de Governança"
+        format!(
+            "StenioSentinel (Rust Engine v{}) — Sistema Universal de Governança",
+            env!("CARGO_PKG_VERSION")
+        )
             .cyan()
             .bold(),
         format!("[{:.2?}]", report.duration).yellow()

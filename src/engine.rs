@@ -458,8 +458,23 @@ impl Engine {
                     continue;
                 }
 
+                let mut in_test_scope = false;
                 for (line_idx, line) in content.lines().enumerate() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("#[cfg(test)]") || trimmed == "#[test]" {
+                        in_test_scope = true;
+                    }
+
                     if re.is_match(line) {
+                        // Se for regra exclusiva de código de produção Rust, ignora dentro de escopo de teste
+                        if in_test_scope
+                            && (rule.id == "RUST-NO-UNWRAP"
+                                || rule.id == "BACKEND-NO-PANIC"
+                                || rule.id == "RUST-NO-UNBOUNDED-CHANNEL")
+                        {
+                            continue;
+                        }
+
                         if !self.whitelist.is_ignored(&path_str, &rule.id, line) {
                             file_violations.push(Violation {
                                 rule_id: rule.id.clone(),
