@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::engine::Violation;
 use crate::rule::Severity;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DocAuditResult {
     pub total_docs: usize,

@@ -144,6 +144,19 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                 "type": "object",
                                 "properties": {}
                             }
+                        },
+                        {
+                            "name": "stenio_explain",
+                            "description": "Explica detalhadamente o porquê de uma regra existir, fornecendo exemplos de código incorreto, código correto e remediação passo-a-passo para agentes e LLMs.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "rule_id": {
+                                        "type": "string",
+                                        "description": "ID da regra (ex: SEC-SUDO, RUST-NO-UNWRAP, ARCH-RUST-TOOLS, VAULT-FRONTMATTER, HOMELAB-NAMING) ou vazio para listar todas"
+                                    }
+                                }
+                            }
                         }
                     ]
                 });
@@ -295,6 +308,23 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             - Regras fundamentais: Proibido sudo puro (usar pkexec em scripts), proibido ferramentas GNU em Rust (usar xh, walkdir, regex), soft mount NFS obrigatório.\n\
                             - Ferramentas CLI: use stenio --diff para scan rápido de alterações."
                         )
+                    }
+                    "stenio_explain" => {
+                        let rule_id = arguments
+                            .get("rule_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if rule_id.is_empty() || rule_id.eq_ignore_ascii_case("all") {
+                            crate::explain::list_all_explanations()
+                        } else if let Some(exp) = crate::explain::get_explanation(rule_id) {
+                            crate::explain::format_explanation_plain(exp)
+                        } else {
+                            format!(
+                                "Nenhuma explicação encontrada para a regra '{}'.\n\n{}",
+                                rule_id,
+                                crate::explain::list_all_explanations()
+                            )
+                        }
                     }
                     other => format!("Ferramenta desconhecida: '{}'", other),
                 };

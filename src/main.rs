@@ -10,6 +10,7 @@ mod context;
 mod cv;
 mod doc;
 mod engine;
+mod explain;
 mod frontend;
 mod gov;
 mod gpu;
@@ -171,6 +172,14 @@ struct Args {
         help = "Modo Servidor MCP: executa como servidor Model Context Protocol (stdio/JSON-RPC 2.0) para OpenCode, Claude Code, Antigravity, Cursor"
     )]
     mcp: bool,
+
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "all",
+        help = "Exibe documentação técnica detalhada, exemplos incorretos/corretos e remediação de regras (ex: --explain SEC-SUDO, --explain RUST-NO-UNWRAP)"
+    )]
+    explain: Option<String>,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -359,6 +368,24 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "  console.log('debug info')",
         true
     ); // Novo: FRONT-LOGS
+    check_case!(
+        "Unwrap Proibido",
+        "RUST-NO-UNWRAP",
+        "let val = opt.unwrap();",
+        true
+    );
+    check_case!(
+        "Expect Proibido",
+        "RUST-NO-UNWRAP",
+        r#"let val = opt.expect("erro");"#,
+        true
+    );
+    check_case!(
+        "Match Válido",
+        "RUST-NO-UNWRAP",
+        "let val = match opt { Some(v) => v, None => return };",
+        false
+    );
 
     // Teste sintético de Auto-Fix para SEC-SUDO (regex expandido: captura qualquer comando)
     total += 1;
@@ -428,6 +455,24 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // ── Modo Explicação de Regras (--explain [RULE_ID]) ─────────────────────
+    if let Some(ref rule_target) = args.explain {
+        if rule_target == "all" || rule_target.is_empty() {
+            println!("{}", explain::list_all_explanations());
+        } else if let Some(exp) = explain::get_explanation(rule_target) {
+            println!("{}", explain::format_explanation_cli(exp));
+        } else {
+            eprintln!(
+                "{} Nenhuma explicação encontrada para a regra '{}'.",
+                "⚠️".yellow(),
+                rule_target
+            );
+            println!("{}", explain::list_all_explanations());
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     // ── Modo Aprendizado: Aprender nova regra e persistir no steniocheck.toml ──
     if let Some(ref payload) = args.learn {

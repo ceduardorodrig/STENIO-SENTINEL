@@ -312,7 +312,7 @@ impl Engine {
 
         // 1. Auditoria especializada de Leis de Frontend
         if (tag_filter.is_none() || tag_filter == Some("frontend"))
-            && (only_rule.is_none() || only_rule.unwrap().starts_with("FRONT-"))
+            && only_rule.map_or(true, |r| r.starts_with("FRONT-"))
         {
             let fv = audit_frontend_file(path, &content, &self.whitelist);
             if let Some(target) = only_rule {
@@ -347,6 +347,17 @@ impl Engine {
                 if !path_str.contains("app/server/src/")
                     || path_str.contains("/bin/")
                     || path_str.contains("/tests/")
+                {
+                    continue;
+                }
+            }
+
+            if rule.id == "RUST-NO-UNWRAP" {
+                if path_str.contains("/tests/")
+                    || path_str.ends_with("_test.rs")
+                    || path_str.ends_with("_tests.rs")
+                    || path_str.contains("/examples/")
+                    || path_str.contains("/build.rs")
                 {
                     continue;
                 }

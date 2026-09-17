@@ -262,7 +262,19 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Substitua pela alternativa Rust nativa: curl→xh, df→/proc/statvfs ou nix crate, find→walkdir, grep→regex."),
     ));
 
-    // ── 14. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+    // ── 14. Soberania Rust: Proibição de unwrap()/expect() em Produção ─────
+    rules.push(Rule::new(
+        "RUST-NO-UNWRAP",
+        "rust",
+        Severity::Warning,
+        "Uso de unwrap() ou expect() em Código de Produção",
+        "Chamadas a .unwrap() ou .expect() podem causar panics em runtime. Trate erros com '?', match, ou métodos com fallback.",
+        r"\.(unwrap|expect)\(",
+        &["rs"],
+        Some("Substitua .unwrap()/.expect() por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros como .unwrap_or_default() / .ok_or(...)."),
+    ));
+
+    // ── 15. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
 
     if let Some(custom_rules) = &config.custom_rules {
         for cr in custom_rules {

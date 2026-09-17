@@ -44,8 +44,20 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "SEC-SECRETS",
                 "ARCH-RUST-CMD-LEGACY",
                 "RUST-ASYNC-SLEEP",
+                "RUST-NO-UNWRAP",
                 r"(?m)\bsudo\s+", // regex expandido — não pode ser revertido para lista curta
             ],
+        ),
+        (
+            "gov.rs",
+            &[
+                "audit_leftover_test_artifacts",
+                "GOV-LEFTOVER-TEST-ARTIFACTS",
+            ],
+        ),
+        (
+            "explain.rs",
+            &["RuleExplanation", "EXPLANATIONS", "format_explanation_cli"],
         ),
         (
             "infra.rs",

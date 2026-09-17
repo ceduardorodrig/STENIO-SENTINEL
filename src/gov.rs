@@ -171,10 +171,111 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         }
     }
 
+    // Auditoria de Artefatos Residuais de Teste (Regra 3 do AGENTS.md)
+    let leftover_artifacts = audit_leftover_test_artifacts(repo_root);
+    if leftover_artifacts.is_empty() {
+        messages.push(
+            "✅ Nenhum artefato residual de teste (*.bak, *.tmp, scratch_*) detectado".to_string(),
+        );
+    } else {
+        for err in &leftover_artifacts {
+            messages.push(err.clone());
+            errors.push(err.clone());
+        }
+    }
+
     GovAuditResult {
         agents_md_ok: laws_count >= 13 && errors.is_empty(),
         laws_count,
         errors,
         messages,
     }
+}
+
+/// Auditoria de Artefatos de Teste e Arquivos Residuais (AGENTS.md Regra 3).
+/// Agentes de IA e modelos menores frequentemente criam scripts temporários de teste (*.bak, *.tmp, scratch_*, etc.)
+/// e esquecem de apagá-los, violando a regra mandatória de limpeza de artefatos de teste.
+pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
+    let mut artifact_errors = Vec::new();
+    let walker = ignore::WalkBuilder::new(repo_root)
+        .hidden(true)
+        .parents(true)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(true)
+        .build();
+
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        let path = entry.path();
+        let path_str = path.to_string_lossy();
+
+        // Ignora diretórios legítimos de build, target, git, obsidian e caches
+        if path_str.contains("/target/")
+            || path_str.contains("/node_modules/")
+            || path_str.contains("/.venv/")
+            || path_str.contains("/.git/")
+            || path_str.contains("/dist/")
+            || path_str.contains("/.obsidian/")
+            || path_str.contains("/.stversions/")
+            || path_str.contains("/temp/") // pasta temp/ canônica do Obsidian
+            || path_str.contains("/scratch/") // diretório de scratch autorizado
+            || path_str.contains("/brain/")
+        // brain artifacts
+        {
+            continue;
+        }
+
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // 1. Extensões de arquivos temporários/backup
+        let is_temp_ext = matches!(ext.as_str(), "bak" | "tmp" | "orig" | "old" | "swp" | "rej");
+
+        // 2. Nomes de arquivos temporários soltos deixados por agentes
+        let is_scratch_name = file_name.starts_with("scratch_")
+            || file_name.starts_with("temp_")
+            || file_name.starts_with("tmp_")
+            || file_name.starts_with("dummy_")
+            || file_name.starts_with("test_dummy")
+            || file_name == "temp.txt"
+            || file_name == "temp.md"
+            || file_name == "temp.sh"
+            || file_name == "temp.py"
+            || file_name == "scratch.py"
+            || file_name == "scratch.sh";
+
+        // 3. Scripts de teste na raiz do repositório/projetos fora de diretórios tests/
+        let is_root_test_script = (file_name == "test.py"
+            || file_name == "test.sh"
+            || file_name == "test.rs"
+            || file_name == "test.js")
+            && !path_str.contains("/tests/")
+            && !path_str.contains("/test/");
+
+        if is_temp_ext || is_scratch_name || is_root_test_script {
+            let rel_path = path
+                .strip_prefix(repo_root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            artifact_errors.push(format!(
+                "❌ [GOV-LEFTOVER-TEST-ARTIFACTS] Artefato residual de teste/rascunho detectado: '{}'. Violação da Regra 3 do AGENTS.md (arquivos de teste devem ser limpos após a tarefa).",
+                rel_path
+            ));
+        }
+    }
+
+    artifact_errors
 }
