@@ -542,6 +542,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "let _task = tokio::spawn(\n    async move {\n        if let Err(err) = process_background_event().await {\n            tracing::error!(\"Falha no background event: {}\", err);\n        }\n    }\n    .instrument(tracing::info_span!(\"background_event_task\")),\n);",
         remediation: "Instrumente a task com tracing::info_span! ou capture o JoinHandle para logar falhas.",
     },
+    RuleExplanation {
+        id: "GOV-NAMING-KEBAB-CASE",
+        name: "Convenção de Nomenclatura de Pastas (kebab-case)",
+        severity: "WARN",
+        tag: "gov",
+        summary: "Pastas no ecossistema e homelab devem seguir o padrão em minúsculas com hífen (lowercase, kebab-case).",
+        rationale: "Conforme definido em governance/agent-conventions.md, a padronização em kebab-case minúsculo evita problemas de case-sensitivity entre sistemas operacionais (Linux vs macOS/Windows), simplifica a navegação no terminal e garante consistência em todo o homelab.",
+        bad_example: "sumaenimahub/SUMAENIMA-HUB\nsumaenimahub/STIRPS-PETRI\napp/MyFolder",
+        good_example: "sumaenimahub/sumaenima-hub\nsumaenimahub/stirps-petri\napp/my-folder",
+        remediation: "Renomeie a pasta para minúsculas usando hífens em vez de sublinhados ou caixa alta (ex: 'sumaenima-hub', 'stirps-petri').",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

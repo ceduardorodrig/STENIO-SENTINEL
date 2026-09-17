@@ -1313,6 +1313,11 @@ fn main() -> Result<()> {
                 });
             }
         }
+        for warn in gov.naming_warnings {
+            report.warning_count += 1;
+            report.total_violations += 1;
+            report.violations.push(warn);
+        }
     }
 
     // ── Subsistema de Documentação (docs/ & ADRs) ───────────────────────────

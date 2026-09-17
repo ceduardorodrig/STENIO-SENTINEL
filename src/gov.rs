@@ -7,11 +7,13 @@ pub struct GovAuditResult {
     pub laws_count: usize,
     pub errors: Vec<String>,
     pub messages: Vec<String>,
+    pub naming_warnings: Vec<crate::engine::Violation>,
 }
 
 pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     let mut messages = Vec::new();
     let mut errors = Vec::new();
+    let mut laws_count = 0;
 
     let agents_md_path = if repo_root.is_file() && repo_root.file_name().and_then(|s| s.to_str()) == Some("AGENTS.md") {
         repo_root.to_path_buf()
@@ -21,8 +23,14 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         } else {
             repo_root
         };
-        if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
+        if base.join("AGENTS.md").is_file() {
+            base.join("AGENTS.md")
+        } else if base.join("SUMAENIMA-HUB/AGENTS.md").is_file() {
+            base.join("SUMAENIMA-HUB/AGENTS.md")
+        } else if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
             base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
+        } else if base.join("../AGENTS.md").is_file() {
+            base.join("../AGENTS.md")
         } else if base.join("../../AGENTS.md").is_file() {
             base.join("../../AGENTS.md")
         } else {
@@ -34,90 +42,76 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         let err = "❌ AGENTS.md não encontrado na raiz do repositório!".to_string();
         messages.push(err.clone());
         errors.push(err);
-        return GovAuditResult {
-            agents_md_ok: false,
-            laws_count: 0,
-            errors,
-            messages,
-        };
-    }
-
-    let content = match fs::read_to_string(&agents_md_path) {
-        Ok(c) => c,
-        Err(e) => {
-            let err = format!("❌ Falha ao ler AGENTS.md: {}", e);
-            messages.push(err.clone());
-            errors.push(err);
-            return GovAuditResult {
-                agents_md_ok: false,
-                laws_count: 0,
-                errors,
-                messages,
-            };
-        }
-    };
-
-    let mut laws_count = 0;
-
-    // Se for o AGENTS.md universal do Vault/Homelab
-    if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
-        let has_conventions = content.contains("agent-conventions.md");
-        let has_rust_tools =
-            content.contains("Ferramentas Rust") || content.contains("Preferências de Terminal");
-        let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
-
-        if has_conventions && has_rust_tools && has_homelab_or_mei {
-            messages.push(
-                "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança".to_string(),
-            );
-            messages.push(
-                "✅ Regras de ferramentas Rust e privilégios de sistema preservadas".to_string(),
-            );
-            laws_count = 14;
-        } else {
-            let err =
-                "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
-            messages.push(err.clone());
-            errors.push(err);
-        }
     } else {
-        // AGENTS.md do Hub de Engenharia (38 Leis Absolutas)
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
-                laws_count += 1;
+        match fs::read_to_string(&agents_md_path) {
+            Ok(content) => {
+                // Se for o AGENTS.md universal do Vault/Homelab
+                if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
+                    let has_conventions = content.contains("agent-conventions.md");
+                    let has_rust_tools =
+                        content.contains("Ferramentas Rust") || content.contains("Preferências de Terminal");
+                    let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
+
+                    if has_conventions && has_rust_tools && has_homelab_or_mei {
+                        messages.push(
+                            "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança".to_string(),
+                        );
+                        messages.push(
+                            "✅ Regras de ferramentas Rust e privilégios de sistema preservadas".to_string(),
+                        );
+                        laws_count = 14;
+                    } else {
+                        let err =
+                            "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
+                        messages.push(err.clone());
+                        errors.push(err);
+                    }
+                } else {
+                    // AGENTS.md do Hub de Engenharia (38 Leis Absolutas)
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                            laws_count += 1;
+                        }
+                    }
+
+                    if laws_count >= 13 {
+                        messages.push(format!(
+                            "✅ AGENTS.md íntegro com {} Leis Absolutas preservadas",
+                            laws_count
+                        ));
+                    } else {
+                        let err = format!(
+                            "❌ AGENTS.md contém apenas {} leis (esperado >= 13). Omissão de leis absolutas!",
+                            laws_count
+                        );
+                        messages.push(err.clone());
+                        errors.push(err);
+                    }
+
+                    // Validação de cláusulas vitais
+                    if content.contains("REGRA DE OURO") {
+                        messages.push("✅ Cláusula da Regra de Ouro presente".to_string());
+                    } else {
+                        let err = "❌ Cláusula 'REGRA DE OURO' ausente no AGENTS.md".to_string();
+                        messages.push(err.clone());
+                        errors.push(err);
+                    }
+
+                    if content.contains("HERANÇA DE CONTEXTO") {
+                        messages.push("✅ Cláusula de Herança de Contexto presente".to_string());
+                    } else {
+                        let err = "❌ Cláusula 'HERANÇA DE CONTEXTO' ausente no AGENTS.md".to_string();
+                        messages.push(err.clone());
+                        errors.push(err);
+                    }
+                }
             }
-        }
-
-        if laws_count >= 13 {
-            messages.push(format!(
-                "✅ AGENTS.md íntegro com {} Leis Absolutas preservadas",
-                laws_count
-            ));
-        } else {
-            let err = format!(
-                "❌ AGENTS.md contém apenas {} leis (esperado >= 13). Omissão de leis absolutas!",
-                laws_count
-            );
-            messages.push(err.clone());
-            errors.push(err);
-        }
-
-        // Validação de cláusulas vitais
-        if content.contains("REGRA DE OURO") {
-            messages.push("✅ Cláusula da Regra de Ouro presente".to_string());
-        } else {
-            let err = "❌ Cláusula 'REGRA DE OURO' ausente no AGENTS.md".to_string();
-            messages.push(err.clone());
-            errors.push(err);
-        }
-
-        if content.contains("HERANÇA DE CONTEXTO") {
-            messages.push("✅ Cláusula de Herança de Contexto presente".to_string());
-        } else {
-            let err = "❌ Cláusula 'HERANÇA DE CONTEXTO' ausente no AGENTS.md".to_string();
-            messages.push(err.clone());
-            errors.push(err);
+            Err(e) => {
+                let err = format!("❌ Falha ao ler AGENTS.md: {}", e);
+                messages.push(err.clone());
+                errors.push(err);
+            }
         }
     }
 
@@ -193,11 +187,24 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         }
     }
 
+    // Auditoria de Convenção de Nomenclatura de Pastas (lowercase, kebab-case)
+    let naming_warnings = audit_directory_casing(repo_root);
+    if naming_warnings.is_empty() {
+        messages.push(
+            "✅ Nomenclatura de pastas conforme com o padrão (lowercase, kebab-case)".to_string(),
+        );
+    } else {
+        for w in &naming_warnings {
+            messages.push(format!("⚠️  [GOV-NAMING-KEBAB-CASE] {}", w.message));
+        }
+    }
+
     GovAuditResult {
         agents_md_ok: laws_count >= 13 && errors.is_empty(),
         laws_count,
         errors,
         messages,
+        naming_warnings,
     }
 }
 
@@ -288,3 +295,70 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
 
     artifact_errors
 }
+
+/// Auditoria de Convenção de Nomenclatura de Pastas (agent-conventions.md: lowercase, kebab-case).
+/// Detecta pastas com letras maiúsculas no workspace (ex: SUMAENIMA-HUB, STIRPS-PETRI) que violam o padrão.
+pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation> {
+    let mut violations = Vec::new();
+    let walker = ignore::WalkBuilder::new(repo_root)
+        .hidden(true)
+        .max_depth(Some(4))
+        .parents(false)
+        .git_ignore(true)
+        .build();
+
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        if path == repo_root {
+            continue;
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Ignora diretórios ocultos (.git, .github, etc.) e caches de build
+        if dir_name.starts_with('.')
+            || dir_name == "node_modules"
+            || dir_name == "target"
+            || dir_name == "dist"
+        {
+            continue;
+        }
+
+        // Se o nome do diretório contiver letras maiúsculas
+        if dir_name.chars().any(|c| c.is_ascii_uppercase()) {
+            let rel_path = path
+                .strip_prefix(repo_root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+
+            let suggested_kebab = dir_name.to_ascii_lowercase().replace('_', "-");
+
+            violations.push(crate::engine::Violation {
+                rule_id: "GOV-NAMING-KEBAB-CASE".to_string(),
+                rule_name: "Convenção de Nomenclatura de Pastas (kebab-case)".to_string(),
+                severity: crate::rule::Severity::Warning,
+                file_path: rel_path,
+                line_number: 1,
+                snippet: format!("Pasta: {}", dir_name),
+                message: format!(
+                    "Pasta '{}' contém letras maiúsculas. O padrão do homelab em governance/agent-conventions.md exige 'lowercase, kebab-case'.",
+                    dir_name
+                ),
+                suggestion: Some(format!(
+                    "Considere padronizar o nome da pasta para '{}'.",
+                    suggested_kebab
+                )),
+            });
+        }
+    }
+
+    violations
+}
+

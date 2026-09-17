@@ -577,6 +577,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Armazene o JoinHandle (let handle = tokio::spawn(...)) ou instrumente a task com '.instrument(tracing::info_span!(...))' para observabilidade em caso de panic."),
     ));
 
+    // ── 29.1 Governança: Nomenclatura de Diretórios em Kebab-Case ───────────
+    rules.push(Rule::new(
+        "GOV-NAMING-KEBAB-CASE",
+        "gov",
+        Severity::Warning,
+        "Nomenclatura de Pastas Fora do Padrão Kebab-Case",
+        "Pastas no workspace e homelab devem seguir o padrão em minúsculas com hífen (lowercase, kebab-case) definido em agent-conventions.md.",
+        r"(?m)^.*stenio-naming-marker.*$",
+        &["*"],
+        Some("Renomeie a pasta para minúsculas usando kebab-case (ex: sumaenima-hub, stirps-petri)."),
+    ));
+
     // ── 30. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
 
     if let Some(custom_rules) = &config.custom_rules {
