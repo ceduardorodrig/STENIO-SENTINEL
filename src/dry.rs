@@ -85,7 +85,6 @@ pub fn is_dry_eligible(path: &Path) -> bool {
         || path_str.contains("/.obsidian/")
         || path_str.contains("/llm_model_cache/")
         || path_str.contains("/migrations/")
-        || path_str.contains("/scripts/steniocheck-rs/")
         || path_str.ends_with(".d.ts")
         || path_str.ends_with(".min.js")
         || path_str.ends_with(".min.css")
