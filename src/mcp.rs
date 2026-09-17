@@ -31,7 +31,7 @@ struct McpResponse {
 
 pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) -> Result<()> {
     eprintln!("🦀 StenioSentinel MCP Server inicializado em stdio (JSON-RPC 2.0)");
-    let engine = Engine::new(rules.clone(), whitelist)?;
+    let engine = Engine::new(rules.clone(), whitelist.clone())?;
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -159,8 +159,25 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             }
                         },
                         {
+                            "name": "stenio_dry",
+                            "description": "Audita duplicação de código usando o Princípio DRY Absoluto com Rolling Block Hash (<15ms). Detecta blocos clonados entre arquivos ou dentro do mesmo arquivo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Caminho raiz a inspecionar (default: .)"
+                                    },
+                                    "min_lines": {
+                                        "type": "number",
+                                        "description": "Número mínimo de linhas substantivas idênticas para flag de duplicação (default: 6)"
+                                    }
+                                }
+                            }
+                        },
+                        {
                             "name": "stenio_gate",
-                            "description": "Quality Gate Pré-Entrega: executa uma auditoria rigorosa de tolerância zero. O agente DEVE chamar esta ferramenta antes de declarar conclusão da tarefa e garantir que retorne APROVADO.",
+                            "description": "Quality Gate Pré-Entrega: executa uma auditoria rigorosa de tolerância zero (regras críticas, governança, artefatos e duplicação DRY). O agente DEVE chamar esta ferramenta antes de declarar conclusão da tarefa e garantir que retorne APROVADO.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -365,9 +382,21 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                     errors.push(format!("[GOV] {}", err));
                                 }
 
+                                let (dry_violations, _, _) =
+                                    crate::dry::scan_dry_directory(&target_path, 6, &whitelist);
+                                for dv in &dry_violations {
+                                    errors.push(format!(
+                                        "[DRY] {}:{}: {} (💡 {})",
+                                        dv.file_path,
+                                        dv.line_number,
+                                        dv.message,
+                                        dv.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada.")
+                                    ));
+                                }
+
                                 if errors.is_empty() {
                                     format!(
-                                        "🎉 [GATE APROVADO] Parabéns! Zero erros impeditivos em {} arquivos. Código 100% conforme. A tarefa está aprovada para entrega!",
+                                        "🎉 [GATE APROVADO] Parabéns! Zero erros impeditivos e zero duplicações em {} arquivos. Código 100% conforme. A tarefa está aprovada para entrega!",
                                         report.total_files_scanned
                                     )
                                 } else {
@@ -381,6 +410,44 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                 }
                             }
                             Err(e) => format!("Erro ao executar Quality Gate: {}", e),
+                        }
+                    }
+                    "stenio_dry" => {
+                        let path_str = arguments
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(".");
+                        let min_lines = arguments
+                            .get("min_lines")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(6) as usize;
+                        let target_path = repo_root.join(path_str);
+                        let (dry_violations, dry_count, dry_dur) =
+                            crate::dry::scan_dry_directory(&target_path, min_lines, &whitelist);
+
+                        if dry_violations.is_empty() {
+                            format!(
+                                "✨ [DRY APROVADO] Zero duplicações detectadas em {} arquivos (tempo: {:?}). Princípio DRY 100% cumprido!",
+                                dry_count, dry_dur
+                            )
+                        } else {
+                            let mut msg = format!(
+                                "⚠️ [DRY DETECTADO] {} bloco(s) de código duplicado(s) detectado(s) em {} arquivos (tempo: {:?}):\n\n",
+                                dry_violations.len(),
+                                dry_count,
+                                dry_dur
+                            );
+                            for v in &dry_violations {
+                                msg.push_str(&format!(
+                                    "• {}:{} - {}\n  Snippet:\n{}\n  💡 Sugestão: {}\n\n",
+                                    v.file_path,
+                                    v.line_number,
+                                    v.message,
+                                    v.snippet,
+                                    v.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada.")
+                                ));
+                            }
+                            msg
                         }
                     }
                     other => format!("Ferramenta desconhecida: '{}'", other),

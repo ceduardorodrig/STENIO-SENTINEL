@@ -9,6 +9,23 @@ pub struct MigrationAuditResult {
     pub messages: Vec<String>,
 }
 
+pub fn check_sql_idempotency(sql: &str) -> Option<String> {
+    let lower = sql.to_lowercase();
+    if lower.contains("drop table ") && !lower.contains("drop table if exists ") {
+        return Some("possui DROP TABLE sem IF EXISTS (quebra rollback/re-execução)".to_string());
+    }
+    if lower.contains("drop index ") && !lower.contains("drop index if exists ") {
+        return Some("possui DROP INDEX sem IF EXISTS (não-idempotente)".to_string());
+    }
+    if lower.contains("create table ") && !lower.contains("create table if not exists ") {
+        return Some("possui CREATE TABLE sem IF NOT EXISTS (falha ao re-executar)".to_string());
+    }
+    if lower.contains("create index ") && !lower.contains("create index if not exists ") {
+        return Some("possui CREATE INDEX sem IF NOT EXISTS (falha ao re-executar)".to_string());
+    }
+    None
+}
+
 pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
     let mut messages = Vec::new();
     let mut errors = Vec::new();
@@ -98,13 +115,9 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                         messages.push(format!("❌ {}", err));
                     }
 
-                    // Checa por antipadrão de DROP TABLE / DROP COLUMN perigoso sem IF EXISTS
-                    let lower = content.to_lowercase();
-                    if lower.contains("drop table") && !lower.contains("drop table if exists") {
-                        let err = format!(
-                            "Migração {} possui DROP TABLE destrutivo sem IF EXISTS",
-                            filename
-                        );
+                    // Checa por idempotência mandatória (IF NOT EXISTS / IF EXISTS)
+                    if let Some(reason) = check_sql_idempotency(&content) {
+                        let err = format!("Migração {} {}", filename, reason);
                         errors.push(err.clone());
                         messages.push(format!("❌ {}", err));
                     }

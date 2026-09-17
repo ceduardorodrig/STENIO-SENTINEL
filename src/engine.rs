@@ -313,7 +313,7 @@ impl Engine {
 
         // 1. Auditoria especializada de Leis de Frontend
         if (tag_filter.is_none() || tag_filter == Some("frontend"))
-            && only_rule.map_or(true, |r| r.starts_with("FRONT-"))
+            && only_rule.map_or(true, |r| r.starts_with("FRONT-") || r.starts_with("PERF-"))
         {
             let fv = audit_frontend_file(path, &content, &self.whitelist);
             if let Some(target) = only_rule {
@@ -344,16 +344,35 @@ impl Engine {
                 continue;
             }
 
-            if rule.id == "RUST-STRUCTURED-LOGGING" {
+            // Pula regras com marcador avaliadas exclusivamente por subsistemas dedicados
+            if rule.pattern.contains("stenio-") && rule.pattern.contains("-marker") {
+                continue;
+            }
+
+            // Regras exclusivas de runtime assíncrono do servidor (Axum/Tokio)
+            if rule.id == "RUST-STRUCTURED-LOGGING"
+                || rule.id == "RUST-ASYNC-BLOCKING-CMD"
+                || rule.id == "RUST-NO-SYNC-MUTEX-AWAIT"
+                || rule.id == "RUST-SPAWN-ERROR-HANDLING"
+                || rule.id == "BACKEND-BLOCKING-IO"
+                || rule.id == "BACKEND-NO-PANIC"
+            {
                 if !path_str.contains("app/server/src/")
                     || path_str.contains("/bin/")
                     || path_str.contains("/tests/")
+                    || path_str.ends_with("_test.rs")
+                    || path_str.ends_with("_tests.rs")
                 {
                     continue;
                 }
             }
 
-            if rule.id == "RUST-NO-UNWRAP" {
+            // Regras de boas práticas Rust que não se aplicam a testes ou build scripts
+            if rule.id == "RUST-NO-UNWRAP"
+                || rule.id == "RUST-NO-UNBOUNDED-CHANNEL"
+                || rule.id == "RUST-IDIOMATIC-SLICES"
+                || rule.id == "RUST-IDIOMATIC-ARC-CLONE"
+            {
                 if path_str.contains("/tests/")
                     || path_str.ends_with("_test.rs")
                     || path_str.ends_with("_tests.rs")

@@ -313,7 +313,223 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Registre o erro nos logs (tracing, logger, console.error) ou propague a falha com '?'. Nunca engula erros."),
     ));
 
-    // ── 18. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+    // ── 18. Backend: Proibição de Operações de E/S Síncronas em Tokio ──────
+    rules.push(Rule::new(
+        "BACKEND-BLOCKING-IO",
+        "rust",
+        Severity::Error,
+        "E/S Bloqueante (std::fs) em Runtime Assíncrono",
+        "O uso de std::fs em handlers assíncronos bloqueia as threads do pool Tokio. Utilize tokio::fs.",
+        r"\bstd::fs::(read|write|read_to_string|remove_file|copy|rename|create_dir)\(",
+        &["rs"],
+        Some("Substitua 'std::fs::*' por 'tokio::fs::*' com '.await' ou 'tokio::task::spawn_blocking'."),
+    ));
+
+    // ── 19. Backend: Proibição de Panics e Asserts em Servidor Web ─────────
+    rules.push(Rule::new(
+        "BACKEND-NO-PANIC",
+        "rust",
+        Severity::Warning,
+        "Panic ou Assert em Código de Servidor",
+        "Chamadas a panic!() ou assert!() derrubam o processo do servidor web. Trate erros graciosamente retornando Result.",
+        r"(?m)^\s*(panic!|assert!|assert_eq!|assert_ne!)\(",
+        &["rs"],
+        Some("Retorne um erro HTTP estruturado (ex: Err(AppError::BadRequest(...))) em vez de causar panic no servidor."),
+    ));
+
+    // ── 20. Arquitetura: Princípio DRY (Don't Repeat Yourself) Obrigatório ─
+    rules.push(Rule::new(
+        "ARCH-DRY-DUPLICATION",
+        "arch",
+        Severity::Warning,
+        "Duplicação de Código (Princípio DRY)",
+        "Proíbe blocos de código substantivos duplicados (>6 linhas idênticas). Extraia a lógica em funções compartilhadas ou hooks.",
+        r"(?m)^.*stenio-dry-marker.*$",
+        &["rs", "ts", "tsx", "py", "js"],
+        Some("Extraia a lógica duplicada para um hook customizado ('features/<dominio>/hooks/'), componente atômico ou função utilitária."),
+    ));
+
+    // ── 21. Frontend & GPU: Zero-Repaint em Animações e Hovers 3D ──────────
+    rules.push(Rule::new(
+        "PERF-GPU-ZERO-REPAINT",
+        "frontend",
+        Severity::Warning,
+        "Transição de Paint em Container 3D/Hover",
+        "Transições em 'box-shadow', 'backdrop-filter' ou 'background-color' forçam repaint de GPU a cada frame.",
+        r"(?m)(transition:.*(box-shadow|backdrop-filter)|magic-card-tilt-container.*transition-(colors|all))",
+        &["css", "tsx"],
+        Some("Anime a opacidade (0 -> 1) de um pseudo-elemento ::after isolado no Compositor da GPU em vez de transicionar sombra ou fundo."),
+    ));
+
+    // ── 22. Frontend & GPU: Proibição de Layout Thrashing em Eventos ────────
+    rules.push(Rule::new(
+        "PERF-NO-LAYOUT-THRASH",
+        "frontend",
+        Severity::Warning,
+        "Layout Thrashing em Event Handlers",
+        "Leituras síncronas de geometria (getBoundingClientRect / offset*) em handlers de mouse disparam reflow forçado a 1000Hz.",
+        r"\.getBoundingClientRect\(\)",
+        &["ts", "tsx"],
+        Some("Faça cache do rect em um useRef no onMouseEnter ou bufferize coordenadas e processe no tick do requestAnimationFrame."),
+    ));
+
+    // ── 23. Frontend & GPU: Contenção de Grade Arandu (.card-cell) ─────────
+    rules.push(Rule::new(
+        "PERF-GPU-CONTAINMENT",
+        "frontend",
+        Severity::Warning,
+        "Grade de Cards sem Contenção CSS",
+        "Grades densas de cards com hover/tilt 3D exigem contenção CSS (.card-cell) para não invalidar o layout de cards vizinhos.",
+        r"<MagicCard",
+        &["tsx"],
+        Some("Envolva cada MagicCard em um container <div className=\"card-cell\"><MagicCard ... /></div>."),
+    ));
+
+    // ── 24. Frontend & GPU: will-change Restrito a Estados Interativos ──────
+    rules.push(Rule::new(
+        "PERF-GPU-WILL-CHANGE",
+        "frontend",
+        Severity::Warning,
+        "will-change Estático em Repouso",
+        "'will-change' aplicado estaticamente consome texturas de GPU em repouso. Mantenha restrito a seletores :hover.",
+        r"will-change:\s*(transform|opacity)",
+        &["css"],
+        Some("Aplique 'will-change: transform' estritamente sob seletores de interação (:hover, .is-hovered) e remova em repouso."),
+    ));
+
+    // ── 25. Frontend: Desacoplamento de Chamadas de Rede em Páginas ─────────
+    rules.push(Rule::new(
+        "FRONT-MODULAR-HOOKS",
+        "frontend",
+        Severity::Warning,
+        "Chamada de Rede Direta na Camada de Página",
+        "Páginas são orquestradores puros (<400 linhas). Chamadas de API diretas violam o desacoplamento arquitetural.",
+        r"(fetch\(|axios\.|new WebSocket\()",
+        &["tsx"],
+        Some("Extraia a chamada de API e a lógica de mutação para um Custom Hook em 'src/features/<dominio>/hooks/'."),
+    ));
+
+    // ── 26. Frontend: Proibição de Erros Silenciados sem Feedback Visual ───
+    rules.push(Rule::new(
+        "FRONT-FEEDBACK-ON-ERROR",
+        "frontend",
+        Severity::Warning,
+        "Erro em UI sem Feedback Visual",
+        "Blocos catch que apenas emitem console.error deixam o usuário sem resposta visual se a ação falhar.",
+        r"console\.(error|warn)\(",
+        &["tsx", "ts"],
+        Some("Adicione notificação com toast.error('Mensagem') ou atualize o estado de erro do componente."),
+    ));
+
+    // ── 27. Frontend: Proibição de URLs Hardcoded de Localhost ─────────────
+    rules.push(Rule::new(
+        "FRONT-NO-HARDCODED-HOST",
+        "frontend",
+        Severity::Error,
+        "URL de Localhost Hardcoded no Frontend",
+        "URLs absolutas de localhost quebram em produção atrás do proxy Nginx.",
+        r"(?m)^.*stenio-frontend-marker.*$",
+        &["tsx", "ts", "js"],
+        Some("Utilize caminho relativo (/api/...) ou carregue a URL via 'import.meta.env.VITE_API_URL'."),
+    ));
+
+    // ── 28. Banco de Dados: Idempotência Mandatória em Migrações SQL ───────
+    rules.push(Rule::new(
+        "DB-IDEMPOTENT-MIGRATION",
+        "db",
+        Severity::Error,
+        "Migração SQL Não-Idempotente",
+        "Comandos DDL em migrations/ devem usar IF NOT EXISTS ou IF EXISTS para permitir re-execução segura.",
+        r"(?m)^.*stenio-migration-marker.*$",
+        &["sql"],
+        Some("Adicione 'IF NOT EXISTS' em CREATE ou 'IF EXISTS' em DROP para garantir idempotência."),
+    ));
+
+    // ── 29. Infraestrutura: Conformidade com Topologia Canônica da Malha ───
+    rules.push(Rule::new(
+        "INFRA-TOPOLOGY-COMPLIANCE",
+        "infra",
+        Severity::Error,
+        "Alvo de Deploy Fora da Topologia Ativa",
+        "Scripts de deploy e stacks do Hub só podem apontar para nós ativos da topologia (kavure, ybyra, psicopompo).",
+        r"(?m)^.*stenio-topology-marker.*$",
+        &["sh", "ini", "yml", "yaml"],
+        Some("Aponte o serviço para os nós canônicos da topologia (kavure para backend/docker, ybyra para borda frontend)."),
+    ));
+
+    // ── 30. Rust: Proibição de Canais Assíncronos sem Limite (Unbounded MPSC) ─
+    rules.push(Rule::new(
+        "RUST-NO-UNBOUNDED-CHANNEL",
+        "rust",
+        Severity::Error,
+        "Canal Assíncrono sem Limite (Unbounded MPSC)",
+        "Canais 'unbounded_channel()' não aplicam backpressure e causam exaustão de memória (OOM). Use canais com capacidade finita 'channel(N)'.",
+        r"\b(tokio::sync::mpsc::|mpsc::)unbounded_channel\(",
+        &["rs"],
+        Some("Substitua 'mpsc::unbounded_channel()' por 'mpsc::channel(buffer_size)' definindo uma capacidade explícita de backpressure."),
+    ));
+
+    // ── 31. Rust: Proibição de Process Command Síncrono em Runtime Tokio ───
+    rules.push(Rule::new(
+        "RUST-ASYNC-BLOCKING-CMD",
+        "rust",
+        Severity::Error,
+        "Comando de Processo Síncrono em Runtime Assíncrono",
+        "std::process::Command::new() bloqueia a thread de execução do Tokio. Em código assíncrono, use tokio::process::Command.",
+        r"\bstd::process::Command::new\(",
+        &["rs"],
+        Some("Substitua 'std::process::Command::new' por 'tokio::process::Command::new' e use '.await', ou envolva em 'tokio::task::spawn_blocking'."),
+    ));
+
+    // ── 32. Rust: Proibição de std::sync::Mutex Retido em Contexto Tokio ──
+    rules.push(Rule::new(
+        "RUST-NO-SYNC-MUTEX-AWAIT",
+        "rust",
+        Severity::Warning,
+        "Uso de std::sync::Mutex em Contexto Assíncrono",
+        "Reter um lock de std::sync::Mutex através de pontos .await causa deadlocks e viola Send. Use tokio::sync::Mutex ou solte o guard antes do await.",
+        r"\bstd::sync::Mutex\b",
+        &["rs"],
+        Some("Substitua 'std::sync::Mutex' por 'tokio::sync::Mutex', ou garanta que o guard síncrono seja descartado com drop(guard) antes de qualquer .await."),
+    ));
+
+    // ── 33. Rust: Convenção Idiomática de Arc::clone(&ptr) ─────────────────
+    rules.push(Rule::new(
+        "RUST-IDIOMATIC-ARC-CLONE",
+        "rust",
+        Severity::Warning,
+        "Clonagem Não-Idiomática de Arc",
+        "Convenção RFC 258 / Clippy: prefira 'Arc::clone(&ptr)' a 'ptr.clone()' para explicitar que se trata de duplicação de ponteiro atômico, não deep copy.",
+        r"\b[A-Za-z0-9_]+_arc\.clone\(\)|\b(arc_|shared_)[A-Za-z0-9_]*\.clone\(\)",
+        &["rs"],
+        Some("Substitua 'ptr.clone()' por 'Arc::clone(&ptr)' para manter o código Rust idiomático e claro."),
+    ));
+
+    // ── 34. Rust: Preferência por Slices (&str / &[T]) em Parâmetros ───────
+    rules.push(Rule::new(
+        "RUST-IDIOMATIC-SLICES",
+        "rust",
+        Severity::Warning,
+        "Assinatura Não-Idiomática com &String ou &Vec<T>",
+        "Assinaturas de funções não devem receber referências a coleções concretas (&String ou &Vec<T>). Use fatias (slices) '&str' e '&[T]'.",
+        r"\bfn\s+[a-z0-9_]+\s*(?:<[^>]+>)?\s*\([^)]*:\s*&(?:mut\s+)?(String\b|Vec<)",
+        &["rs"],
+        Some("Substitua o parâmetro '&String' por '&str' e '&Vec<T>' por '&[T]' para permitir que qualquer fatia ou literal seja passado sem alocações."),
+    ));
+
+    // ── 35. Rust: Tratamento Obrigatório de Erros em tokio::spawn ──────────
+    rules.push(Rule::new(
+        "RUST-SPAWN-ERROR-HANDLING",
+        "rust",
+        Severity::Warning,
+        "tokio::spawn Órfão sem Rastreamento de Erro ou Tracing",
+        "Tarefas assíncronas disparadas via 'tokio::spawn' sem tratamento de JoinHandle ou instrumentação tracing engolem panics e erros silenciosamente.",
+        r"(?m)^\s*tokio::spawn\s*\(\s*async\s+move\s*\{",
+        &["rs"],
+        Some("Armazene o JoinHandle (let handle = tokio::spawn(...)) ou instrumente a task com '.instrument(tracing::info_span!(...))' para observabilidade em caso de panic."),
+    ));
+
+    // ── 30. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
 
     if let Some(custom_rules) = &config.custom_rules {
         for cr in custom_rules {

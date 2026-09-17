@@ -58,6 +58,23 @@ pub struct DocsConfig {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
+pub struct DryConfig {
+    pub enabled: Option<bool>,
+    pub min_lines: Option<usize>,
+    pub strict: Option<bool>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TopologyConfig {
+    pub authorized_hub_nodes: Option<Vec<String>>,
+    pub edge_nodes: Option<Vec<String>>,
+    pub backend_nodes: Option<Vec<String>>,
+    pub dev_gpu_nodes: Option<Vec<String>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct CustomRuleConfig {
     pub id: String,
     pub tag: Option<String>,
@@ -80,6 +97,8 @@ pub struct SteniocheckConfig {
     pub frontend: Option<FrontendConfig>,
     pub gpu: Option<GpuConfig>,
     pub docs: Option<DocsConfig>,
+    pub dry: Option<DryConfig>,
+    pub topology: Option<TopologyConfig>,
     pub custom_rules: Option<Vec<CustomRuleConfig>>,
 }
 

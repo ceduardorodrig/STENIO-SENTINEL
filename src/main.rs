@@ -9,6 +9,7 @@ mod config;
 mod context;
 mod cv;
 mod doc;
+mod dry;
 mod engine;
 mod explain;
 mod frontend;
@@ -33,7 +34,8 @@ use baseline::Whitelist;
 use config::SteniocheckConfig;
 use cv::audit_curriculum_vitae;
 use doc::audit_documentation;
-use engine::Engine;
+use dry::{print_dry_report, scan_dry_directory};
+use engine::{Engine, Violation};
 use gov::audit_governance;
 use gpu::audit_gpu_subsystem;
 use homelab::audit_homelab;
@@ -186,6 +188,12 @@ struct Args {
         help = "Quality Gate Pré-Entrega: auditoria de tolerância zero que bloqueia modelos de IA preguiçosos se houver qualquer erro"
     )]
     gate: bool,
+
+    #[arg(
+        long,
+        help = "Audita duplicação de código usando o Princípio DRY Absoluto com Rolling Block Hash (<15ms)"
+    )]
+    dry: bool,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -441,6 +449,207 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "try { run(); } catch (e) { log(e); }",
         false
     );
+    check_case!(
+        "E/S Bloqueante Proibida",
+        "BACKEND-BLOCKING-IO",
+        r#"std::fs::read_to_string("data.json");"#, // stenio-ignore: BACKEND-BLOCKING-IO
+        true
+    );
+    check_case!(
+        "E/S Assíncrona Tokio OK",
+        "BACKEND-BLOCKING-IO",
+        r#"tokio::fs::read_to_string("data.json").await;"#,
+        false
+    );
+    check_case!(
+        "Panic em Servidor Proibido",
+        "BACKEND-NO-PANIC",
+        r#"panic!("erro crítico");"#, // stenio-ignore: BACKEND-NO-PANIC
+        true
+    );
+    check_case!(
+        "Retorno Result Válido",
+        "BACKEND-NO-PANIC",
+        "return Err(AppError::NotFound);",
+        false
+    );
+    check_case!(
+        "Zero-Repaint Box-Shadow",
+        "PERF-GPU-ZERO-REPAINT",
+        "transition: box-shadow 0.3s ease;", // stenio-ignore: PERF-GPU-ZERO-REPAINT
+        true
+    );
+    check_case!(
+        "Zero-Repaint Opacidade OK",
+        "PERF-GPU-ZERO-REPAINT",
+        "transition: opacity 0.25s ease;",
+        false
+    );
+    check_case!(
+        "Layout Thrashing rect",
+        "PERF-NO-LAYOUT-THRASH",
+        "const rect = el.getBoundingClientRect();",
+        true
+    );
+    check_case!(
+        "will-change Estático",
+        "PERF-GPU-WILL-CHANGE",
+        "will-change: transform;",
+        true
+    );
+    check_case!(
+        "Front Modular Hooks",
+        "FRONT-MODULAR-HOOKS",
+        "const res = await fetch('/api/cards');",
+        true
+    );
+    check_case!(
+        "Feedback on Error",
+        "FRONT-FEEDBACK-ON-ERROR",
+        "console.error(\"erro\");",
+        true
+    );
+    // ── Testes de Validação Especializada de Frontend (audit_frontend_file) ──
+    total += 1;
+    let v_lh = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/api.ts"),
+        "const url = \"http://localhost:8000/api\";",
+        &Whitelist::default(),
+    );
+    if v_lh.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
+        passed += 1;
+        println!("   ✅ Teste {:<22} [{}] - OK", "Hardcoded Localhost", "FRONT-NO-HARDCODED-HOST".cyan());
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "Hardcoded Localhost", "FRONT-NO-HARDCODED-HOST".red());
+    }
+
+    total += 1;
+    let v_ok = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/api.ts"),
+        "const url = \"/api/v1/cards\";",
+        &Whitelist::default(),
+    );
+    if !v_ok.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
+        passed += 1;
+        println!("   ✅ Teste {:<22} [{}] - OK", "Host Relativo Válido", "FRONT-NO-HARDCODED-HOST".cyan());
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "Host Relativo Válido", "FRONT-NO-HARDCODED-HOST".red());
+    }
+
+    // ── Teste de Idempotência SQL (check_sql_idempotency) ───────────────
+    total += 1;
+    if migrations::check_sql_idempotency("CREATE TABLE users (id INT);").is_some() {
+        passed += 1;
+        println!("   ✅ Teste {:<22} [{}] - OK", "SQL Não-Idempotente", "DB-IDEMPOTENT-MIGRATION".cyan());
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "SQL Não-Idempotente", "DB-IDEMPOTENT-MIGRATION".red());
+    }
+
+    total += 1;
+    if migrations::check_sql_idempotency("CREATE TABLE IF NOT EXISTS users (id INT);").is_none() {
+        passed += 1;
+        println!("   ✅ Teste {:<22} [{}] - OK", "SQL Idempotente Válido", "DB-IDEMPOTENT-MIGRATION".cyan());
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "SQL Idempotente Válido", "DB-IDEMPOTENT-MIGRATION".red());
+    }
+
+    // ── Testes das 6 Boas Práticas Rust Anti-Preguiça / Anti-Bug ────────
+    check_case!(
+        "Unbounded Channel",
+        "RUST-NO-UNBOUNDED-CHANNEL",
+        "let (tx, rx) = tokio::sync::mpsc::unbounded_channel();",
+        true
+    );
+    check_case!(
+        "Bounded Channel OK",
+        "RUST-NO-UNBOUNDED-CHANNEL",
+        "let (tx, rx) = tokio::sync::mpsc::channel(64);",
+        false
+    );
+    check_case!(
+        "Sync Cmd em Async",
+        "RUST-ASYNC-BLOCKING-CMD",
+        "let out = std::process::Command::new(\"ls\");",
+        true
+    );
+    check_case!(
+        "Tokio Cmd OK",
+        "RUST-ASYNC-BLOCKING-CMD",
+        "let out = tokio::process::Command::new(\"ls\");",
+        false
+    );
+    check_case!(
+        "Sync Mutex em Async",
+        "RUST-NO-SYNC-MUTEX-AWAIT",
+        "let m: std::sync::Mutex<i32> = std::sync::Mutex::new(0);",
+        true
+    );
+    check_case!(
+        "Tokio Mutex OK",
+        "RUST-NO-SYNC-MUTEX-AWAIT",
+        "let m: tokio::sync::Mutex<i32> = tokio::sync::Mutex::new(0);",
+        false
+    );
+    check_case!(
+        "Arc Clone Não-Idiomático",
+        "RUST-IDIOMATIC-ARC-CLONE",
+        "let state = server_arc.clone();",
+        true
+    );
+    check_case!(
+        "Arc Clone Idiomático OK",
+        "RUST-IDIOMATIC-ARC-CLONE",
+        "let state = Arc::clone(&server_arc);",
+        false
+    );
+    check_case!(
+        "Parâmetro &String",
+        "RUST-IDIOMATIC-SLICES",
+        "fn fetch_user(name: &String) -> bool { true }",
+        true
+    );
+    check_case!(
+        "Parâmetro &str OK",
+        "RUST-IDIOMATIC-SLICES",
+        "fn fetch_user(name: &str) -> bool { true }",
+        false
+    );
+    check_case!(
+        "Tokio Spawn Órfão",
+        "RUST-SPAWN-ERROR-HANDLING",
+        "    tokio::spawn(async move {",
+        true
+    );
+
+    // ── Teste Sintético do Motor DRY (Rolling Block Hash) ───────────────
+    total += 1;
+    let sample_f1 = dry::FileRecord {
+        path: PathBuf::from("ComponentA.tsx"),
+        rel_path: "ComponentA.tsx".to_string(),
+        has_ignore: false,
+        substantive: vec![
+            dry::SubstantiveLine { line_no: 10, text: "const filtered = items.filter(x => x.active);".to_string() },
+            dry::SubstantiveLine { line_no: 11, text: "const sorted = filtered.sort((a, b) => a.order - b.order);".to_string() },
+            dry::SubstantiveLine { line_no: 12, text: "const paginated = sorted.slice(0, 20);".to_string() },
+            dry::SubstantiveLine { line_no: 13, text: "const totalCount = filtered.length;".to_string() },
+            dry::SubstantiveLine { line_no: 14, text: "const isMaxReached = totalCount >= 100;".to_string() },
+            dry::SubstantiveLine { line_no: 15, text: "return { paginated, totalCount, isMaxReached };".to_string() },
+        ],
+    };
+    let sample_f2 = dry::FileRecord {
+        path: PathBuf::from("ComponentB.tsx"),
+        rel_path: "ComponentB.tsx".to_string(),
+        has_ignore: false,
+        substantive: sample_f1.substantive.clone(),
+    };
+    let empty_whitelist = Whitelist::default();
+    let dry_v = dry::detect_dry_duplication(&[sample_f1, sample_f2], 6, &empty_whitelist);
+    if !dry_v.is_empty() && dry_v[0].rule_id == "ARCH-DRY-DUPLICATION" {
+        passed += 1;
+        println!("   ✅ Teste {:<22} [{}] - OK", "DRY Block Duplication", "ARCH-DRY-DUPLICATION".cyan());
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "DRY Block Duplication", "ARCH-DRY-DUPLICATION".red());
+    }
 
     println!();
     if passed == total {
@@ -536,6 +745,19 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         blocker_errors.push(format!("[GUARDIAN] {}", alert));
     }
 
+    // 5. Princípio DRY Absoluto (Zero Duplicação de Código)
+    let (dry_violations, _dry_count, _dry_dur) = scan_dry_directory(&args.path, 6, whitelist);
+    for dv in &dry_violations {
+        blocker_errors.push(format!(
+            "[{}] {}:{}: {} (💡 {})",
+            dv.rule_id.red().bold(),
+            dv.file_path,
+            dv.line_number,
+            dv.message,
+            dv.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada")
+        ));
+    }
+
     if blocker_errors.is_empty() {
         println!(
             "{}",
@@ -562,6 +784,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         println!("   • Zero erros impeditivos.");
         println!("   • Zero stubs ou placeholders detectados.");
         println!("   • Zero testes neutralizados.");
+        println!("   • Zero duplicações de código (DRY 100%).");
         println!("   • Zero artefatos residuais de teste.");
         println!();
         println!(
@@ -753,6 +976,16 @@ fn main() -> Result<()> {
     // ── Modo Quality Gate Pré-Entrega (--gate) ─────────────────────────────
     if args.gate {
         run_quality_gate(&args, &rules, &whitelist)?;
+        return Ok(());
+    }
+
+    // ── Modo DRY Detector (--dry) ──────────────────────────────────────────
+    if args.dry {
+        let (violations, files_count, duration) = scan_dry_directory(&args.path, 6, &whitelist);
+        print_dry_report(&violations, files_count, duration);
+        if !violations.is_empty() && args.strict {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -1062,6 +1295,20 @@ fn main() -> Result<()> {
     let mut mig_messages = Vec::new();
     if let Some(mig) = mig_res {
         mig_messages = mig.messages;
+        for err in &mig.errors {
+            report.error_count += 1;
+            report.total_violations += 1;
+            report.violations.push(Violation {
+                rule_id: "DB-IDEMPOTENT-MIGRATION".to_string(),
+                rule_name: "Migração SQL Não-Idempotente".to_string(),
+                severity: Severity::Error,
+                file_path: "migrations/".to_string(),
+                line_number: 1,
+                snippet: err.clone(),
+                message: err.clone(),
+                suggestion: Some("Use 'IF NOT EXISTS' em CREATE TABLE/INDEX ou 'IF EXISTS' em DROP TABLE/INDEX.".to_string()),
+            });
+        }
     }
 
     // ── Subsistema Homelab (mnemocine/) ────────────────────────────────────
