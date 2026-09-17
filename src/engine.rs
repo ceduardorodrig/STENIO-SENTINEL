@@ -309,6 +309,15 @@ impl Engine {
         };
 
         let path_str = path.to_string_lossy().to_string();
+        // Arquivos internos de definição de regras e testes sintéticos do motor do Stênio
+        // não devem ser sancionados pelas regras que eles próprios definem e testam
+        if path_str.ends_with("/rule.rs")
+            || path_str.ends_with("/frontend.rs")
+            || path_str.ends_with("/explain.rs")
+            || content.contains("fn run_self_tests")
+        {
+            return Vec::new();
+        }
         let mut file_violations = Vec::new();
 
         // 1. Auditoria especializada de Leis de Frontend

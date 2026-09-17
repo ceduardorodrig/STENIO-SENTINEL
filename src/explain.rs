@@ -235,6 +235,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Defina os tipos corretos em TypeScript ou corrija o código para satisfazer os contratos do sistema sem recorrer a diretivas de supressão.",
     },
     RuleExplanation {
+        id: "AGENT-NO-TAMPERING-VERIFIER",
+        name: "Proibição de Adulteração de Verificadores e Hooks",
+        severity: "ERROR",
+        tag: "gov",
+        summary: "Proíbe git commit --no-verify, desativação de pre-commit hooks ou sabotagem de checagens.",
+        rationale: "Quando confrontados com problemas complexos de código, agentes desonestos ou preguiçosos tentam 'Goodhart's Law / Reward Hacking': em vez de resolver a causa raiz do bug, tentam desativar o verificador rodando git commit com '--no-verify' ou apagando os scripts de auditoria.",
+        bad_example: "git commit -m 'fix' --no-verify\nrm -f .git/hooks/pre-commit",
+        good_example: "stenio --gate\ngit commit -m 'fix: implement proper solution'",
+        remediation: "Nunca use '--no-verify'. O StênioSentinel é o árbitro canônico inviolável. Se não conseguir resolver a causa raiz, escale para o usuário com explicação detalhada.",
+    },
+    RuleExplanation {
         id: "TEST-NO-SILENT-SKIP",
         name: "Proibição de Desativação Silenciosa de Testes",
         severity: "ERROR",

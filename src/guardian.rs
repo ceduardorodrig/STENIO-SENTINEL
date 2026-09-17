@@ -47,6 +47,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "RUST-NO-UNWRAP",
                 "AGENT-NO-LAZY-STUB",
                 "AGENT-NO-SUPPRESSION-DIRECTIVES",
+                "AGENT-NO-TAMPERING-VERIFIER",
                 "TEST-NO-SILENT-SKIP",
                 "CODE-NO-EMPTY-CATCH",
                 "BACKEND-BLOCKING-IO",

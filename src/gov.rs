@@ -12,13 +12,22 @@ pub struct GovAuditResult {
 pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     let mut messages = Vec::new();
     let mut errors = Vec::new();
-    let agents_md_path = if repo_root
-        .join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
-        .is_file()
-    {
-        repo_root.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
+
+    let agents_md_path = if repo_root.is_file() && repo_root.file_name().and_then(|s| s.to_str()) == Some("AGENTS.md") {
+        repo_root.to_path_buf()
     } else {
-        repo_root.join("AGENTS.md")
+        let base = if repo_root.is_file() {
+            repo_root.parent().unwrap_or(repo_root)
+        } else {
+            repo_root
+        };
+        if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
+            base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
+        } else if base.join("../../AGENTS.md").is_file() {
+            base.join("../../AGENTS.md")
+        } else {
+            base.join("AGENTS.md")
+        }
     };
 
     if !agents_md_path.is_file() {

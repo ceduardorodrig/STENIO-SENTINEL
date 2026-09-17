@@ -438,6 +438,18 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         true
     );
     check_case!(
+        "Tampering no-verify",
+        "AGENT-NO-TAMPERING-VERIFIER",
+        "git commit -m 'bypass' --no-verify",
+        true
+    );
+    check_case!(
+        "Commit Regular OK",
+        "AGENT-NO-TAMPERING-VERIFIER",
+        "git commit -m 'feat: implement'",
+        false
+    );
+    check_case!(
         "Teste Ignorado Proibido",
         "TEST-NO-SILENT-SKIP",
         "#[test]\n#[ignore]\nfn test_failure() {}",
@@ -1104,6 +1116,8 @@ fn main() -> Result<()> {
             "cv".to_string()
         } else if args.path.join("mnemocine").is_dir() && args.path.join("governance").is_dir() {
             "all".to_string()
+        } else if p_str.contains("governance/stenio") {
+            "rust".to_string()
         } else {
             "all".to_string()
         }

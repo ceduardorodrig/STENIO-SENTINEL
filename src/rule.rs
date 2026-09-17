@@ -301,6 +301,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Corrija a tipagem ou a conformidade real do código. É proibido mascarar erros com diretivas de supressão."),
     ));
 
+    // ── 15.2 Anti-Tampering: Proibição de Adulteração de Hooks e Verificadores ─
+    rules.push(Rule::new(
+        "AGENT-NO-TAMPERING-VERIFIER",
+        "gov",
+        Severity::Error,
+        "Tentativa de Adulteração de Verificador ou Hook",
+        "Proíbe desativar pre-commit hooks, comentar chamadas ao stenio ou adulterar configurações de auditoria.",
+        r#"(?m)(stenio\s+.*--no-verify|git\s+commit\s+.*--no-verify|\.git/hooks/.*exit\s+0|rm\s+-f\s+\.git/hooks)"#,
+        &["sh", "bash", "ts", "tsx", "js", "rs"],
+        Some("Nunca ignore nem desative hooks de validação (--no-verify). O Stênio é o árbitro canônico de entrega."),
+    ));
+
     // ── 16. Integridade de Testes: Proibição de Desativação Silenciosa de Testes ──
     rules.push(Rule::new(
         "TEST-NO-SILENT-SKIP",
