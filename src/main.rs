@@ -420,6 +420,24 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
+        "Supressão ts-ignore",
+        "AGENT-NO-SUPPRESSION-DIRECTIVES",
+        "// @ts-ignore\nconst x = 1;",
+        true
+    );
+    check_case!(
+        "Supressão eslint-disable",
+        "AGENT-NO-SUPPRESSION-DIRECTIVES",
+        "/* eslint-disable */\nconst x = 1;",
+        true
+    );
+    check_case!(
+        "Supressão stenio-ignore all",
+        "AGENT-NO-SUPPRESSION-DIRECTIVES",
+        "// stenio-ignore: all",
+        true
+    );
+    check_case!(
         "Teste Ignorado Proibido",
         "TEST-NO-SILENT-SKIP",
         "#[test]\n#[ignore]\nfn test_failure() {}",

@@ -289,6 +289,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Implemente o código completo da funcionalidade. É expressamente proibido usar stubs, 'todo!()' ou placeholders em entregas."),
     ));
 
+    // ── 15.1 Anti-Bypass: Proibição de Diretivas de Supressão e Ignorância ─
+    rules.push(Rule::new(
+        "AGENT-NO-SUPPRESSION-DIRECTIVES",
+        "gov",
+        Severity::Error,
+        "Diretiva de Supressão ou Bypass Proibida",
+        "Proíbe o uso de @ts-ignore, @ts-nocheck, eslint-disable, type: ignore ou stenio-ignore: all para mascarar erros.",
+        r#"(?m)(//\s*@ts-(ignore|nocheck)|/\*\s*eslint-disable|#\s*type:\s*ignore|//\s*stenio-ignore:\s*all)"#,
+        &["ts", "tsx", "js", "rs", "py", "sh"],
+        Some("Corrija a tipagem ou a conformidade real do código. É proibido mascarar erros com diretivas de supressão."),
+    ));
+
     // ── 16. Integridade de Testes: Proibição de Desativação Silenciosa de Testes ──
     rules.push(Rule::new(
         "TEST-NO-SILENT-SKIP",

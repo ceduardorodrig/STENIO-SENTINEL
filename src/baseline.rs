@@ -25,42 +25,46 @@ impl Whitelist {
     }
 
     pub fn is_ignored(&self, file_path: &str, rule_id: &str, line_content: &str) -> bool {
+        // Regras Canônicas Invioláveis: NUNCA podem ser ignoradas por comentário inline,
+        // nem por IAs, nem por humanos. Tentativas de supressão são rejeitadas.
+        let is_inviolable = rule_id.starts_with("SEC-")
+            || rule_id.starts_with("AGENT-")
+            || rule_id == "TEST-NO-SILENT-SKIP"
+            || rule_id == "ARCH-NO-PYTHON"
+            || rule_id == "RUST-NO-UNBOUNDED-CHANNEL"
+            || rule_id == "ARCH-DRY-DUPLICATION";
+
+        if is_inviolable {
+            return false;
+        }
+
         // 1. Suporte a comentário inline com regra específica: # stenio-ignore: RULE_ID
+        // NOTA DE SEGURANÇA: 'stenio-ignore: all' é expressamente PROIBIDO e não tem efeito.
         if line_content.contains("# stenio-ignore") || line_content.contains("// stenio-ignore") {
-            if line_content.contains(rule_id) || line_content.contains("all") {
+            // Proibição estrita de bypass global 'all'
+            if line_content.contains("stenio-ignore: all") || line_content.contains("stenio-ignore:all") {
+                return false;
+            }
+            if line_content.contains(rule_id) {
                 return true;
             }
         }
 
-        // 2. nosemgrep: compatível com semgrep CLI, com proteção adicional para SEC-*
-        //
-        // Comportamento:
-        //   # nosemgrep: SEC-SUDO        → NUNCA ignora (SEC-* são absolutas)
-        //   # nosemgrep: ARCH-RUST-TOOLS → ignora apenas ARCH-RUST-TOOLS
-        //   # nosemgrep                  → ignora para regras não-SEC-* (compat. semgrep)
-        //                                  NÃO ignora para regras SEC-* (segurança absoluta)
+        // 2. nosemgrep: compatível com semgrep CLI (apenas regras específicas não-críticas)
         if line_content.contains("# nosemgrep") || line_content.contains("// nosemgrep") {
-            // Regras de segurança (SEC-*) são absolutas — nem nosemgrep genérico pode suprimi-las.
-            // Apenas stenio-ignore: RULE_ID pode ignorá-las, e mesmo assim registra no log.
-            if rule_id.starts_with("SEC-") {
-                return false;
-            }
-            // Para regras não-SEC, nosemgrep com rule_id específico ignora apenas aquela regra.
-            // nosemgrep genérico (sem ":") mantém compatibilidade com o ecossistema semgrep.
             if let Some(after) = line_content.split("nosemgrep").nth(1) {
                 let trimmed_after = after.trim();
                 if trimmed_after.is_empty() || !trimmed_after.starts_with(':') {
-                    // nosemgrep genérico — ignora para regras não-SEC
-                    return true;
+                    // nosemgrep genérico é proibido para evitar supressão cega por IAs
+                    return false;
                 }
                 // nosemgrep: RULE_ID — ignora apenas se rule_id bater
                 if trimmed_after.contains(rule_id) {
                     return true;
                 }
-                // nosemgrep: OUTRA_REGRA — não ignora esta regra
                 return false;
             }
-            return true; // fallback: nosemgrep sem after → ignora (compatibilidade)
+            return false;
         }
 
         // 3. Checa whitelist de arquivo (.steniocheck-whitelist-registry.json)

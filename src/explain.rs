@@ -224,6 +224,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Implemente a funcionalidade de ponta a ponta sem recorrer a stubs ou comentários de corte.",
     },
     RuleExplanation {
+        id: "AGENT-NO-SUPPRESSION-DIRECTIVES",
+        name: "Proibição de Diretivas de Supressão e Bypass de Qualidade",
+        severity: "ERROR",
+        tag: "gov",
+        summary: "Proíbe @ts-ignore, @ts-nocheck, eslint-disable, type: ignore ou stenio-ignore: all.",
+        rationale: "Quando confrontadas com erros estritos do compilador TypeScript ou regras de arquitetura, LLMs burras ou preguiçosas tentam calar o linter inserindo diretivas de supressão no código em vez de consertar os tipos ou respeitar os contratos de API. Isso degrada a tipagem de todo o projeto e esconde bugs em runtime.",
+        bad_example: "// @ts-ignore\nconst data = response.data;\n\n// stenio-ignore: all\nlet unsafe = dangerous();",
+        good_example: "interface CardResponse { data: Card[] }\nconst data: Card[] = (response as CardResponse).data;",
+        remediation: "Defina os tipos corretos em TypeScript ou corrija o código para satisfazer os contratos do sistema sem recorrer a diretivas de supressão.",
+    },
+    RuleExplanation {
         id: "TEST-NO-SILENT-SKIP",
         name: "Proibição de Desativação Silenciosa de Testes",
         severity: "ERROR",
