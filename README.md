@@ -44,5 +44,7 @@ stenio --typegen
 | `stenio --mesh` | Sondagem assíncrona da malha Tailscale dos nós do Homelab |
 | `stenio --health` | Raio-X completo de NVMe, RAM, GPU RTX 5050 e serviços |
 | `stenio --typegen` | Sincronização automática de tipos Rust para TypeScript |
+| `stenio --clean` | Zeladoria inteligente: limpa builds debug Rust e arquivos temporários |
+| `stenio --clean --dry-run` | Simula a limpeza exibindo espaço recuperável sem alterar disco |
 | `stenio --fix` | Aplicação cirúrgica de correções automáticas (auto-fix) |
 | `stenio --self-test` | Bateria de auto-testes sintéticos das regras do motor |

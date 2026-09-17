@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod baseline;
+mod clean;
 mod config;
 mod context;
 mod cv;
@@ -194,6 +195,20 @@ struct Args {
         help = "Audita duplicação de código usando o Princípio DRY Absoluto com Rolling Block Hash (<15ms)"
     )]
     dry: bool,
+
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "safe",
+        help = "Zeladoria e Higiene Inteligente: limpa caches, arquivos temporários (*.tmp, *.bak) e árvores de build Rust (target/debug, incremental). Modos: 'safe' (padrão), 'targets' (apenas build targets), 'temp' (apenas arquivos temporários), 'all' (limpeza profunda total)"
+    )]
+    clean: Option<String>,
+
+    #[arg(
+        long,
+        help = "Simula a limpeza (--clean) exibindo o que seria removido e o espaço recuperável sem alterar o disco"
+    )]
+    dry_run: bool,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -968,6 +983,13 @@ fn main() -> Result<()> {
     // ── Modo Knowledge Context Engine para LLMs (--context) ────────────────
     if args.context {
         context::generate_llm_context(&args.path);
+        return Ok(());
+    }
+
+    // ── Modo Zeladoria e Higiene Inteligente (--clean) ─────────────────────
+    if let Some(ref mode) = args.clean {
+        let rep = clean::run_clean(&args.path, mode, args.dry_run)?;
+        clean::print_clean_report(&rep);
         return Ok(());
     }
 
