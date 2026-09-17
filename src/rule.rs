@@ -313,6 +313,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Nunca ignore nem desative hooks de validação (--no-verify). O Stênio é o árbitro canônico de entrega."),
     ));
 
+    // ── 15.3 Integridade de Build: Proibição de Enfraquecimento de Modo Estrito ─
+    rules.push(Rule::new(
+        "CONF-NO-WEAKEN-STRICT",
+        "gov",
+        Severity::Error,
+        "Enfraquecimento de Modo Estrito no Compilador",
+        "Proíbe desativar o modo estrito ('\"strict\": false') em tsconfig.json ou desabilitar verificações de segurança.",
+        r#""strict"\s*:\s*false|"noImplicitAny"\s*:\s*false"#,
+        &["json"],
+        Some("Mantenha '\"strict\": true' no compilador TypeScript para garantir segurança de tipos."),
+    ));
+
     // ── 16. Integridade de Testes: Proibição de Desativação Silenciosa de Testes ──
     rules.push(Rule::new(
         "TEST-NO-SILENT-SKIP",

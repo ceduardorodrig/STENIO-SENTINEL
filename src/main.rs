@@ -450,6 +450,18 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
+        "Desativação Strict tsconfig",
+        "CONF-NO-WEAKEN-STRICT",
+        "\"strict\": false,",
+        true
+    );
+    check_case!(
+        "Strict Válido tsconfig",
+        "CONF-NO-WEAKEN-STRICT",
+        "\"strict\": true,",
+        false
+    );
+    check_case!(
         "Teste Ignorado Proibido",
         "TEST-NO-SILENT-SKIP",
         "#[test]\n#[ignore]\nfn test_failure() {}",

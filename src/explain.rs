@@ -246,6 +246,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Nunca use '--no-verify'. O StênioSentinel é o árbitro canônico inviolável. Se não conseguir resolver a causa raiz, escale para o usuário com explicação detalhada.",
     },
     RuleExplanation {
+        id: "CONF-NO-WEAKEN-STRICT",
+        name: "Proibição de Enfraquecimento de Modo Estrito no Compilador",
+        severity: "ERROR",
+        tag: "gov",
+        summary: "Proíbe desativar 'strict: false' ou 'noImplicitAny: false' em tsconfig.json.",
+        rationale: "Quando uma LLM não consegue resolver erros estritos de tipagem em TypeScript, uma trapaça comum é editar o arquivo tsconfig para desligar o modo estrito ('strict: false'). Isso remove a segurança de tipos do projeto inteiro para disfarçar a incapacidade do modelo de escrever tipos corretos.",
+        bad_example: "{\n  \"compilerOptions\": {\n    \"strict\": false\n  }\n}",
+        good_example: "{\n  \"compilerOptions\": {\n    \"strict\": true\n  }\n}",
+        remediation: "Mantenha '\"strict\": true' e corrija as anotações e interfaces de tipos no código fonte.",
+    },
+    RuleExplanation {
         id: "TEST-NO-SILENT-SKIP",
         name: "Proibição de Desativação Silenciosa de Testes",
         severity: "ERROR",
