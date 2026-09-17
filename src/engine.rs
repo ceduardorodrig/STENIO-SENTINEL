@@ -61,11 +61,14 @@ impl Engine {
         tag_filter: Option<&str>,
         only_rule: Option<&str>,
         fast_mode: bool,
+        diff_target: Option<&str>,
         auto_fix: bool,
     ) -> Result<ScanReport> {
         let t0 = Instant::now();
 
-        let file_paths = if fast_mode {
+        let file_paths = if let Some(diff_spec) = diff_target {
+            self.get_diff_files(root, Some(diff_spec))
+        } else if fast_mode {
             self.get_changed_files(root)
         } else {
             self.collect_all_files(root)?
@@ -104,7 +107,12 @@ impl Engine {
         })
     }
 
-    fn apply_auto_fixes(&self, paths: &[PathBuf], tag_filter: Option<&str>, only_rule: Option<&str>) -> usize {
+    fn apply_auto_fixes(
+        &self,
+        paths: &[PathBuf],
+        tag_filter: Option<&str>,
+        only_rule: Option<&str>,
+    ) -> usize {
         let mut fixed_count = 0;
         for path in paths {
             let ext = path
@@ -140,7 +148,9 @@ impl Engine {
 
                 let re = &self.compiled_regexes[idx];
                 if re.is_match(&new_content) {
-                    let replaced = re.replace_all(&new_content, replacement.as_str()).to_string();
+                    let replaced = re
+                        .replace_all(&new_content, replacement.as_str())
+                        .to_string();
                     if replaced != new_content {
                         new_content = replaced;
                         file_changed = true;
@@ -191,7 +201,68 @@ impl Engine {
         Ok(file_paths)
     }
 
-    fn get_changed_files(&self, root: &Path) -> Vec<PathBuf> {
+    pub fn get_diff_files(&self, root: &Path, diff_target: Option<&str>) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+
+        // 1. Entrada via Stdin (ex: git diff --name-only | stenio --diff -)
+        if let Some(target) = diff_target {
+            if target == "-" {
+                use std::io::BufRead;
+                let stdin = std::io::stdin();
+                for line in stdin.lock().lines().flatten() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let p = root.join(trimmed);
+                        if p.is_file() {
+                            files.push(p);
+                        }
+                    }
+                }
+                return files;
+            }
+        }
+
+        // 2. Consulta via git diff
+        let mut args = vec!["diff", "--name-only", "--diff-filter=ACMR"];
+        let mut custom_rev = None;
+        if let Some(target) = diff_target {
+            let t = target.trim();
+            if t == "staged" || t == "cached" {
+                args.push("--cached");
+            } else if !t.is_empty() {
+                custom_rev = Some(t);
+            }
+        }
+        if let Some(rev) = custom_rev {
+            args.push(rev);
+        }
+
+        let output = Command::new("git").current_dir(root).args(&args).output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    let p = root.join(trimmed);
+                    if p.is_file() {
+                        files.push(p);
+                    }
+                }
+            }
+        }
+
+        // Se o diff estiver vazio e não foi passada revisão específica, tenta git status (untracked/staged/modified)
+        if files.is_empty()
+            && diff_target.map_or(true, |t| t.is_empty() || t == "staged" || t == "cached")
+        {
+            return self.get_changed_files(root);
+        }
+
+        files
+    }
+
+    pub fn get_changed_files(&self, root: &Path) -> Vec<PathBuf> {
         let output = Command::new("git")
             .current_dir(root)
             .args(["status", "--porcelain"])
@@ -203,21 +274,28 @@ impl Engine {
             for line in stdout.lines() {
                 let trimmed = line.trim();
                 if trimmed.len() > 3 {
-                    let path_part = &trimmed[3..].trim();
-                    let p = root.join(path_part);
+                    let path_part = trimmed[3..].trim();
+                    let actual_path = if let Some(idx) = path_part.find("->") {
+                        path_part[idx + 2..].trim()
+                    } else {
+                        path_part
+                    };
+                    let p = root.join(actual_path);
                     if p.is_file() {
                         files.push(p);
                     }
                 }
             }
         }
-        if files.is_empty() {
-            return self.collect_all_files(&root.join("app")).unwrap_or_default();
-        }
         files
     }
 
-    fn scan_file(&self, path: &Path, tag_filter: Option<&str>, only_rule: Option<&str>) -> Vec<Violation> {
+    fn scan_file(
+        &self,
+        path: &Path,
+        tag_filter: Option<&str>,
+        only_rule: Option<&str>,
+    ) -> Vec<Violation> {
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -238,7 +316,10 @@ impl Engine {
         {
             let fv = audit_frontend_file(path, &content, &self.whitelist);
             if let Some(target) = only_rule {
-                file_violations.extend(fv.into_iter().filter(|v| v.rule_id.eq_ignore_ascii_case(target)));
+                file_violations.extend(
+                    fv.into_iter()
+                        .filter(|v| v.rule_id.eq_ignore_ascii_case(target)),
+                );
             } else {
                 file_violations.extend(fv);
             }
@@ -263,12 +344,18 @@ impl Engine {
             }
 
             if rule.id == "RUST-STRUCTURED-LOGGING" {
-                if !path_str.contains("app/server/src/") || path_str.contains("/bin/") || path_str.contains("/tests/") {
+                if !path_str.contains("app/server/src/")
+                    || path_str.contains("/bin/")
+                    || path_str.contains("/tests/")
+                {
                     continue;
                 }
             }
 
-            if rule.id == "ARCH-NO-PYTHON" || rule.id.starts_with("SEC-BAN-") || rule.id == "ARCH-BANNED-MODULES" {
+            if rule.id == "ARCH-NO-PYTHON"
+                || rule.id.starts_with("SEC-BAN-")
+                || rule.id == "ARCH-BANNED-MODULES"
+            {
                 if !path_str.contains("sumaenimahub") && !path_str.contains("/app/") {
                     continue;
                 }

@@ -1,7 +1,8 @@
 use std::path::Path;
 
 pub fn generate_llm_context(_root: &Path) {
-    let context_markdown = format!(r#"# Contexto Canônico de Governança & Arquitetura (StenioSentinel v3.0)
+    let context_markdown = format!(
+        r#"# Contexto Canônico de Governança & Arquitetura (StenioSentinel v3.0)
 
 Este contexto sintetiza em alta densidade todas as leis, arquitetura e infraestrutura do ecossistema SUMÆNIMÁ e Homelab Mnemocine. Consuma como fonte da verdade absoluta.
 
@@ -33,7 +34,8 @@ Este contexto sintetiza em alta densidade todas as leis, arquitetura e infraestr
 3. **Guarda SOPS/Age:** Nenhum segredo ou chave sobe desprotegido para git ou NAS. Tudo cifrado via SOPS com chaves Age.
 4. **Arquitetura de Frontend & DRY:** Páginas React em `src/pages/*.tsx` têm limite estrito de 400 linhas. Hooks em `features/*/hooks/`, componentes em `features/*/components/`.
 5. **Auditoria Pré-Commit:** Nenhuma alteração é commitada sem validação com zero erros via `stenio`.
-"#);
+"#
+    );
 
     println!("{}", context_markdown);
 }

@@ -84,7 +84,10 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
             &format!("O uso de '{}' é proibido após a migração para Rust.", pkg),
             &pattern,
             &["py"],
-            Some(&format!("Elimine a dependência '{}' e utilize a engine Rust em app/server.", pkg)),
+            Some(&format!(
+                "Elimine a dependência '{}' e utilize a engine Rust em app/server.",
+                pkg
+            )),
         ));
     }
 

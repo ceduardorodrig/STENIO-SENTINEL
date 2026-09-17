@@ -56,7 +56,10 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
     // 2. Leitura e verificação de duplicatas no steniocheck.toml
     let toml_path = repo_root.join("steniocheck.toml");
     if !toml_path.is_file() {
-        bail!("Arquivo de configuração steniocheck.toml não encontrado em {:?}", repo_root);
+        bail!(
+            "Arquivo de configuração steniocheck.toml não encontrado em {:?}",
+            repo_root
+        );
     }
 
     let current_content = fs::read_to_string(&toml_path)?;
@@ -77,11 +80,17 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
     let escaped_desc = description.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
     let suggestion_line = match &suggestion {
-        Some(s) => format!("suggestion = \"{}\"\n", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Some(s) => format!(
+            "suggestion = \"{}\"\n",
+            s.replace('\\', "\\\\").replace('"', "\\\"")
+        ),
         None => "".to_string(),
     };
     let fix_line = match &payload.fix_replacement {
-        Some(f) => format!("fix_replacement = \"{}\"\n", f.replace('\\', "\\\\").replace('"', "\\\"")),
+        Some(f) => format!(
+            "fix_replacement = \"{}\"\n",
+            f.replace('\\', "\\\\").replace('"', "\\\"")
+        ),
         None => "".to_string(),
     };
 
@@ -101,18 +110,49 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
         .context("Falha ao escrever regra aprendida em steniocheck.toml")?;
 
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
-    println!("{} {}", "✨ StênioKernel — Nova Regra Aprendida com Sucesso!".green().bold(), format!("[{}]", id).cyan().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .green()
+            .bold()
+    );
+    println!(
+        "{} {}",
+        "✨ StênioKernel — Nova Regra Aprendida com Sucesso!"
+            .green()
+            .bold(),
+        format!("[{}]", id).cyan().bold()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .green()
+            .bold()
+    );
     println!("   {} {}", "ID:         ".dimmed(), id.cyan().bold());
     println!("   {} {}", "Nome:       ".dimmed(), name.bold());
     println!("   {} {}", "Tag:        ".dimmed(), tag.yellow());
-    println!("   {} {}", "Severidade: ".dimmed(), if severity == "error" { severity.red().bold() } else { severity.yellow().bold() });
-    println!("   {} {}", "Padrão:     ".dimmed(), payload.pattern.magenta());
+    println!(
+        "   {} {}",
+        "Severidade: ".dimmed(),
+        if severity == "error" {
+            severity.red().bold()
+        } else {
+            severity.yellow().bold()
+        }
+    );
+    println!(
+        "   {} {}",
+        "Padrão:     ".dimmed(),
+        payload.pattern.magenta()
+    );
     println!("   {} [{}]", "Extensões:  ".dimmed(), extensions_fmt);
     println!("   {} {}", "Descrição:  ".dimmed(), description);
     println!();
-    println!("ℹ️ Regra persistida em {} e ativa imediatamente.", "steniocheck.toml".bold());
+    println!(
+        "ℹ️ Regra persistida em {} e ativa imediatamente.",
+        "steniocheck.toml".bold()
+    );
     println!();
 
     Ok(())

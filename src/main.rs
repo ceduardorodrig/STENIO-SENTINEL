@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 mod baseline;
 mod config;
@@ -14,9 +15,9 @@ mod gov;
 mod gpu;
 mod guardian;
 mod health;
+mod homelab;
 mod infra;
 mod learner;
-mod homelab;
 mod mesh;
 mod migrations;
 mod rule;
@@ -46,13 +47,25 @@ use vault::audit_vault;
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust"
 )]
 struct Args {
-    #[arg(short = 's', long, help = "Escopo de auditoria: hub, homelab, vault, cv, all [default: all]")]
+    #[arg(
+        short = 's',
+        long,
+        help = "Escopo de auditoria: hub, homelab, vault, cv, all [default: all]"
+    )]
     scope: Option<String>,
 
-    #[arg(short, long, help = "Filtrar regras por tag (ex: sec, arch, frontend, infra, gov, gpu, doc, db, custom)")]
+    #[arg(
+        short,
+        long,
+        help = "Filtrar regras por tag (ex: sec, arch, frontend, infra, gov, gpu, doc, db, custom)"
+    )]
     tag: Option<String>,
 
-    #[arg(short, long, help = "Modo rápido: escaneia apenas arquivos modificados no Git")]
+    #[arg(
+        short,
+        long,
+        help = "Modo rápido: escaneia apenas arquivos modificados no Git"
+    )]
     fast: bool,
 
     #[arg(long, help = "Caminho raiz do escaneamento", default_value = ".")]
@@ -67,42 +80,157 @@ struct Args {
     #[arg(long, help = "Falhar imediatamente com exit code 1 se houver erros")]
     strict: bool,
 
-    #[arg(long, help = "Aprender nova regra dinamicamente e persistir em steniocheck.toml (JSON)")]
+    #[arg(
+        long,
+        help = "Aprender nova regra dinamicamente e persistir em steniocheck.toml (JSON)"
+    )]
     learn: Option<String>,
 
     #[arg(long, help = "Listar todas as regras e autômatos ativos")]
     list: bool,
 
-    #[arg(long, help = "Executar apenas uma regra específica (ex: --only FRONT-HEX)")]
+    #[arg(
+        long,
+        help = "Executar apenas uma regra específica (ex: --only FRONT-HEX)"
+    )]
     only: Option<String>,
 
-    #[arg(long, help = "Executar bateria de auto-testes sintéticos das regras do motor")]
+    #[arg(
+        long,
+        help = "Executar bateria de auto-testes sintéticos das regras do motor"
+    )]
     self_test: bool,
 
-    #[arg(long, help = "Executar raio-X completo de infraestrutura, disco, RAM, GPU e serviços")]
+    #[arg(
+        long,
+        help = "Executar raio-X completo de infraestrutura, disco, RAM, GPU e serviços"
+    )]
     health: bool,
 
-    #[arg(long, help = "Audita a malha Tailscale de todos os nós do Homelab via Tokio")]
+    #[arg(
+        long,
+        help = "Audita a malha Tailscale de todos os nós do Homelab via Tokio"
+    )]
     mesh: bool,
 
-    #[arg(long, help = "Gera automaticamente tipos TypeScript a partir dos structs Rust")]
+    #[arg(
+        long,
+        help = "Gera automaticamente tipos TypeScript a partir dos structs Rust"
+    )]
     typegen: bool,
 
-    #[arg(long, help = "Gera contexto canônico de alta densidade para LLMs em Markdown")]
+    #[arg(
+        long,
+        help = "Gera contexto canônico de alta densidade para LLMs em Markdown"
+    )]
     context: bool,
 
-    #[arg(long, help = "Aplica correções automáticas (auto-fix) em violações passíveis de reparo")]
+    #[arg(
+        long,
+        help = "Aplica correções automáticas (auto-fix) em violações passíveis de reparo"
+    )]
     fix: bool,
 
-    #[arg(long, help = "Audita a integridade criptográfica e mecanismos anti-tampering do próprio Stênio")]
+    #[arg(
+        long,
+        help = "Audita a integridade criptográfica e mecanismos anti-tampering do próprio Stênio"
+    )]
     guardian: bool,
+
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        help = "Scan cirúrgico apenas nos arquivos alterados no Git (ex: --diff, --diff HEAD~1, --diff - para stdin)"
+    )]
+    diff: Option<String>,
+
+    #[arg(
+        long,
+        help = "Gerenciar git hook pre-commit: 'install' para instalar no repositório, ou 'check' para executar validação"
+    )]
+    pre_commit: Option<String>,
+
+    #[arg(
+        long,
+        help = "Saída ultra-compacta de uma linha por violação (otimizada para agentes de IA e LLMs)"
+    )]
+    compact: bool,
+}
+
+fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
+    let canonical = if let Ok(c) = fs::canonicalize(start_dir) {
+        c
+    } else {
+        start_dir.to_path_buf()
+    };
+    let mut current = canonical.as_path();
+    loop {
+        let git_dir = current.join(".git");
+        if git_dir.is_dir() {
+            let hooks_dir = git_dir.join("hooks");
+            fs::create_dir_all(&hooks_dir)?;
+            let hook_file = hooks_dir.join("pre-commit");
+            let hook_script = r#"#!/usr/bin/env bash
+# StenioSentinel Universal Pre-Commit Hook (v3.1)
+# Auto-instalado pelo StenioSentinel
+set -euo pipefail
+
+if command -v stenio >/dev/null 2>&1; then
+    echo "🛡️  [StenioSentinel] Auditando arquivos em staging..."
+    exec stenio --diff staged --strict
+else
+    echo "⚠️  [StenioSentinel] Binário 'stenio' não encontrado no PATH. Pulando verificação."
+fi
+"#;
+            fs::write(&hook_file, hook_script)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = fs::metadata(&hook_file) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(&hook_file, perms);
+                }
+            }
+            println!(
+                "{} Hook pre-commit instalado com sucesso em: {}",
+                "✨".green().bold(),
+                hook_file.display().to_string().cyan().bold()
+            );
+            return Ok(());
+        }
+        match current.parent() {
+            Some(p) => current = p,
+            None => break,
+        }
+    }
+    anyhow::bail!(
+        "Nenhum repositório Git (.git) encontrado a partir de {:?}",
+        start_dir
+    );
 }
 
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
-    println!("{}", "StênioKernel — Bateria de Auto-Testes Sintéticos (Self-Test)".cyan().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "StênioKernel — Bateria de Auto-Testes Sintéticos (Self-Test)"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
 
     let mut passed = 0;
     let mut total = 0;
@@ -118,7 +246,12 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
                     passed += 1;
                     println!("   ✅ Teste {:<22} [{}] - OK", $name, $pattern_id.cyan());
                 } else {
-                    println!("   ❌ Teste {:<22} [{}] - FALHA (esperado match={})", $name, $pattern_id.red(), $expected_match);
+                    println!(
+                        "   ❌ Teste {:<22} [{}] - FALHA (esperado match={})",
+                        $name,
+                        $pattern_id.red(),
+                        $expected_match
+                    );
                 }
             } else {
                 println!("   ⚠️ Regra {} não encontrada", $pattern_id.yellow());
@@ -127,20 +260,90 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     }
 
     check_case!("Python Banido", "ARCH-NO-PYTHON", "print('hello')", true);
-    check_case!("Thread Sleep Tokio", "RUST-ASYNC-SLEEP", "std::thread::sleep(Duration::from_millis(100));", true); // stenio-ignore: RUST-ASYNC-SLEEP
-    check_case!("Tokio Sleep Válido", "RUST-ASYNC-SLEEP", "tokio::time::sleep(Duration::from_millis(100)).await;", false);
-    check_case!("Segredo Hardcoded", "SEC-SECRETS", "api_key = \"ghp_123456789012345678901234567890123456\"", true); // stenio-ignore: SEC-SECRETS
-    check_case!("Sudo Desprotegido", "SEC-SUDO", "sudo systemctl restart nginx", true);
-    check_case!("Sudo curl Desprotegido", "SEC-SUDO", "sudo curl https://example.com", true); // Novo: captura qualquer comando
-    check_case!("Sudo useradd Desprotegido", "SEC-SUDO", "sudo useradd -m user", true);     // Novo: era ponto cego
-    check_case!("Pkexec Válido", "SEC-SUDO", "pkexec systemctl restart nginx", false);
-    check_case!("Bare Except Proibido", "SEC-EXCEPT", "except:\n    pass", true);
-    check_case!("Except Tipado", "SEC-EXCEPT", "except ValueError:\n    pass", false);
-    check_case!("GNU Tools em Shell", "ARCH-RUST-TOOLS", "grep -r pattern .", true);    // Novo: AGENTS.md regra de terminal
-    check_case!("Rust Tools Válido", "ARCH-RUST-TOOLS", "rg 'pattern' .", false);       // Novo: rg não dispara
-    check_case!("Curl em Rust Proibido", "ARCH-RUST-CMD-LEGACY", r#"Command::new("curl")"#, true);  // Novo: regra ARCH-RUST-CMD-LEGACY
-    check_case!("XH em Rust OK", "ARCH-RUST-CMD-LEGACY", r#"Command::new("xh")"#, false);           // Novo: xh não dispara
-    check_case!("Console.log Proibido", "FRONT-LOGS", "  console.log('debug info')", true);          // Novo: FRONT-LOGS
+    check_case!(
+        "Thread Sleep Tokio",
+        "RUST-ASYNC-SLEEP",
+        "std::thread::sleep(Duration::from_millis(100));",
+        true
+    ); // stenio-ignore: RUST-ASYNC-SLEEP
+    check_case!(
+        "Tokio Sleep Válido",
+        "RUST-ASYNC-SLEEP",
+        "tokio::time::sleep(Duration::from_millis(100)).await;",
+        false
+    );
+    check_case!(
+        "Segredo Hardcoded",
+        "SEC-SECRETS",
+        "api_key = \"ghp_123456789012345678901234567890123456\"",
+        true
+    ); // stenio-ignore: SEC-SECRETS
+    check_case!(
+        "Sudo Desprotegido",
+        "SEC-SUDO",
+        "sudo systemctl restart nginx",
+        true
+    );
+    check_case!(
+        "Sudo curl Desprotegido",
+        "SEC-SUDO",
+        "sudo curl https://example.com",
+        true
+    ); // Novo: captura qualquer comando
+    check_case!(
+        "Sudo useradd Desprotegido",
+        "SEC-SUDO",
+        "sudo useradd -m user",
+        true
+    ); // Novo: era ponto cego
+    check_case!(
+        "Pkexec Válido",
+        "SEC-SUDO",
+        "pkexec systemctl restart nginx",
+        false
+    );
+    check_case!(
+        "Bare Except Proibido",
+        "SEC-EXCEPT",
+        "except:\n    pass",
+        true
+    );
+    check_case!(
+        "Except Tipado",
+        "SEC-EXCEPT",
+        "except ValueError:\n    pass",
+        false
+    );
+    check_case!(
+        "GNU Tools em Shell",
+        "ARCH-RUST-TOOLS",
+        "grep -r pattern .",
+        true
+    ); // Novo: AGENTS.md regra de terminal
+    check_case!(
+        "Rust Tools Válido",
+        "ARCH-RUST-TOOLS",
+        "rg 'pattern' .",
+        false
+    ); // Novo: rg não dispara
+    check_case!(
+        "Curl em Rust Proibido",
+        "ARCH-RUST-CMD-LEGACY",
+        r#"Command::new("curl")"#,
+        true
+    ); // Novo: regra ARCH-RUST-CMD-LEGACY
+    check_case!(
+        "XH em Rust OK",
+        "ARCH-RUST-CMD-LEGACY",
+        r#"Command::new("xh")"#,
+        false
+    ); // Novo: xh não dispara
+    check_case!(
+        "Console.log Proibido",
+        "FRONT-LOGS",
+        "  console.log('debug info')",
+        true
+    ); // Novo: FRONT-LOGS
 
     // Teste sintético de Auto-Fix para SEC-SUDO (regex expandido: captura qualquer comando)
     total += 1;
@@ -152,7 +355,11 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             let fixed = re.replace_all(sample, fix.as_str());
             if fixed == "pkexec systemctl restart nginx" {
                 passed += 1;
-                println!("   ✅ Teste {:<22} [{}] - OK", "Auto-Fix SEC-SUDO", "SEC-SUDO".cyan());
+                println!(
+                    "   ✅ Teste {:<22} [{}] - OK",
+                    "Auto-Fix SEC-SUDO",
+                    "SEC-SUDO".cyan()
+                );
             } else {
                 println!("   ❌ Teste Auto-Fix gerou resultado inesperado: {}", fixed);
             }
@@ -169,7 +376,11 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             let fixed = re.replace_all(sample, fix.as_str());
             if fixed == "pkexec curl https://example.com" {
                 passed += 1;
-                println!("   ✅ Teste {:<22} [{}] - OK", "Auto-Fix sudo curl", "SEC-SUDO".cyan());
+                println!(
+                    "   ✅ Teste {:<22} [{}] - OK",
+                    "Auto-Fix sudo curl",
+                    "SEC-SUDO".cyan()
+                );
             } else {
                 println!("   ❌ Teste Auto-Fix (sudo curl) gerou: {}", fixed);
             }
@@ -178,15 +389,27 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 
     println!();
     if passed == total {
-        println!("{}", format!("✨ Auto-teste aprovado com sucesso! ({}/{} suítes sintéticas válidas)", passed, total).green().bold());
+        println!(
+            "{}",
+            format!(
+                "✨ Auto-teste aprovado com sucesso! ({}/{} suítes sintéticas válidas)",
+                passed, total
+            )
+            .green()
+            .bold()
+        );
     } else {
-        println!("{}", format!("❌ Falha em auto-testes ({}/{} passaram)", passed, total).red().bold());
+        println!(
+            "{}",
+            format!("❌ Falha em auto-testes ({}/{} passaram)", passed, total)
+                .red()
+                .bold()
+        );
         std::process::exit(1);
     }
     println!();
     Ok(())
 }
-
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -231,14 +454,49 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // ── Modo Pre-Commit Hook (--pre-commit install / check) ────────────────
+    if let Some(ref action) = args.pre_commit {
+        match action.as_str() {
+            "install" => {
+                install_pre_commit_hook(&args.path)?;
+                return Ok(());
+            }
+            "check" => {
+                // Continua a execução no modo diff com target staged
+            }
+            other => {
+                eprintln!(
+                    "Ação desconhecida para --pre-commit: '{}'. Use 'install' ou 'check'.",
+                    other
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     // ── Modo Guardian Anti-Tampering & Auto-Preservação (--guardian) ────────
     if args.guardian {
         let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
         let rep = audit_stenio_integrity(&stenio_src);
         println!();
-        println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
-        println!("{}", "StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering".cyan().bold());
-        println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
         for m in &rep.messages {
             println!("   {}", m);
         }
@@ -262,11 +520,37 @@ fn main() -> Result<()> {
     // ── Modo Listagem (--list) ─────────────────────────────────────────────
     if args.list {
         println!();
-        println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
-        println!("{}", "StênioKernel — Catálogo de Regras Ativas & Autômatos".cyan().bold());
-        println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
-        println!("{:<26} {:<10} {:<8} {:<14} {}", "ID DA REGRA".bold(), "TAG".bold(), "SEV".bold(), "EXTENSÕES".bold(), "NOME".bold());
-        println!("{}", "──────────────────────────────────────────────────────────────────────────────".dimmed());
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "StênioKernel — Catálogo de Regras Ativas & Autômatos"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .cyan()
+                .bold()
+        );
+        println!(
+            "{:<26} {:<10} {:<8} {:<14} {}",
+            "ID DA REGRA".bold(),
+            "TAG".bold(),
+            "SEV".bold(),
+            "EXTENSÕES".bold(),
+            "NOME".bold()
+        );
+        println!(
+            "{}",
+            "──────────────────────────────────────────────────────────────────────────────"
+                .dimmed()
+        );
 
         for r in &rules {
             let sev_str = match r.severity {
@@ -274,7 +558,14 @@ fn main() -> Result<()> {
                 Severity::Warning => "WARN ".yellow().bold(),
             };
             let exts = r.file_extensions.join(", ");
-            println!("{:<26} {:<10} {:<8} {:<14} {}", r.id.cyan().bold(), r.tag.yellow(), sev_str, format!("[{}]", exts).dimmed(), r.name);
+            println!(
+                "{:<26} {:<10} {:<8} {:<14} {}",
+                r.id.cyan().bold(),
+                r.tag.yellow(),
+                sev_str,
+                format!("[{}]", exts).dimmed(),
+                r.name
+            );
         }
         println!();
         println!("Total de regras ativas: {}", rules.len().to_string().bold());
@@ -293,9 +584,14 @@ fn main() -> Result<()> {
     let scope = if let Some(s) = args.scope.as_deref() {
         s.to_lowercase()
     } else {
-        let p_canon = args.path.canonicalize().unwrap_or_else(|_| args.path.clone());
+        let p_canon = args
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| args.path.clone());
         let p_str = p_canon.to_string_lossy();
-        if p_str.contains("sumaenimahub") || (args.path.join("app").is_dir() && args.path.join("migrations").is_dir()) {
+        if p_str.contains("sumaenimahub")
+            || (args.path.join("app").is_dir() && args.path.join("migrations").is_dir())
+        {
             "hub".to_string()
         } else if p_str.ends_with("mnemocine") {
             "homelab".to_string()
@@ -315,16 +611,27 @@ fn main() -> Result<()> {
 
     let should_audit_gpu = is_hub_active
         && (tag_lower.as_deref() == Some("gpu") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("GPU-BLOAT-OR-MODEL")).unwrap_or(false));
+        && (only_rule.is_none()
+            || only_rule
+                .map(|s| s.eq_ignore_ascii_case("GPU-BLOAT-OR-MODEL"))
+                .unwrap_or(false));
     let should_audit_gov = is_hub_active
         && (tag_lower.as_deref() == Some("gov") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("GOV-AGENT-LAWS")).unwrap_or(false));
+        && (only_rule.is_none()
+            || only_rule
+                .map(|s| s.eq_ignore_ascii_case("GOV-AGENT-LAWS"))
+                .unwrap_or(false));
     let should_audit_doc = (is_hub_active || is_homelab_active || is_vault_active)
         && (tag_lower.as_deref() == Some("doc") || tag_lower.is_none())
         && (only_rule.is_none() || only_rule.map(|s| s.starts_with("DOC-")).unwrap_or(false));
     let should_audit_mig = is_hub_active
-        && (tag_lower.as_deref() == Some("db") || tag_lower.as_deref() == Some("migrations") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.eq_ignore_ascii_case("DB-MIGRATION-INTEGRITY")).unwrap_or(false));
+        && (tag_lower.as_deref() == Some("db")
+            || tag_lower.as_deref() == Some("migrations")
+            || tag_lower.is_none())
+        && (only_rule.is_none()
+            || only_rule
+                .map(|s| s.eq_ignore_ascii_case("DB-MIGRATION-INTEGRITY"))
+                .unwrap_or(false));
 
     let scan_target = if scope == "homelab" || scope == "mnemocine" {
         if args.path.join("mnemocine").is_dir() {
@@ -348,45 +655,90 @@ fn main() -> Result<()> {
         args.path.clone()
     };
 
+    let diff_target: Option<&str> = if args.pre_commit.as_deref() == Some("check") {
+        Some("staged")
+    } else {
+        args.diff.as_deref()
+    };
+
     let engine = Engine::new(rules, whitelist)?;
 
     // Executa em paralelo o escaneamento do repositório e os subsistemas auxiliares
-    let ((scan_res, (gov_res, doc_res)), ((gpu_res, mig_res), (((homelab_res, infra_res), vault_res), cv_res))) = rayon::join(
-        || rayon::join(
-            || engine.scan_directory(&scan_target, tag_lower.as_deref(), only_rule, args.fast, args.fix),
-            || {
-                let g = if should_audit_gov { Some(audit_governance(&args.path)) } else { None };
-                let d = if should_audit_doc { Some(audit_documentation(&args.path)) } else { None };
-                (g, d)
-            },
-        ),
-        || rayon::join(
-            || {
-                let gp = if should_audit_gpu { Some(audit_gpu_subsystem()) } else { None };
-                let m = if should_audit_mig { Some(audit_migrations(&args.path)) } else { None };
-                (gp, m)
-            },
-            || {
-                rayon::join(
-                    || {
-                        let (h, inf) = if is_homelab_active {
-                            (Some(audit_homelab(&args.path)), Some(audit_infrastructure(&args.path)))
-                        } else {
-                            (None, None)
-                        };
-                        let v = if is_vault_active { Some(audit_vault(&args.path)) } else { None };
-                        ((h, inf), v)
-                    },
-                    || {
-                        if is_cv_active {
-                            Some(audit_curriculum_vitae(&args.path))
-                        } else {
-                            None
-                        }
-                    },
-                )
-            },
-        ),
+    let (
+        (scan_res, (gov_res, doc_res)),
+        ((gpu_res, mig_res), (((homelab_res, infra_res), vault_res), cv_res)),
+    ) = rayon::join(
+        || {
+            rayon::join(
+                || {
+                    engine.scan_directory(
+                        &scan_target,
+                        tag_lower.as_deref(),
+                        only_rule,
+                        args.fast,
+                        diff_target,
+                        args.fix,
+                    )
+                },
+                || {
+                    let g = if should_audit_gov {
+                        Some(audit_governance(&args.path))
+                    } else {
+                        None
+                    };
+                    let d = if should_audit_doc {
+                        Some(audit_documentation(&args.path))
+                    } else {
+                        None
+                    };
+                    (g, d)
+                },
+            )
+        },
+        || {
+            rayon::join(
+                || {
+                    let gp = if should_audit_gpu {
+                        Some(audit_gpu_subsystem())
+                    } else {
+                        None
+                    };
+                    let m = if should_audit_mig {
+                        Some(audit_migrations(&args.path))
+                    } else {
+                        None
+                    };
+                    (gp, m)
+                },
+                || {
+                    rayon::join(
+                        || {
+                            let (h, inf) = if is_homelab_active {
+                                (
+                                    Some(audit_homelab(&args.path)),
+                                    Some(audit_infrastructure(&args.path)),
+                                )
+                            } else {
+                                (None, None)
+                            };
+                            let v = if is_vault_active {
+                                Some(audit_vault(&args.path))
+                            } else {
+                                None
+                            };
+                            ((h, inf), v)
+                        },
+                        || {
+                            if is_cv_active {
+                                Some(audit_curriculum_vitae(&args.path))
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                },
+            )
+        },
     );
 
     let mut report = scan_res?;
@@ -407,7 +759,9 @@ fn main() -> Result<()> {
                     line_number: 1,
                     snippet: "".to_string(),
                     message: err,
-                    suggestion: Some("Mantenha as 38 Leis Absolutas e a Regra de Ouro no AGENTS.md.".to_string()),
+                    suggestion: Some(
+                        "Mantenha as 38 Leis Absolutas e a Regra de Ouro no AGENTS.md.".to_string(),
+                    ),
                 });
             }
         }
@@ -525,6 +879,30 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.compact {
+        for v in &report.violations {
+            let sev = match v.severity {
+                Severity::Error => "ERROR",
+                Severity::Warning => "WARN",
+            };
+            if let Some(ref sug) = v.suggestion {
+                println!(
+                    "[{}] {}:{}: [{}] {} - {} (💡 {})",
+                    sev, v.file_path, v.line_number, v.rule_id, v.rule_name, v.message, sug
+                );
+            } else {
+                println!(
+                    "[{}] {}:{}: [{}] {} - {}",
+                    sev, v.file_path, v.line_number, v.rule_id, v.rule_name, v.message
+                );
+            }
+        }
+        if args.strict && report.error_count > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     if args.github_format {
         for v in &report.violations {
             let level = match v.severity {
@@ -533,12 +911,12 @@ fn main() -> Result<()> {
             };
             if let Some(ref sug) = v.suggestion {
                 println!(
-                    "::{} file={},line={}::[{}] {} - {} (💡 Sugestão: {})",
+                    "::{} file={},line={},title=[{}] {}::{} (💡 Sugestão: {})",
                     level, v.file_path, v.line_number, v.rule_id, v.rule_name, v.message, sug
                 );
             } else {
                 println!(
-                    "::{} file={},line={}::[{}] {} - {}",
+                    "::{} file={},line={},title=[{}] {}::{}",
                     level, v.file_path, v.line_number, v.rule_id, v.rule_name, v.message
                 );
             }
@@ -558,7 +936,9 @@ fn main() -> Result<()> {
     );
     println!(
         "{} {}",
-        "StenioSentinel (Rust Engine v3.0) — Sistema Universal de Governança".cyan().bold(),
+        "StenioSentinel (Rust Engine v3.0) — Sistema Universal de Governança"
+            .cyan()
+            .bold(),
         format!("[{:.2?}]", report.duration).yellow()
     );
     println!(
@@ -570,7 +950,10 @@ fn main() -> Result<()> {
 
     // Auditoria de Governança (AGENTS.md)
     if should_audit_gov {
-        println!("{}", "── Subsistema de Governança & Leis do Agente ──────────────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema de Governança & Leis do Agente ──────────────────".dimmed()
+        );
         for msg in gov_messages {
             println!("   {}", msg);
         }
@@ -579,7 +962,10 @@ fn main() -> Result<()> {
 
     // Auditoria de Documentação (docs/)
     if should_audit_doc {
-        println!("{}", "── Subsistema de Rastreabilidade & Documentação ───────────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema de Rastreabilidade & Documentação ───────────────".dimmed()
+        );
         for msg in doc_messages {
             println!("   {}", msg);
         }
@@ -588,7 +974,10 @@ fn main() -> Result<()> {
 
     // Auditoria de GPU & Modelos
     if should_audit_gpu {
-        println!("{}", "── Subsistema GPU & Modelos (RTX 5050 / Blackwell) ─────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema GPU & Modelos (RTX 5050 / Blackwell) ─────────".dimmed()
+        );
         for msg in gpu_messages {
             println!("   {}", msg);
         }
@@ -597,7 +986,10 @@ fn main() -> Result<()> {
 
     // Auditoria de Banco de Dados & Migrações (SQLx)
     if should_audit_mig {
-        println!("{}", "── Subsistema de Banco de Dados & Migrações (SQLx) ────────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema de Banco de Dados & Migrações (SQLx) ────────────".dimmed()
+        );
         for msg in mig_messages {
             println!("   {}", msg);
         }
@@ -606,7 +998,10 @@ fn main() -> Result<()> {
 
     // Auditoria do Homelab (Mnemocine)
     if is_homelab_active && !homelab_messages.is_empty() {
-        println!("{}", "── Subsistema Homelab Mnemocine (Infraestrutura) ───────────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema Homelab Mnemocine (Infraestrutura) ───────────────".dimmed()
+        );
         for msg in homelab_messages {
             println!("   {}", msg);
         }
@@ -615,7 +1010,10 @@ fn main() -> Result<()> {
 
     // Auditoria do Vault Obsidian (Governança Universal)
     if is_vault_active && !vault_messages.is_empty() {
-        println!("{}", "── Subsistema Vault Obsidian & Governança Universal ───────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema Vault Obsidian & Governança Universal ───────────".dimmed()
+        );
         for msg in vault_messages {
             println!("   {}", msg);
         }
@@ -624,7 +1022,10 @@ fn main() -> Result<()> {
 
     // Auditoria de Currículo Bilíngue
     if is_cv_active && !cv_messages.is_empty() {
-        println!("{}", "── Subsistema Currículo Bilíngue (curriculum-vitae/) ──────────".dimmed());
+        println!(
+            "{}",
+            "── Subsistema Currículo Bilíngue (curriculum-vitae/) ──────────".dimmed()
+        );
         for msg in cv_messages {
             println!("   {}", msg);
         }
@@ -640,9 +1041,12 @@ fn main() -> Result<()> {
     if report.total_fixed > 0 {
         println!(
             "{}",
-            format!("✨ Auto-fix: {} violação(ões) corrigida(s) automaticamente com sucesso!", report.total_fixed)
-                .green()
-                .bold()
+            format!(
+                "✨ Auto-fix: {} violação(ões) corrigida(s) automaticamente com sucesso!",
+                report.total_fixed
+            )
+            .green()
+            .bold()
         );
     }
     println!();

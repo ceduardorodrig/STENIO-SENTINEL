@@ -25,7 +25,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
     let file_pattern = match Regex::new(r"^v([0-9]+)\.([0-9]+)_[a-z0-9_]+\.sql$") {
         Ok(r) => r,
         Err(e) => {
-            errors.push(format!("Falha interna ao compilar regex de migrações: {}", e));
+            errors.push(format!(
+                "Falha interna ao compilar regex de migrações: {}",
+                e
+            ));
             return MigrationAuditResult {
                 total_migrations: 0,
                 errors,
@@ -57,7 +60,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
 
             // Rejeita arquivos não SQL em migrations/
             if !filename.ends_with(".sql") {
-                let err = format!("Arquivo inválido em migrations/: '{}' (apenas .sql permitido)", filename);
+                let err = format!(
+                    "Arquivo inválido em migrations/: '{}' (apenas .sql permitido)",
+                    filename
+                );
                 errors.push(err.clone());
                 messages.push(format!("❌ {}", err));
                 continue;
@@ -74,8 +80,14 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                 }
             };
 
-            let major: u32 = caps.get(1).map(|m| m.as_str().parse().unwrap_or(0)).unwrap_or(0);
-            let minor: u32 = caps.get(2).map(|m| m.as_str().parse().unwrap_or(0)).unwrap_or(0);
+            let major: u32 = caps
+                .get(1)
+                .map(|m| m.as_str().parse().unwrap_or(0))
+                .unwrap_or(0);
+            let minor: u32 = caps
+                .get(2)
+                .map(|m| m.as_str().parse().unwrap_or(0))
+                .unwrap_or(0);
 
             // Valida integridade do conteúdo
             match fs::read_to_string(&path) {
@@ -89,7 +101,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                     // Checa por antipadrão de DROP TABLE / DROP COLUMN perigoso sem IF EXISTS
                     let lower = content.to_lowercase();
                     if lower.contains("drop table") && !lower.contains("drop table if exists") {
-                        let err = format!("Migração {} possui DROP TABLE destrutivo sem IF EXISTS", filename);
+                        let err = format!(
+                            "Migração {} possui DROP TABLE destrutivo sem IF EXISTS",
+                            filename
+                        );
                         errors.push(err.clone());
                         messages.push(format!("❌ {}", err));
                     }
@@ -112,7 +127,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
     if errors.is_empty() {
         if total > 0 {
             let last = &sql_files[total - 1].2;
-            messages.push(format!("✅ {} migrações SQLx em migrations/ íntegras e sequenciais (topo: {})", total, last));
+            messages.push(format!(
+                "✅ {} migrações SQLx em migrations/ íntegras e sequenciais (topo: {})",
+                total, last
+            ));
         } else {
             messages.push("ℹ️ Nenhuma migração encontrada em migrations/".to_string());
         }

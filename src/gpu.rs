@@ -22,7 +22,9 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
     if let Some(ref hw) = hardware_info {
         messages.push(format!("✅ GPU detectada: {}", hw));
     } else {
-        messages.push("ℹ️ GPU física não detectada ou ambiente em container sem passthrough".to_string());
+        messages.push(
+            "ℹ️ GPU física não detectada ou ambiente em container sem passthrough".to_string(),
+        );
     }
 
     // 2. Integridade do modelo GGML Q8_0 do stenio-server
@@ -31,7 +33,10 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
         if let Ok(meta) = fs::metadata(&whisper_model) {
             if meta.len() > 800_000_000 {
                 let mb = meta.len() / (1024 * 1024);
-                messages.push(format!("✅ Modelo Whisper GGML Q8_0 íntegro no NVMe ({} MB)", mb));
+                messages.push(format!(
+                    "✅ Modelo Whisper GGML Q8_0 íntegro no NVMe ({} MB)",
+                    mb
+                ));
                 true
             } else {
                 let err = "❌ Modelo Whisper GGML Q8_0 corrompido ou incompleto".to_string();
@@ -54,11 +59,19 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
 
     // 3. Garantia de Ausência de Bloatware Legado (SAM2, PaddleX, CT2)
     let mut bloatware_free = true;
-    for dead_model in &["sam2", "paddlex", "gemma-3-1b-it-ct2", "whisper-large-v3-turbo-ct2"] {
+    for dead_model in &[
+        "sam2",
+        "paddlex",
+        "gemma-3-1b-it-ct2",
+        "whisper-large-v3-turbo-ct2",
+    ] {
         let p = cache_dir.join(dead_model);
         if p.exists() {
             bloatware_free = false;
-            let err = format!("❌ Regressão de bloatware: modelo legado '{}' detectado em disco!", dead_model);
+            let err = format!(
+                "❌ Regressão de bloatware: modelo legado '{}' detectado em disco!",
+                dead_model
+            );
             messages.push(err.clone());
             errors.push(err);
         }
@@ -74,9 +87,15 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
     let daemon_online = check_daemon_health(&server_url);
     let port_str = server_url.rsplit(':').next().unwrap_or("9090");
     if daemon_online {
-        messages.push(format!("✅ Servidor Rust stenio-server ativo e respondendo na porta {}", port_str));
+        messages.push(format!(
+            "✅ Servidor Rust stenio-server ativo e respondendo na porta {}",
+            port_str
+        ));
     } else {
-        messages.push(format!("ℹ️ Servidor Rust stenio-server em repouso (offline no momento em {})", server_url));
+        messages.push(format!(
+            "ℹ️ Servidor Rust stenio-server em repouso (offline no momento em {})",
+            server_url
+        ));
     }
 
     GpuAuditResult {
@@ -91,7 +110,10 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
 
 fn query_host_gpu() -> Option<String> {
     let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,driver_version,memory.total,memory.free", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,driver_version,memory.total,memory.free",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -104,7 +126,10 @@ fn query_host_gpu() -> Option<String> {
             let driver = parts[1];
             let total_mb = parts[2];
             let free_mb = parts[3];
-            return Some(format!("{} (Driver {}) | VRAM: {} MiB livres / {} MiB total", name, driver, free_mb, total_mb));
+            return Some(format!(
+                "{} (Driver {}) | VRAM: {} MiB livres / {} MiB total",
+                name, driver, free_mb, total_mb
+            ));
         }
         return Some(first_line.to_string());
     }
@@ -117,7 +142,11 @@ fn check_daemon_health(url: &str) -> bool {
     let output = Command::new("xh") // stenio-ignore: ARCH-RUST-CMD-LEGACY
         .args(["--timeout=1", "--quiet", &health_url])
         .output()
-        .or_else(|_| Command::new("curl").args(["-s", "-m", "1", &health_url]).output()); // stenio-ignore: ARCH-RUST-CMD-LEGACY
+        .or_else(|_| {
+            Command::new("curl")
+                .args(["-s", "-m", "1", &health_url])
+                .output()
+        }); // stenio-ignore: ARCH-RUST-CMD-LEGACY
     if let Ok(out) = output {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);

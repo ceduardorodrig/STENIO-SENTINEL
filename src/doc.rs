@@ -47,8 +47,18 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     }
 
     let valid_hosts = [
-        "psicopompo", "kavure", "kuaray", "ybytu", "ybyra",
-        "swarm", "docker-swarm", "cloud", "distribuída", "distribuido", "malha", "host",
+        "psicopompo",
+        "kavure",
+        "kuaray",
+        "ybytu",
+        "ybyra",
+        "swarm",
+        "docker-swarm",
+        "cloud",
+        "distribuída",
+        "distribuido",
+        "malha",
+        "host",
     ];
 
     if services_dir.is_dir() {
@@ -56,7 +66,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         collect_md_files(&services_dir, &mut service_files);
 
         for service_path in service_files {
-            let file_name = service_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let file_name = service_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
             if file_name == "README.md" || file_name == "health-endpoints.md" {
                 continue;
             }
@@ -71,10 +84,11 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
 
                 // Regra 1.1: Documentação de serviço deve referenciar o servidor/host onde opera
                 let is_subdoc = service_path.parent().map_or(false, |p| p != services_dir);
-                let has_server_field = is_subdoc || content.lines().any(|l| {
-                    let tl = l.trim().to_lowercase();
-                    (tl.contains("servidor") || tl.contains("host")) && tl.contains(':')
-                });
+                let has_server_field = is_subdoc
+                    || content.lines().any(|l| {
+                        let tl = l.trim().to_lowercase();
+                        (tl.contains("servidor") || tl.contains("host")) && tl.contains(':')
+                    });
 
                 if !has_server_field {
                     violations.push(Violation {
@@ -120,7 +134,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("");
-                if !service_stem.is_empty() && !catalog_corpus.contains(service_stem) && !catalog_corpus.contains(file_name) {
+                if !service_stem.is_empty()
+                    && !catalog_corpus.contains(service_stem)
+                    && !catalog_corpus.contains(file_name)
+                {
                     violations.push(Violation {
                         rule_id: "DOC-SERVICE-UNINDEXED".to_string(),
                         rule_name: "Documentação de Serviço Não Indexada (Órfã)".to_string(),
@@ -143,14 +160,19 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 let path = entry.path();
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
                     total_docs += 1;
-                    let path_display = path.strip_prefix(repo_root).unwrap_or(&path).to_string_lossy().to_string();
+                    let path_display = path
+                        .strip_prefix(repo_root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
                     if let Ok(content) = fs::read_to_string(&path) {
                         for (idx, line) in content.lines().enumerate() {
                             if line.contains("services/") && line.contains("](") {
                                 if let Some(start) = line.find("](") {
                                     let sub = &line[start + 2..];
                                     if let Some(end) = sub.find(')') {
-                                        let link = sub[..end].split('#').next().unwrap_or("").trim();
+                                        let link =
+                                            sub[..end].split('#').next().unwrap_or("").trim();
                                         if link.ends_with(".md") && !link.starts_with("http") {
                                             let target_path = if link.starts_with('/') {
                                                 repo_root.join(&link[1..])
@@ -208,9 +230,21 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     if !has_archive || !has_sha256 || !has_manifest {
                         let missing = format!(
                             "{}{}{}",
-                            if !has_archive { "[tarball ausente] " } else { "" },
-                            if !has_sha256 { "[.sha256 ausente] " } else { "" },
-                            if !has_manifest { "[MANIFEST.md ausente] " } else { "" }
+                            if !has_archive {
+                                "[tarball ausente] "
+                            } else {
+                                ""
+                            },
+                            if !has_sha256 {
+                                "[.sha256 ausente] "
+                            } else {
+                                ""
+                            },
+                            if !has_manifest {
+                                "[MANIFEST.md ausente] "
+                            } else {
+                                ""
+                            }
                         );
                         violations.push(Violation {
                             rule_id: "DOC-COLD-STORAGE-INCOMPLETE".to_string(),
@@ -231,7 +265,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     // ── 4. Auditoria de Software, ADRs e Links Canônicos em docs/ ────────────
     let docs_dirs = [
         repo_root.join("docs"),
-        repo_root.join("sumaenimahub").join("SUMAENIMA-HUB").join("docs"),
+        repo_root
+            .join("sumaenimahub")
+            .join("SUMAENIMA-HUB")
+            .join("docs"),
     ];
 
     for docs_dir in &docs_dirs {
@@ -244,7 +281,11 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
 
         for doc_path in doc_files {
             total_docs += 1;
-            let path_display = doc_path.strip_prefix(repo_root).unwrap_or(&doc_path).to_string_lossy().to_string();
+            let path_display = doc_path
+                .strip_prefix(repo_root)
+                .unwrap_or(&doc_path)
+                .to_string_lossy()
+                .to_string();
 
             if let Ok(content) = fs::read_to_string(&doc_path) {
                 // Checar ADRs
@@ -269,12 +310,20 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
 
                 // Checar links quebrados
                 for (line_idx, line) in content.lines().enumerate() {
-                    if line.contains("](") && !line.contains("http://") && !line.contains("https://") && !line.contains("mailto:") {
+                    if line.contains("](")
+                        && !line.contains("http://")
+                        && !line.contains("https://")
+                        && !line.contains("mailto:")
+                    {
                         let mut start_idx = 0;
                         while let Some(open) = line[start_idx..].find("](") {
                             let actual_open = start_idx + open + 2;
                             if let Some(close) = line[actual_open..].find(')') {
-                                let link_target = line[actual_open..actual_open + close].split('#').next().unwrap_or("").trim();
+                                let link_target = line[actual_open..actual_open + close]
+                                    .split('#')
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim();
                                 if !link_target.is_empty() && link_target.ends_with(".md") {
                                     let target_path = if link_target.starts_with('/') {
                                         repo_root.join(&link_target[1..])
@@ -282,7 +331,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                                         doc_path.parent().unwrap_or(repo_root).join(link_target)
                                     };
                                     if !target_path.exists() {
-                                        let err_msg = format!("{}: link para '{}' inexistente", path_display, link_target);
+                                        let err_msg = format!(
+                                            "{}: link para '{}' inexistente",
+                                            path_display, link_target
+                                        );
                                         broken_links.push(err_msg.clone());
                                         violations.push(Violation {
                                             rule_id: "DOC-BROKEN-LINK".to_string(),
@@ -353,4 +405,3 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
         }
     }
 }
-

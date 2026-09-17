@@ -75,7 +75,17 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
         // Validação 1: Frontmatter YAML nas notas do vault Obsidian
         if !content.starts_with("---") {
             let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if !["README.md", "CONTRIBUTORS.md", "LICENSE.md", "CONTRIBUTING.md", "CLAUDE.md", "OSS-ACKNOWLEDGMENTS.md", "AGENTS.md"].contains(&file_name) {
+            if ![
+                "README.md",
+                "CONTRIBUTORS.md",
+                "LICENSE.md",
+                "CONTRIBUTING.md",
+                "CLAUDE.md",
+                "OSS-ACKNOWLEDGMENTS.md",
+                "AGENTS.md",
+            ]
+            .contains(&file_name)
+            {
                 violations.push(Violation {
                     rule_id: "VAULT-FRONTMATTER".to_string(),
                     rule_name: "Frontmatter YAML Obrigatório".to_string(),
@@ -117,13 +127,25 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
 
         // Validação 3: Auditoria de Links Markdown Relativos Quebrados
         for (line_idx, line) in content.lines().enumerate() {
-            if line.contains("](") && !line.contains("http://") && !line.contains("https://") && !line.contains("mailto:") {
+            if line.contains("](")
+                && !line.contains("http://")
+                && !line.contains("https://")
+                && !line.contains("mailto:")
+            {
                 let mut start_search = 0;
                 while let Some(open) = line[start_search..].find("](") {
                     let actual_open = start_search + open + 2;
                     if let Some(close) = line[actual_open..].find(')') {
-                        let link_target = &line[actual_open..actual_open + close].split('#').next().unwrap_or("").trim();
-                        if !link_target.is_empty() && (link_target.ends_with(".md") || link_target.ends_with(".png") || link_target.ends_with(".jpg")) {
+                        let link_target = &line[actual_open..actual_open + close]
+                            .split('#')
+                            .next()
+                            .unwrap_or("")
+                            .trim();
+                        if !link_target.is_empty()
+                            && (link_target.ends_with(".md")
+                                || link_target.ends_with(".png")
+                                || link_target.ends_with(".jpg"))
+                        {
                             let target_path = if link_target.starts_with('/') {
                                 vault_root.join(&link_target[1..])
                             } else {
@@ -165,7 +187,9 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                     let is_valid_project_name = dir_name.len() >= 8
                         && dir_name[0..6].chars().all(|c| c.is_ascii_digit())
                         && dir_name.chars().nth(6) == Some('-')
-                        && dir_name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                        && dir_name
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
 
                     if !is_valid_project_name && !dir_name.starts_with('.') {
                         violations.push(Violation {
@@ -222,9 +246,15 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
     }
 
     if violations.is_empty() {
-        messages.push(format!("✅ {} notas do vault Obsidian auditadas e íntegras.", scanned_count));
+        messages.push(format!(
+            "✅ {} notas do vault Obsidian auditadas e íntegras.",
+            scanned_count
+        ));
     } else {
-        messages.push(format!("ℹ️ {} desvio(s) de taxonomia, metadados ou links detectados no vault.", violations.len()));
+        messages.push(format!(
+            "ℹ️ {} desvio(s) de taxonomia, metadados ou links detectados no vault.",
+            violations.len()
+        ));
     }
 
     VaultReport {

@@ -1,0 +1,50 @@
+name: CI — StenioSentinel
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Build, Audit & Synthetic Self-Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting (cargo fmt)
+        run: cargo fmt --check
+
+      - name: Lint Codebase (cargo clippy)
+        run: cargo clippy --all-targets
+
+      - name: Build Sentinel Release
+        run: cargo build --release
+
+      - name: Execute Synthetic Self-Tests (17/17)
+        run: ./target/release/stenio --self-test
+
+      - name: Execute Cryptographic Guardian Anti-Tampering
+        run: ./target/release/stenio --guardian
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stenio-linux-x86_64
+          path: target/release/stenio
+          if-no-files-found: error

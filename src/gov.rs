@@ -12,7 +12,10 @@ pub struct GovAuditResult {
 pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     let mut messages = Vec::new();
     let mut errors = Vec::new();
-    let agents_md_path = if repo_root.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
+    let agents_md_path = if repo_root
+        .join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
+        .is_file()
+    {
         repo_root.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
     } else {
         repo_root.join("AGENTS.md")
@@ -50,15 +53,21 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     // Se for o AGENTS.md universal do Vault/Homelab
     if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
         let has_conventions = content.contains("agent-conventions.md");
-        let has_rust_tools = content.contains("Ferramentas Rust") || content.contains("Preferências de Terminal");
+        let has_rust_tools =
+            content.contains("Ferramentas Rust") || content.contains("Preferências de Terminal");
         let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
 
         if has_conventions && has_rust_tools && has_homelab_or_mei {
-            messages.push("✅ AGENTS.md universal íntegro e alinhado ao padrão de governança".to_string());
-            messages.push("✅ Regras de ferramentas Rust e privilégios de sistema preservadas".to_string());
+            messages.push(
+                "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança".to_string(),
+            );
+            messages.push(
+                "✅ Regras de ferramentas Rust e privilégios de sistema preservadas".to_string(),
+            );
             laws_count = 14;
         } else {
-            let err = "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
+            let err =
+                "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
             messages.push(err.clone());
             errors.push(err);
         }
@@ -125,7 +134,8 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     total_skills += 1;
                     let skill_md = path.join("SKILL.md");
                     if !skill_md.is_file() {
-                        skill_errors.push(format!("❌ Skill '{}': SKILL.md não encontrado", dir_name));
+                        skill_errors
+                            .push(format!("❌ Skill '{}': SKILL.md não encontrado", dir_name));
                         continue;
                     }
 

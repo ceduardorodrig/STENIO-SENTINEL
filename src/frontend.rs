@@ -3,18 +3,16 @@ use crate::engine::Violation;
 use crate::rule::Severity;
 use std::path::Path;
 
-pub fn audit_frontend_file(
-    path: &Path,
-    content: &str,
-    whitelist: &Whitelist,
-) -> Vec<Violation> {
+pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) -> Vec<Violation> {
     let mut violations = Vec::new();
     let path_str = path.to_string_lossy().to_string();
     let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
     // ── 1. FRONT-AUDIO: AudioWorklet Firefox Compatibility ──────────────
     if file_name == "worklet-processor.js" {
-        if content.contains("globalThis.sampleRate") || content.contains("typeof sampleRate !== 'undefined'") {
+        if content.contains("globalThis.sampleRate")
+            || content.contains("typeof sampleRate !== 'undefined'")
+        {
             if !whitelist.is_ignored(&path_str, "FRONT-AUDIO", "globalThis.sampleRate") {
                 violations.push(Violation {
                     rule_id: "FRONT-AUDIO".to_string(),
@@ -78,7 +76,9 @@ pub fn audit_frontend_file(
     }
 
     // ── 3. FRONT-WAKELOCK: Liberação de WakeLock ─────────────────────────
-    if (path_str.ends_with(".tsx") || path_str.ends_with(".ts")) && content.contains("navigator.wakeLock.request(") {
+    if (path_str.ends_with(".tsx") || path_str.ends_with(".ts"))
+        && content.contains("navigator.wakeLock.request(")
+    {
         if !content.contains(".release()") && !content.contains("wakeLock.release") {
             if !whitelist.is_ignored(&path_str, "FRONT-WAKELOCK", "wakeLock") {
                 violations.push(Violation {

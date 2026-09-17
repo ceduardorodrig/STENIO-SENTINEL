@@ -26,58 +26,83 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
         binary_hash = format!("{:x}", hasher.finalize())[..16].to_string();
-        messages.push(format!("🔐 Executável Nativo Íntegro: {} (SHA-256: {})", exe_path.display(), binary_hash));
+        messages.push(format!(
+            "🔐 Executável Nativo Íntegro: {} (SHA-256: {})",
+            exe_path.display(),
+            binary_hash
+        ));
     }
 
     // 2. Auto-auditoria abrangente: cada módulo crítico tem strings obrigatórias.
     //    Remoção de qualquer string dispara alerta imediato.
     let critical_modules: &[(&str, &[&str])] = &[
-        ("rule.rs", &[
-            "ARCH-NO-PYTHON",
-            "SEC-SUDO",
-            "SEC-SECRETS",
-            "ARCH-RUST-CMD-LEGACY",
-            "RUST-ASYNC-SLEEP",
-            r"(?m)\bsudo\s+",          // regex expandido — não pode ser revertido para lista curta
-        ]),
-        ("infra.rs", &[
-            "SEC-SOPS-UNENCRYPTED",
-            "SEC-PRIVATE-KEY-CLEARTEXT",
-            "SEC-PLAINTEXT-SECRET",
-            "SEC-PERM-LEAK",
-            "INFRA-BASH-STRICT",
-        ]),
-        ("vault.rs", &[
-            "PROJECT-AUTO-COLD-STORAGE",
-            "VAULT-TAG-TAXONOMY",
-            "VAULT-FRONTMATTER",
-            "PROJECT-NAMING-CONVENTION",
-            "projects/cold-storage",  // cold-storage deve estar isento da regra de nomenclatura
-        ]),
-        ("homelab.rs", &[
-            "HOMELAB-NFS-SOFT",
-            "HOMELAB-FRONTMATTER",
-            "HOMELAB-TAG-ROOT",
-        ]),
-        ("doc.rs", &[
-            "DOC-SERVICE-MISSING-HOST",
-            "DOC-COLD-STORAGE-INCOMPLETE",
-            "DOC-SERVICE-UNINDEXED",
-            "DOC-BROKEN-LINK",
-        ]),
-        ("baseline.rs", &[
-            "stenio-ignore",
-            "nosemgrep",
-            "SEC-",                  // regras SEC-* nunca podem ser ignoráveis por nosemgrep
-            "starts_with(\"SEC-\")", // a guarda explícita de segurança deve existir
-        ]),
-        ("main.rs", &[
-            "run_self_tests",
-            "audit_stenio_integrity",
-            "audit_governance",
-            "audit_homelab",
-            "audit_infrastructure",
-        ]),
+        (
+            "rule.rs",
+            &[
+                "ARCH-NO-PYTHON",
+                "SEC-SUDO",
+                "SEC-SECRETS",
+                "ARCH-RUST-CMD-LEGACY",
+                "RUST-ASYNC-SLEEP",
+                r"(?m)\bsudo\s+", // regex expandido — não pode ser revertido para lista curta
+            ],
+        ),
+        (
+            "infra.rs",
+            &[
+                "SEC-SOPS-UNENCRYPTED",
+                "SEC-PRIVATE-KEY-CLEARTEXT",
+                "SEC-PLAINTEXT-SECRET",
+                "SEC-PERM-LEAK",
+                "INFRA-BASH-STRICT",
+            ],
+        ),
+        (
+            "vault.rs",
+            &[
+                "PROJECT-AUTO-COLD-STORAGE",
+                "VAULT-TAG-TAXONOMY",
+                "VAULT-FRONTMATTER",
+                "PROJECT-NAMING-CONVENTION",
+                "projects/cold-storage", // cold-storage deve estar isento da regra de nomenclatura
+            ],
+        ),
+        (
+            "homelab.rs",
+            &[
+                "HOMELAB-NFS-SOFT",
+                "HOMELAB-FRONTMATTER",
+                "HOMELAB-TAG-ROOT",
+            ],
+        ),
+        (
+            "doc.rs",
+            &[
+                "DOC-SERVICE-MISSING-HOST",
+                "DOC-COLD-STORAGE-INCOMPLETE",
+                "DOC-SERVICE-UNINDEXED",
+                "DOC-BROKEN-LINK",
+            ],
+        ),
+        (
+            "baseline.rs",
+            &[
+                "stenio-ignore",
+                "nosemgrep",
+                "SEC-", // regras SEC-* nunca podem ser ignoráveis por nosemgrep
+                "starts_with(\"SEC-\")", // a guarda explícita de segurança deve existir
+            ],
+        ),
+        (
+            "main.rs",
+            &[
+                "run_self_tests",
+                "audit_stenio_integrity",
+                "audit_governance",
+                "audit_homelab",
+                "audit_infrastructure",
+            ],
+        ),
     ];
 
     for (module, required_strings) in critical_modules {
@@ -133,4 +158,3 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         tamper_alerts,
     }
 }
-

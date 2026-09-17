@@ -107,16 +107,28 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
                             file_path: path_str.clone(),
                             line_number: 2,
                             snippet: "tags: [...]".to_string(),
-                            message: "Toda nota em mnemocine/ deve conter a tag 'homelab' no frontmatter".to_string(),
-                            suggestion: Some("Inclua 'homelab' na lista de tags do frontmatter YAML.".to_string()),
+                            message:
+                                "Toda nota em mnemocine/ deve conter a tag 'homelab' no frontmatter"
+                                    .to_string(),
+                            suggestion: Some(
+                                "Inclua 'homelab' na lista de tags do frontmatter YAML."
+                                    .to_string(),
+                            ),
                         });
                     }
                 }
             }
 
             // Regra 2: Nomenclatura de arquivos (lowercase com hífen, sem maiúsculas)
-            let allowed_specials = ["README.md", "_tags.md", "AGENTS.md", "SECURITY.md", "CONTRIBUTORS.md"];
-            if !allowed_specials.contains(&file_name) && file_name.chars().any(|c| c.is_uppercase()) {
+            let allowed_specials = [
+                "README.md",
+                "_tags.md",
+                "AGENTS.md",
+                "SECURITY.md",
+                "CONTRIBUTORS.md",
+            ];
+            if !allowed_specials.contains(&file_name) && file_name.chars().any(|c| c.is_uppercase())
+            {
                 violations.push(Violation {
                     rule_id: "HOMELAB-NAMING".to_string(),
                     rule_name: "Nomenclatura Lowercase-Hifenizada".to_string(),
@@ -124,7 +136,10 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
                     file_path: path_str.clone(),
                     line_number: 1,
                     snippet: file_name.to_string(),
-                    message: format!("Nome de arquivo '{}' contém letras maiúsculas. Use lowercase com hífens.", file_name),
+                    message: format!(
+                        "Nome de arquivo '{}' contém letras maiúsculas. Use lowercase com hífens.",
+                        file_name
+                    ),
                     suggestion: Some(format!("Renomeie para '{}'.", file_name.to_lowercase())),
                 });
             }
@@ -134,7 +149,9 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
         if ext == "sh" || ext == "md" || file_name == "fstab" {
             if let Ok(content) = fs::read_to_string(&path) {
                 for (line_idx, line) in content.lines().enumerate() {
-                    if (line.contains("nfs") || line.contains("nfs4")) && (line.contains(",hard") || line.contains("hard,")) {
+                    if (line.contains("nfs") || line.contains("nfs4"))
+                        && (line.contains(",hard") || line.contains("hard,"))
+                    {
                         violations.push(Violation {
                             rule_id: "HOMELAB-NFS-SOFT".to_string(),
                             rule_name: "Proibição de Montagem NFS Hard".to_string(),
@@ -152,11 +169,18 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
     }
 
     if violations.is_empty() {
-        messages.push(format!("✅ {} notas e arquivos de infraestrutura em mnemocine/ 100% em conformidade.", scanned_count));
+        messages.push(format!(
+            "✅ {} notas e arquivos de infraestrutura em mnemocine/ 100% em conformidade.",
+            scanned_count
+        ));
         messages.push("✅ Taxonomia de tags e frontmatter YAML íntegros.".to_string());
-        messages.push("✅ Nenhuma montagem NFS hard detectada (resiliência Tailscale OK).".to_string());
+        messages
+            .push("✅ Nenhuma montagem NFS hard detectada (resiliência Tailscale OK).".to_string());
     } else {
-        messages.push(format!("⚠️ {} arquivo(s) com desvios em mnemocine/.", violations.len()));
+        messages.push(format!(
+            "⚠️ {} arquivo(s) com desvios em mnemocine/.",
+            violations.len()
+        ));
     }
 
     HomelabReport {

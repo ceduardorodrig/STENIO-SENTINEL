@@ -38,10 +38,19 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
 
     let parity_pairs = [
         ("01-tech-pm-br.md", "01-tech-pm-en.md"),
-        ("01-tech-dados-negocios-br.md", "01-tech-business-data-en.md"),
+        (
+            "01-tech-dados-negocios-br.md",
+            "01-tech-business-data-en.md",
+        ),
         ("01-tech-produto-dados-br.md", "01-tech-product-data-en.md"),
-        ("02-socioambiental-nichado-br.md", "02-socioenvironmental-niche-en.md"),
-        ("02-socioambiental-tech-br.md", "02-socioenvironmental-tech-en.md"),
+        (
+            "02-socioambiental-nichado-br.md",
+            "02-socioenvironmental-niche-en.md",
+        ),
+        (
+            "02-socioambiental-tech-br.md",
+            "02-socioenvironmental-tech-en.md",
+        ),
         ("03-sumaenima-br.md", "03-sumaenima-en.md"),
     ];
 
@@ -91,8 +100,14 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
                 file_path: format!("en-us/{}", en_file),
                 line_number: 1,
                 snippet: "".to_string(),
-                message: format!("Versão em inglês '{}' ausente para o correspondente em português '{}'.", en_file, pt_file),
-                suggestion: Some(format!("Crie o arquivo 'en-us/{}' traduzindo o conteúdo de 'pt-br/{}'.", en_file, pt_file)),
+                message: format!(
+                    "Versão em inglês '{}' ausente para o correspondente em português '{}'.",
+                    en_file, pt_file
+                ),
+                suggestion: Some(format!(
+                    "Crie o arquivo 'en-us/{}' traduzindo o conteúdo de 'pt-br/{}'.",
+                    en_file, pt_file
+                )),
             });
         } else if !has_pt && has_en {
             violations.push(Violation {
@@ -102,8 +117,14 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
                 file_path: format!("pt-br/{}", pt_file),
                 line_number: 1,
                 snippet: "".to_string(),
-                message: format!("Versão em português '{}' ausente para o correspondente em inglês '{}'.", pt_file, en_file),
-                suggestion: Some(format!("Crie o arquivo 'pt-br/{}' traduzindo o conteúdo de 'en-us/{}'.", pt_file, en_file)),
+                message: format!(
+                    "Versão em português '{}' ausente para o correspondente em inglês '{}'.",
+                    pt_file, en_file
+                ),
+                suggestion: Some(format!(
+                    "Crie o arquivo 'pt-br/{}' traduzindo o conteúdo de 'en-us/{}'.",
+                    pt_file, en_file
+                )),
             });
         }
     }
@@ -113,7 +134,8 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
     if readme_path.is_file() {
         scanned_count += 1;
         if let Ok(content) = fs::read_to_string(&readme_path) {
-            let has_thread_pt = content.contains("O Fio da Meada") || content.contains("Fio da Meada");
+            let has_thread_pt =
+                content.contains("O Fio da Meada") || content.contains("Fio da Meada");
             let has_thread_en = content.contains("The Thread");
 
             if !has_thread_pt || !has_thread_en {
@@ -132,10 +154,17 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
     }
 
     if violations.is_empty() {
-        messages.push(format!("✅ {} currículos bilíngues auditados com 100% de paridade PT↔EN.", scanned_count));
-        messages.push("✅ Narrativa 'O Fio da Meada' / 'The Thread' íntegra no README.".to_string());
+        messages.push(format!(
+            "✅ {} currículos bilíngues auditados com 100% de paridade PT↔EN.",
+            scanned_count
+        ));
+        messages
+            .push("✅ Narrativa 'O Fio da Meada' / 'The Thread' íntegra no README.".to_string());
     } else {
-        messages.push(format!("ℹ️ {} desvio(s) encontrados na base de currículos.", violations.len()));
+        messages.push(format!(
+            "ℹ️ {} desvio(s) encontrados na base de currículos.",
+            violations.len()
+        ));
     }
 
     CvReport {

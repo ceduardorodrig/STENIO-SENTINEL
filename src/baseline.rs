@@ -63,7 +63,6 @@ impl Whitelist {
             return true; // fallback: nosemgrep sem after → ignora (compatibilidade)
         }
 
-
         // 3. Checa whitelist de arquivo (.steniocheck-whitelist-registry.json)
         for pattern in &self.ignored_patterns {
             if file_path.contains(pattern) {

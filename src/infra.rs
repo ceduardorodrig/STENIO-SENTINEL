@@ -40,7 +40,10 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         // ── 1. Guarda Profunda de Segredos SOPS / Age (SEC-SOPS-UNENCRYPTED) ────
         // Cobre 100% dos arquivos de texto e configuração de infraestrutura
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        let is_text_or_config = matches!(ext, "yml" | "yaml" | "env" | "json" | "sh" | "conf" | "service" | "md");
+        let is_text_or_config = matches!(
+            ext,
+            "yml" | "yaml" | "env" | "json" | "sh" | "conf" | "service" | "md"
+        );
 
         if is_text_or_config {
             if let Ok(content) = fs::read_to_string(&path) {
@@ -62,7 +65,10 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                 }
 
                 // Detecta chaves privadas desprotegidas em texto claro
-                if content.contains("-----BEGIN") && content.contains("PRIVATE KEY-----") && !is_age_armored {
+                if content.contains("-----BEGIN")
+                    && content.contains("PRIVATE KEY-----")
+                    && !is_age_armored
+                {
                     violations.push(Violation {
                         rule_id: "SEC-PRIVATE-KEY-CLEARTEXT".to_string(),
                         rule_name: "Chave Privada em Texto Claro Detectada".to_string(),
@@ -76,7 +82,10 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                 }
 
                 // Detecta tokens e senhas literais em texto plano (fora de templates/exemplos)
-                if !path_str.contains(".template") && !path_str.contains(".example") && !path_str.contains("templates/") {
+                if !path_str.contains(".template")
+                    && !path_str.contains(".example")
+                    && !path_str.contains("templates/")
+                {
                     for (line_idx, line) in content.lines().enumerate() {
                         let trimmed = line.trim();
                         // Ignora comentários e linhas vazias
@@ -84,7 +93,8 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                             continue;
                         }
 
-                        let is_leak = (trimmed.starts_with("ghp_") || trimmed.starts_with("github_pat_"))
+                        let is_leak = (trimmed.starts_with("ghp_")
+                            || trimmed.starts_with("github_pat_"))
                             || ((trimmed.starts_with("PASSWORD=")
                                 || trimmed.starts_with("API_KEY=")
                                 || trimmed.starts_with("SECRET="))
@@ -134,7 +144,10 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
 
                             // Checagem de política de restart
                             let has_restart = svc_val.get("restart").is_some()
-                                || svc_val.get("deploy").and_then(|d| d.get("restart_policy")).is_some();
+                                || svc_val
+                                    .get("deploy")
+                                    .and_then(|d| d.get("restart_policy"))
+                                    .is_some();
                             if !has_restart {
                                 violations.push(Violation {
                                     rule_id: "INFRA-COMPOSE-RESTART".to_string(),
@@ -159,7 +172,9 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                         line_number: 1,
                         snippet: e.to_string(),
                         message: format!("Sintaxe inválida no arquivo compose: {}", e),
-                        suggestion: Some("Corrija a formatação YAML do arquivo compose.yml.".to_string()),
+                        suggestion: Some(
+                            "Corrija a formatação YAML do arquivo compose.yml.".to_string(),
+                        ),
                     });
                 }
             }
@@ -170,7 +185,8 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
             scanned_count += 1;
             if let Ok(content) = fs::read_to_string(&path) {
                 let has_unit = content.contains("[Unit]");
-                let has_service_or_timer = content.contains("[Service]") || content.contains("[Timer]");
+                let has_service_or_timer =
+                    content.contains("[Service]") || content.contains("[Timer]");
                 let has_install = content.contains("[Install]");
 
                 if !has_unit || !has_service_or_timer || !has_install {
@@ -226,7 +242,11 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if file_name == "secrets.env" || file_name == "keys.txt" || file_name.contains("id_ed25519") || file_name.contains("id_rsa") {
+            if file_name == "secrets.env"
+                || file_name == "keys.txt"
+                || file_name.contains("id_ed25519")
+                || file_name.contains("id_rsa")
+            {
                 if let Ok(meta) = fs::metadata(&path) {
                     let mode = meta.permissions().mode() & 0o777;
                     if mode > 0o600 {
@@ -247,9 +267,15 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
     }
 
     if violations.is_empty() {
-        messages.push(format!("✅ {} arquivos de infraestrutura (Compose/Systemd/SOPS) auditados e conformes.", scanned_count));
+        messages.push(format!(
+            "✅ {} arquivos de infraestrutura (Compose/Systemd/SOPS) auditados e conformes.",
+            scanned_count
+        ));
     } else {
-        messages.push(format!("ℹ️ {} desvio(s) de infraestrutura detectados.", violations.len()));
+        messages.push(format!(
+            "ℹ️ {} desvio(s) de infraestrutura detectados.",
+            violations.len()
+        ));
     }
 
     InfraReport {

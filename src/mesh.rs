@@ -64,22 +64,66 @@ struct TailscaleStatus {
 fn resolve_node_role(name: &str, os: &str) -> (String, bool, String, String) {
     let lower = name.to_lowercase();
     if lower.contains("psicopompo") {
-        ("Dev + GPU Workers (RTX 5050) / NAS (NFSv4)".to_string(), true, "CachyOS (Arch)".to_string(), "fish".to_string())
+        (
+            "Dev + GPU Workers (RTX 5050) / NAS (NFSv4)".to_string(),
+            true,
+            "CachyOS (Arch)".to_string(),
+            "fish".to_string(),
+        )
     } else if lower.contains("ybyra") {
-        ("Cloud Borda Primária / Nginx Reverse Proxy / SPA".to_string(), true, "Ubuntu 24.04".to_string(), "bash".to_string())
+        (
+            "Cloud Borda Primária / Nginx Reverse Proxy / SPA".to_string(),
+            true,
+            "Ubuntu 24.04".to_string(),
+            "bash".to_string(),
+        )
     } else if lower.contains("kuaray") {
-        ("Multimídia / Home Assistant / Media Server".to_string(), true, "Linux Mint 22.3".to_string(), "bash".to_string())
+        (
+            "Multimídia / Home Assistant / Media Server".to_string(),
+            true,
+            "Linux Mint 22.3".to_string(),
+            "bash".to_string(),
+        )
     } else if lower.contains("ybytu") {
-        ("Cloud Exit Node / DNS Primário (AdGuard)".to_string(), true, "Ubuntu 24.04".to_string(), "bash".to_string())
+        (
+            "Cloud Exit Node / DNS Primário (AdGuard)".to_string(),
+            true,
+            "Ubuntu 24.04".to_string(),
+            "bash".to_string(),
+        )
     } else if lower.contains("kavure") {
-        ("Serviços Dedicados / Zomboid / Sumænimá Docker".to_string(), true, "Ubuntu 24.04".to_string(), "bash".to_string())
+        (
+            "Serviços Dedicados / Zomboid / Sumænimá Docker".to_string(),
+            true,
+            "Ubuntu 24.04".to_string(),
+            "bash".to_string(),
+        )
     } else if lower.contains("miracena") {
-        ("Estação de Trabalho / Workspace".to_string(), false, "Linux".to_string(), "bash".to_string())
+        (
+            "Estação de Trabalho / Workspace".to_string(),
+            false,
+            "Linux".to_string(),
+            "bash".to_string(),
+        )
     } else if lower.contains("anansi") {
-        ("Dispositivo Móvel (Android)".to_string(), false, "Android".to_string(), "sh".to_string())
+        (
+            "Dispositivo Móvel (Android)".to_string(),
+            false,
+            "Android".to_string(),
+            "sh".to_string(),
+        )
     } else {
-        let detected_os = if os.is_empty() { "Linux".to_string() } else { os.to_string() };
-        ("Nó da Tailnet Mnemocine".to_string(), false, detected_os, "bash".to_string())
+        let detected_os = if os.is_empty() {
+            "Linux".to_string()
+        } else {
+            os.to_string()
+        };
+        (
+            "Nó da Tailnet Mnemocine".to_string(),
+            false,
+            detected_os,
+            "bash".to_string(),
+        )
     }
 }
 
@@ -97,7 +141,9 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
             if let Ok(status) = serde_json::from_slice::<TailscaleStatus>(&out.stdout) {
                 // 1. Adiciona o nó local (Self)
                 if let Some(self_node) = status.self_node {
-                    let name = self_node.host_name.unwrap_or_else(|| "localhost".to_string());
+                    let name = self_node
+                        .host_name
+                        .unwrap_or_else(|| "localhost".to_string());
                     let ip = self_node
                         .tailscale_ips
                         .and_then(|ips| ips.into_iter().find(|i| !i.contains(':')))
@@ -125,7 +171,10 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
                             Some(n) => n,
                             None => continue,
                         };
-                        let ip = match peer.tailscale_ips.and_then(|ips| ips.into_iter().find(|i| !i.contains(':'))) {
+                        let ip = match peer
+                            .tailscale_ips
+                            .and_then(|ips| ips.into_iter().find(|i| !i.contains(':')))
+                        {
                             Some(ip) => ip,
                             None => continue,
                         };
@@ -154,11 +203,46 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
     // Fallback de segurança se tailscale CLI não estiver no PATH
     if nodes.is_empty() {
         let fallbacks = [
-            ("psicopompo", "100.82.51.112", "Dev + GPU Workers (RTX 5050) / NAS (NFSv4)", true, "CachyOS", "fish"),
-            ("ybyra", "100.66.224.34", "Cloud Borda Primária / Nginx Reverse Proxy / SPA", true, "Ubuntu 24.04", "bash"),
-            ("kuaray", "100.94.209.99", "Multimídia / Home Assistant / Media Server", true, "Linux Mint 22.3", "bash"),
-            ("ybytu", "100.115.253.109", "Cloud Exit Node / DNS Primário (AdGuard)", true, "Ubuntu 24.04", "bash"),
-            ("kavure", "100.124.146.77", "Serviços Dedicados / Zomboid / Sumænimá Docker", true, "Ubuntu 24.04", "bash"),
+            (
+                "psicopompo",
+                "100.82.51.112",
+                "Dev + GPU Workers (RTX 5050) / NAS (NFSv4)",
+                true,
+                "CachyOS",
+                "fish",
+            ),
+            (
+                "ybyra",
+                "100.66.224.34",
+                "Cloud Borda Primária / Nginx Reverse Proxy / SPA",
+                true,
+                "Ubuntu 24.04",
+                "bash",
+            ),
+            (
+                "kuaray",
+                "100.94.209.99",
+                "Multimídia / Home Assistant / Media Server",
+                true,
+                "Linux Mint 22.3",
+                "bash",
+            ),
+            (
+                "ybytu",
+                "100.115.253.109",
+                "Cloud Exit Node / DNS Primário (AdGuard)",
+                true,
+                "Ubuntu 24.04",
+                "bash",
+            ),
+            (
+                "kavure",
+                "100.124.146.77",
+                "Serviços Dedicados / Zomboid / Sumænimá Docker",
+                true,
+                "Ubuntu 24.04",
+                "bash",
+            ),
         ];
         for (name, ip, role, is_server, os, shell) in fallbacks {
             nodes.push((
@@ -261,9 +345,9 @@ pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
 
     let mut handles = Vec::new();
     for (node, ts_online) in discovered {
-        handles.push(tokio::spawn(async move {
-            probe_node(node, ts_online).await
-        }));
+        handles.push(tokio::spawn(
+            async move { probe_node(node, ts_online).await },
+        ));
     }
 
     let mut results = Vec::new();
@@ -278,13 +362,25 @@ pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
 /// Imprime o relatório visual da malha Homelab no terminal
 pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
     println!(
         "{} {}",
-        "StenioSentinel — Topologia da Malha Tailscale (Mnemocine Homelab)".cyan().bold(),
+        "StenioSentinel — Topologia da Malha Tailscale (Mnemocine Homelab)"
+            .cyan()
+            .bold(),
         format!("[{:.2?}]", total_duration).yellow()
     );
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
 
     let mut online_count = 0;
     for res in results {
@@ -319,9 +415,13 @@ pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     println!();
     println!(
         "{}",
-        format!("✨ Malha Homelab: {} de {} nós ativos e conectados", online_count, results.len())
-            .green()
-            .bold()
+        format!(
+            "✨ Malha Homelab: {} de {} nós ativos e conectados",
+            online_count,
+            results.len()
+        )
+        .green()
+        .bold()
     );
     println!();
 }

@@ -7,40 +7,82 @@ use std::time::{Duration, Instant};
 
 pub fn run_system_health() -> Result<()> {
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
-    println!("{}", "StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)".cyan().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
 
     // 1. Armazenamento em Disco
-    println!("{}", "── 💾 Armazenamento em Disco ──────────────────────────────────────────".dimmed());
+    println!(
+        "{}",
+        "── 💾 Armazenamento em Disco ──────────────────────────────────────────".dimmed()
+    );
     check_disk_health("/", "Raiz do Sistema");
     check_disk_health("/mnt/NVME_PCI", "NVMe PCI (Workspace & Caches)");
     println!();
 
     // 2. Memória RAM & Swap
-    println!("{}", "── 🧠 Memória Física & Recursos do Host ───────────────────────────────".dimmed());
+    println!(
+        "{}",
+        "── 🧠 Memória Física & Recursos do Host ───────────────────────────────".dimmed()
+    );
     check_memory_health();
     println!();
 
     // 3. GPU & Aceleração Blackwell
-    println!("{}", "── ⚡ Aceleração Gráfica & VRAM ───────────────────────────────────────".dimmed());
+    println!(
+        "{}",
+        "── ⚡ Aceleração Gráfica & VRAM ───────────────────────────────────────".dimmed()
+    );
     check_gpu_health();
     println!();
 
     // 4. Serviços & Conectividade Local
-    println!("{}", "── 🔌 Serviços do Hub & Portas de Rede ────────────────────────────────".dimmed());
+    println!(
+        "{}",
+        "── 🔌 Serviços do Hub & Portas de Rede ────────────────────────────────".dimmed()
+    );
     check_tcp_service("PostgreSQL", "127.0.0.1", 5432, "Banco Relacional SQLx");
-    check_tcp_service("Valkey / Redis", "127.0.0.1", 6379, "Barramento de Eventos & Cache");
-    check_http_service("stenio-server", "http://127.0.0.1:9090", "Servidor Rust Axum + Whisper");
+    check_tcp_service(
+        "Valkey / Redis",
+        "127.0.0.1",
+        6379,
+        "Barramento de Eventos & Cache",
+    );
+    check_http_service(
+        "stenio-server",
+        "http://127.0.0.1:9090",
+        "Servidor Rust Axum + Whisper",
+    );
     println!();
 
     // 5. Cadeia Canônica de Backups do Homelab (/mnt/BACKUP)
-    println!("{}", "── 🛡️ Cadeia de Backups & Integridade do NAS (/mnt/BACKUP) ────────────".dimmed());
+    println!(
+        "{}",
+        "── 🛡️ Cadeia de Backups & Integridade do NAS (/mnt/BACKUP) ────────────".dimmed()
+    );
     check_backup_chain();
     println!();
 
     // 6. Malha Tailscale & Heterogeneidade de Sistemas Operacionais
-    println!("{}", "── 🌐 Malha Tailscale & Sistemas Operacionais (Mnemocine Homelab) ──────".dimmed());
+    println!(
+        "{}",
+        "── 🌐 Malha Tailscale & Sistemas Operacionais (Mnemocine Homelab) ──────".dimmed()
+    );
     if let Ok(rt) = tokio::runtime::Runtime::new() {
         let results = rt.block_on(crate::mesh::audit_tailscale_mesh());
         let mut online_count = 0;
@@ -56,14 +98,30 @@ pub fn run_system_health() -> Result<()> {
                 "OFFLINE".red().bold()
             };
             let os_shell = format!("{}/{}", res.node.os, res.node.shell);
-            println!("   {:<15} [{:<15}] - {:<20} | {:<16} | {}", res.node.name.bold(), res.node.ip.dimmed(), status_badge, os_shell.cyan(), res.node.role.dimmed());
+            println!(
+                "   {:<15} [{:<15}] - {:<20} | {:<16} | {}",
+                res.node.name.bold(),
+                res.node.ip.dimmed(),
+                status_badge,
+                os_shell.cyan(),
+                res.node.role.dimmed()
+            );
         }
         println!();
-        println!("   Status da Malha: {} de {} nós ativos e conectados.", online_count, results.len());
+        println!(
+            "   Status da Malha: {} de {} nós ativos e conectados.",
+            online_count,
+            results.len()
+        );
     }
     println!();
 
-    println!("{}", "✨ Diagnóstico concluído. Infraestrutura pronta para operação.".green().bold());
+    println!(
+        "{}",
+        "✨ Diagnóstico concluído. Infraestrutura pronta para operação."
+            .green()
+            .bold()
+    );
     println!();
 
     Ok(())
@@ -72,16 +130,29 @@ pub fn run_system_health() -> Result<()> {
 fn check_backup_chain() {
     let backup_dir = std::path::Path::new("/mnt/BACKUP");
     if !backup_dir.is_dir() {
-        println!("   {:<25} - {}", "NAS /mnt/BACKUP".bold(), "Não montado ou inacessível".red().bold());
+        println!(
+            "   {:<25} - {}",
+            "NAS /mnt/BACKUP".bold(),
+            "Não montado ou inacessível".red().bold()
+        );
         return;
     }
 
     let targets = [
         ("configs-homelab", "Espelho Git + Configs de Todos os Nós"),
-        ("zomboid-server-kavure", "Dados de Jogo / Saves / Configs (Kavure)"),
+        (
+            "zomboid-server-kavure",
+            "Dados de Jogo / Saves / Configs (Kavure)",
+        ),
         ("sumaenima-server-kavure", "Borg Backups / Sumænimá Hub DB"),
-        ("agentic-ai-server-psicopompo", "Cópia Noturna do Vault Obsidian"),
-        ("monitoring-server-kavure", "Métricas Prometheus & Dashboards Grafana"),
+        (
+            "agentic-ai-server-psicopompo",
+            "Cópia Noturna do Vault Obsidian",
+        ),
+        (
+            "monitoring-server-kavure",
+            "Métricas Prometheus & Dashboards Grafana",
+        ),
     ];
 
     for (folder, desc) in targets {
@@ -99,9 +170,19 @@ fn check_backup_chain() {
             } else {
                 "Presente".green().bold()
             };
-            println!("   {:<30} - {:<30} [{}]", folder.bold(), age_str, desc.dimmed());
+            println!(
+                "   {:<30} - {:<30} [{}]",
+                folder.bold(),
+                age_str,
+                desc.dimmed()
+            );
         } else {
-            println!("   {:<30} - {:<30} [{}]", folder.bold(), "AUSENTE".red().bold(), desc.dimmed());
+            println!(
+                "   {:<30} - {:<30} [{}]",
+                folder.bold(),
+                "AUSENTE".red().bold(),
+                desc.dimmed()
+            );
         }
     }
 }
@@ -135,13 +216,25 @@ fn check_disk_health(path: &str, label: &str) {
                         format!("SAUDÁVEL ({}% usado)", pct).green().bold()
                     };
 
-                    println!("   {:<30} [{}] - {:.1} GB livres de {:.1} GB ({})", label.bold(), path.cyan(), free_gb, total_gb, status);
+                    println!(
+                        "   {:<30} [{}] - {:.1} GB livres de {:.1} GB ({})",
+                        label.bold(),
+                        path.cyan(),
+                        free_gb,
+                        total_gb,
+                        status
+                    );
                     return;
                 }
             }
         }
     }
-    println!("   {:<30} [{}] - {}", label.bold(), path.cyan(), "Não foi possível inspecionar".yellow());
+    println!(
+        "   {:<30} [{}] - {}",
+        label.bold(),
+        path.cyan(),
+        "Não foi possível inspecionar".yellow()
+    );
 }
 
 fn check_memory_health() {
@@ -169,11 +262,21 @@ fn check_memory_health() {
                 format!("{:.1}% em uso", used_pct).green().bold()
             };
 
-            println!("   {:<30} {:.1} GB disponíveis de {:.1} GB ({})", "Memória RAM Total".bold(), avail_gb, total_gb, status);
+            println!(
+                "   {:<30} {:.1} GB disponíveis de {:.1} GB ({})",
+                "Memória RAM Total".bold(),
+                avail_gb,
+                total_gb,
+                status
+            );
             return;
         }
     }
-    println!("   {:<30} {}", "Memória RAM".bold(), "Não disponível".yellow());
+    println!(
+        "   {:<30} {}",
+        "Memória RAM".bold(),
+        "Não disponível".yellow()
+    );
 }
 
 fn parse_meminfo_line(line: &str) -> f64 {
@@ -185,7 +288,10 @@ fn parse_meminfo_line(line: &str) -> f64 {
 
 fn check_gpu_health() {
     let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,driver_version,memory.total,memory.free", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,driver_version,memory.total,memory.free",
+            "--format=csv,noheader,nounits",
+        ])
         .output();
 
     if let Ok(out) = output {
@@ -198,13 +304,24 @@ fn check_gpu_health() {
                     let driver = parts[1];
                     let total = parts[2];
                     let free = parts[3];
-                    println!("   {:<30} {} (Driver {}) | VRAM: {} MiB livres / {} MiB total", "NVIDIA GPU".bold(), name.cyan().bold(), driver, free.green().bold(), total);
+                    println!(
+                        "   {:<30} {} (Driver {}) | VRAM: {} MiB livres / {} MiB total",
+                        "NVIDIA GPU".bold(),
+                        name.cyan().bold(),
+                        driver,
+                        free.green().bold(),
+                        total
+                    );
                     return;
                 }
             }
         }
     }
-    println!("   {:<30} {}", "GPU Física".bold(), "Não detectada ou sem driver NVIDIA ativo".yellow());
+    println!(
+        "   {:<30} {}",
+        "GPU Física".bold(),
+        "Não detectada ou sem driver NVIDIA ativo".yellow()
+    );
 }
 
 fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
@@ -220,9 +337,22 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
 
     let elapsed = t0.elapsed().as_millis();
     if online {
-        println!("   {:<20} :{:<5} [{}] - {} ({} ms)", name.bold(), port, role.dimmed(), "ONLINE".green().bold(), elapsed);
+        println!(
+            "   {:<20} :{:<5} [{}] - {} ({} ms)",
+            name.bold(),
+            port,
+            role.dimmed(),
+            "ONLINE".green().bold(),
+            elapsed
+        );
     } else {
-        println!("   {:<20} :{:<5} [{}] - {}", name.bold(), port, role.dimmed(), "OFFLINE (em repouso)".dimmed());
+        println!(
+            "   {:<20} :{:<5} [{}] - {}",
+            name.bold(),
+            port,
+            role.dimmed(),
+            "OFFLINE (em repouso)".dimmed()
+        );
     }
 }
 
@@ -235,17 +365,34 @@ fn check_http_service(name: &str, url: &str, role: &str) {
         .args(["--timeout=1", "--quiet", &health_url])
         .output()
         // Fallback para curl caso xh não esteja instalado no ambiente
-        .or_else(|_| Command::new("curl").args(["-s", "-m", "1", &health_url]).output()); // stenio-ignore: ARCH-RUST-CMD-LEGACY
+        .or_else(|_| {
+            Command::new("curl")
+                .args(["-s", "-m", "1", &health_url])
+                .output()
+        }); // stenio-ignore: ARCH-RUST-CMD-LEGACY
 
     let elapsed = t0.elapsed().as_millis();
     if let Ok(out) = output {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             if s.contains("\"status\":\"ok\"") {
-                println!("   {:<20} {:<6} [{}] - {} ({} ms)", name.bold(), ":9090", role.dimmed(), "ONLINE / HEALTHY".green().bold(), elapsed);
+                println!(
+                    "   {:<20} {:<6} [{}] - {} ({} ms)",
+                    name.bold(),
+                    ":9090",
+                    role.dimmed(),
+                    "ONLINE / HEALTHY".green().bold(),
+                    elapsed
+                );
                 return;
             }
         }
     }
-    println!("   {:<20} {:<6} [{}] - {}", name.bold(), ":9090", role.dimmed(), "OFFLINE (em repouso)".dimmed());
+    println!(
+        "   {:<20} {:<6} [{}] - {}",
+        name.bold(),
+        ":9090",
+        role.dimmed(),
+        "OFFLINE (em repouso)".dimmed()
+    );
 }
