@@ -257,6 +257,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Mantenha '\"strict\": true' e corrija as anotações e interfaces de tipos no código fonte.",
     },
     RuleExplanation {
+        id: "ARCH-SCOPE-ISOLATION",
+        name: "Violação de Isolamento de Escopo Monorepo",
+        severity: "ERROR",
+        tag: "arch",
+        summary: "Proíbe misturar alterações em código da aplicação (Sumaenima) com alterações no motor do Stênio no mesmo commit/tarefa.",
+        rationale: "O monorepo abriga tanto a aplicação de negócios (sumaenimahub/) quanto o árbitro de governança (governance/stenio/). Permitir que um único diff ou commit modifique ambos abre brechas para que um agente adultere as regras de validação para forçar a aprovação de um código de aplicação defeituoso. O princípio de separação de responsabilidades e mitigação de Goodhart's Law exige que melhorias no Stênio e desenvolvimento de produto sejam sempre conduzidos em commits/tarefas estritamente isolados.",
+        bad_example: "git diff HEAD --name-only\nsumaenimahub/SUMAENIMA-HUB/app/frontend-v2/src/App.tsx\ngovernance/stenio/src/engine.rs",
+        good_example: "# Tarefa A (Aplicação):\ngit commit -m 'feat: add audio waveform visualizer' sumaenimahub/\n\n# Tarefa B (Governança):\ngit commit -m 'feat: add new lint rule' governance/stenio/",
+        remediation: "Isole as responsabilidades: desfaça as alterações no motor de governança (governance/stenio) se o objetivo for o app, ou divida o trabalho em dois commits/PRs independentes.",
+    },
+    RuleExplanation {
         id: "TEST-NO-SILENT-SKIP",
         name: "Proibição de Desativação Silenciosa de Testes",
         severity: "ERROR",

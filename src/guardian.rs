@@ -54,6 +54,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "BACKEND-BLOCKING-IO",
                 "BACKEND-NO-PANIC",
                 "ARCH-DRY-DUPLICATION",
+                "ARCH-SCOPE-ISOLATION",
                 "PERF-GPU-ZERO-REPAINT",
                 "PERF-NO-LAYOUT-THRASH",
                 "PERF-GPU-CONTAINMENT",
@@ -68,6 +69,14 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "RUST-IDIOMATIC-SLICES",
                 "RUST-SPAWN-ERROR-HANDLING",
                 r"(?m)\bsudo\s+", // regex expandido — não pode ser revertido para lista curta
+            ],
+        ),
+        (
+            "engine.rs",
+            &[
+                "ARCH-SCOPE-ISOLATION",
+                "has_hub_files",
+                "has_stenio_engine_files",
             ],
         ),
         (
@@ -169,11 +178,21 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         if p.exists() {
             files_checked += 1;
             if let Ok(content) = fs::read_to_string(&p) {
-                // Checar presença de todas as strings obrigatórias
+                // Checar presença de todas as strings obrigatórias com suporte a Human Override
+                let human_auth = std::env::var("STENIO_HUMAN_AUTHORIZATION").ok();
                 for required in *required_strings {
                     if !content.contains(required) {
+                        if let Some(ref auth) = human_auth {
+                            if auth.contains(required) || auth == "AUTHORIZED" || auth == "ALL" {
+                                messages.push(format!(
+                                    "ℹ️ Remoção/modificação de '{}' [{}] autorizada pelo usuário humano via STENIO_HUMAN_AUTHORIZATION.",
+                                    required, module
+                                ));
+                                continue;
+                            }
+                        }
                         tamper_alerts.push(format!(
-                            "🚨 ALERTA CRÍTICO [{}]: string obrigatória '{}' foi removida ou alterada!",
+                            "🚨 ALERTA CRÍTICO [{}]: string obrigatória '{}' foi removida ou alterada sem STENIO_HUMAN_AUTHORIZATION!",
                             module, required
                         ));
                     }

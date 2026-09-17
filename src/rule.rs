@@ -385,6 +385,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Extraia a lógica duplicada para um hook customizado ('features/<dominio>/hooks/'), componente atômico ou função utilitária."),
     ));
 
+    // ── 20.1 Arquitetura: Isolamento de Escopo Monorepo (Anti-Gaming) ───────
+    rules.push(Rule::new(
+        "ARCH-SCOPE-ISOLATION",
+        "arch",
+        Severity::Error,
+        "Violação de Isolamento de Escopo Monorepo",
+        "Proíbe misturar alterações no código da aplicação (Sumaenima) com alterações no motor do Stênio no mesmo commit.",
+        r"(?m)^.*stenio-scope-marker.*$",
+        &["rs", "ts", "tsx", "py", "js"],
+        Some("Isole as responsabilidades: faça as alterações de produto em sumaenimahub/ e as melhorias do sentinela em governance/stenio em tarefas e commits separados."),
+    ));
+
     // ── 21. Frontend & GPU: Zero-Repaint em Animações e Hovers 3D ──────────
     rules.push(Rule::new(
         "PERF-GPU-ZERO-REPAINT",

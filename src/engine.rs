@@ -55,6 +55,32 @@ impl Engine {
         })
     }
 
+    pub fn check_scope_isolation(file_paths: &[PathBuf]) -> Option<Violation> {
+        let has_hub_files = file_paths.iter().any(|p| {
+            let s = p.to_string_lossy();
+            s.contains("sumaenimahub") || s.contains("/app/")
+        });
+        let has_stenio_engine_files = file_paths.iter().any(|p| {
+            let s = p.to_string_lossy();
+            s.contains("governance/stenio/src/")
+        });
+
+        if has_hub_files && has_stenio_engine_files {
+            Some(Violation {
+                rule_id: "ARCH-SCOPE-ISOLATION".to_string(),
+                rule_name: "Violação de Isolamento de Escopo Monorepo".to_string(),
+                severity: Severity::Error,
+                file_path: "governance/stenio".to_string(),
+                line_number: 1,
+                snippet: "Diff misto contendo código do App (sumaenimahub/) e motor de governança (governance/stenio/src/)".to_string(),
+                message: "Violação de Governança: É proibido alterar código da aplicação e o motor do Stênio no mesmo commit/tarefa.".to_string(),
+                suggestion: Some("Isole as tarefas: submeta primeiro a evolução do Stênio em commit isolado, ou desfaça a alteração de governança se o foco for a aplicação.".to_string()),
+            })
+        } else {
+            None
+        }
+    }
+
     pub fn scan_directory(
         &self,
         root: &Path,
@@ -82,10 +108,16 @@ impl Engine {
         }
 
         // Processa todos os arquivos em paralelo com Rayon
-        let violations: Vec<Violation> = file_paths
+        let mut violations: Vec<Violation> = file_paths
             .par_iter()
             .flat_map(|path| self.scan_file(path, tag_filter, only_rule))
             .collect();
+
+        // Verificação Automática de Isolamento de Escopo (Single Responsibility Worktree)
+        // Impede que uma LLM misture alterações de aplicação com adulterações no motor do Stênio
+        if let Some(v) = Self::check_scope_isolation(&file_paths) {
+            violations.push(v);
+        }
 
         let mut error_count = 0;
         let mut warning_count = 0;

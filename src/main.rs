@@ -693,6 +693,23 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         println!("   ❌ Teste {:<22} [{}] - FALHA", "DRY Block Duplication", "ARCH-DRY-DUPLICATION".red());
     }
 
+    // ── Teste de Isolamento de Escopo Monorepo (ARCH-SCOPE-ISOLATION) ───
+    total += 1;
+    let mixed_paths = vec![
+        PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/SUMAENIMA-HUB/app/frontend-v2/src/App.tsx"),
+        PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio/src/engine.rs"),
+    ];
+    if let Some(v) = engine::Engine::check_scope_isolation(&mixed_paths) {
+        if v.rule_id == "ARCH-SCOPE-ISOLATION" {
+            passed += 1;
+            println!("   ✅ Teste {:<22} [{}] - OK", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".cyan());
+        } else {
+            println!("   ❌ Teste {:<22} [{}] - FALHA", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".red());
+        }
+    } else {
+        println!("   ❌ Teste {:<22} [{}] - FALHA", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".red());
+    }
+
     println!();
     if passed == total {
         println!(
