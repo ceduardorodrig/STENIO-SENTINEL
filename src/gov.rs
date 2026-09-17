@@ -25,6 +25,10 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         };
         if base.join("AGENTS.md").is_file() {
             base.join("AGENTS.md")
+        } else if base.join("sumaenima-hub/AGENTS.md").is_file() {
+            base.join("sumaenima-hub/AGENTS.md")
+        } else if base.join("sumaenimahub/sumaenima-hub/AGENTS.md").is_file() {
+            base.join("sumaenimahub/sumaenima-hub/AGENTS.md")
         } else if base.join("SUMAENIMA-HUB/AGENTS.md").is_file() {
             base.join("SUMAENIMA-HUB/AGENTS.md")
         } else if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
@@ -116,7 +120,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     }
 
     // Auditoria de Skills (substitui validate_skills.py por completo)
-    let skills_dir = if repo_root.join("sumaenimahub/SUMAENIMA-HUB/skills").is_dir() {
+    let skills_dir = if repo_root.join("sumaenimahub/sumaenima-hub/skills").is_dir() {
+        repo_root.join("sumaenimahub/sumaenima-hub/skills")
+    } else if repo_root.join("sumaenimahub/SUMAENIMA-HUB/skills").is_dir() {
         repo_root.join("sumaenimahub/SUMAENIMA-HUB/skills")
     } else {
         repo_root.join("skills")

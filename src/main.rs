@@ -696,7 +696,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     // ── Teste de Isolamento de Escopo Monorepo (ARCH-SCOPE-ISOLATION) ───
     total += 1;
     let mixed_paths = vec![
-        PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/SUMAENIMA-HUB/app/frontend-v2/src/App.tsx"),
+        PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub/app/frontend-v2/src/App.tsx"),
         PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio/src/engine.rs"),
     ];
     if let Some(v) = engine::Engine::check_scope_isolation(&mixed_paths) {
@@ -954,6 +954,8 @@ fn main() -> Result<()> {
     if args.typegen {
         let target_dir = if args.path.join("app/frontend-v2").is_dir() {
             args.path.clone()
+        } else if PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub").is_dir() {
+            PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub")
         } else if PathBuf::from("/mnt/NVME_PCI/sumaenimahub/SUMAENIMA-HUB").is_dir() {
             PathBuf::from("/mnt/NVME_PCI/sumaenimahub/SUMAENIMA-HUB")
         } else {
@@ -1188,7 +1190,9 @@ fn main() -> Result<()> {
             args.path.clone()
         }
     } else if scope == "hub" {
-        if args.path.join("sumaenimahub/SUMAENIMA-HUB").is_dir() {
+        if args.path.join("sumaenimahub/sumaenima-hub").is_dir() {
+            args.path.join("sumaenimahub/sumaenima-hub")
+        } else if args.path.join("sumaenimahub/SUMAENIMA-HUB").is_dir() {
             args.path.join("sumaenimahub/SUMAENIMA-HUB")
         } else {
             args.path.clone()

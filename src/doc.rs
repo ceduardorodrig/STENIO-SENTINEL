@@ -268,6 +268,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         repo_root.join("docs"),
         repo_root
             .join("sumaenimahub")
+            .join("sumaenima-hub")
+            .join("docs"),
+        repo_root
+            .join("sumaenimahub")
             .join("SUMAENIMA-HUB")
             .join("docs"),
     ];
