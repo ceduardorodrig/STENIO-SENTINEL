@@ -401,9 +401,14 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                     )
                                 } else {
                                     format!(
-                                        "🛑 [GATE REJEITADO] A entrega foi BLOQUEADA pelo StenioSentinel!\n\
-                                        O modelo DEVE corrigir as seguintes {} violações antes de finalizar:\n\n{}\n\n\
-                                        Dica: use 'stenio_explain' com o rule_id para consultar o exemplo correto.",
+                                        "🛑 [GATE REJEITADO — BLOQUEIO MANDATÓRIO DE ENTREGA]\n\
+                                        A tarefa NÃO PODE ser declarada concluída. É ESTRITAMENTE PROIBIDO:\n\
+                                        1. Propor alterar o motor do Stênio ou criar novas crates de governança (Violação ARCH-SCOPE-ISOLATION).\n\
+                                        2. Alegar que erros ou duplicações DRY são 'problemas pré-existentes' para fugir da correção.\n\
+                                        3. Substituir unwrap() por expect() (Ambos violam RUST-NO-UNWRAP com erro fatal).\n\
+                                        4. Adicionar comentários // stenio-ignore (Violação AGENT-NO-SUPPRESSION-DIRECTIVES).\n\n\
+                                        O modelo DEVE corrigir as seguintes {} violações diretamente no código da aplicação antes de finalizar:\n\n{}\n\n\
+                                        Consulte 'stenio_explain' com o rule_id para ver a remediação oficial.",
                                         errors.len(),
                                         errors.join("\n")
                                     )
