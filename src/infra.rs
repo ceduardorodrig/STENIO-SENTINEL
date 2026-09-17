@@ -75,7 +75,7 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                         severity: Severity::Error,
                         file_path: path_str.clone(),
                         line_number: 1,
-                        snippet: format!("{}-BEGIN PRIVATE KEY-{}", "----", "----"), // stenio-ignore: SEC-SECRETS
+                        snippet: format!("{}-BEGIN PRIVATE KEY-{}", "----", "----"),
                         message: "Chave privada SSH/TLS desprotegida encontrada no repositório.".to_string(),
                         suggestion: Some("Mova para ~/.ssh/ ou armazene criptografado com sops/age em mnemocine/secrets.enc.env.".to_string()),
                     });
