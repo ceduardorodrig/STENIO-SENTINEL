@@ -45,6 +45,9 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "ARCH-RUST-CMD-LEGACY",
                 "RUST-ASYNC-SLEEP",
                 "RUST-NO-UNWRAP",
+                "AGENT-NO-LAZY-STUB",
+                "TEST-NO-SILENT-SKIP",
+                "CODE-NO-EMPTY-CATCH",
                 r"(?m)\bsudo\s+", // regex expandido — não pode ser revertido para lista curta
             ],
         ),
@@ -109,6 +112,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             "main.rs",
             &[
                 "run_self_tests",
+                "run_quality_gate",
                 "audit_stenio_integrity",
                 "audit_governance",
                 "audit_homelab",

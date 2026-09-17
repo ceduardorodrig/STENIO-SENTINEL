@@ -157,6 +157,19 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                     }
                                 }
                             }
+                        },
+                        {
+                            "name": "stenio_gate",
+                            "description": "Quality Gate Pré-Entrega: executa uma auditoria rigorosa de tolerância zero. O agente DEVE chamar esta ferramenta antes de declarar conclusão da tarefa e garantir que retorne APROVADO.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Caminho raiz a inspecionar (default: .)"
+                                    }
+                                }
+                            }
                         }
                     ]
                 });
@@ -324,6 +337,50 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                 rule_id,
                                 crate::explain::list_all_explanations()
                             )
+                        }
+                    }
+                    "stenio_gate" => {
+                        let path_str = arguments
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(".");
+                        let target_path = repo_root.join(path_str);
+                        match engine.scan_directory(&target_path, None, None, false, None, false) {
+                            Ok(report) => {
+                                let mut errors = Vec::new();
+                                for v in &report.violations {
+                                    if v.severity == Severity::Error {
+                                        errors.push(format!(
+                                            "[{}] {}:{}: {} (💡 {})",
+                                            v.rule_id,
+                                            v.file_path,
+                                            v.line_number,
+                                            v.message,
+                                            v.suggestion.as_deref().unwrap_or("N/A")
+                                        ));
+                                    }
+                                }
+                                let gov = crate::gov::audit_governance(&target_path);
+                                for err in &gov.errors {
+                                    errors.push(format!("[GOV] {}", err));
+                                }
+
+                                if errors.is_empty() {
+                                    format!(
+                                        "🎉 [GATE APROVADO] Parabéns! Zero erros impeditivos em {} arquivos. Código 100% conforme. A tarefa está aprovada para entrega!",
+                                        report.total_files_scanned
+                                    )
+                                } else {
+                                    format!(
+                                        "🛑 [GATE REJEITADO] A entrega foi BLOQUEADA pelo StenioSentinel!\n\
+                                        O modelo DEVE corrigir as seguintes {} violações antes de finalizar:\n\n{}\n\n\
+                                        Dica: use 'stenio_explain' com o rule_id para consultar o exemplo correto.",
+                                        errors.len(),
+                                        errors.join("\n")
+                                    )
+                                }
+                            }
+                            Err(e) => format!("Erro ao executar Quality Gate: {}", e),
                         }
                     }
                     other => format!("Ferramenta desconhecida: '{}'", other),

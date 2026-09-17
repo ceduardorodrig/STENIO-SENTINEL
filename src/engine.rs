@@ -192,6 +192,7 @@ impl Engine {
                     || path_str.contains("/fixtures/")
                     || path_str.ends_with("/rule.rs")
                     || path_str.ends_with("/frontend.rs")
+                    || path_str.ends_with("/explain.rs")
                 {
                     continue;
                 }

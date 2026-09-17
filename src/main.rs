@@ -180,6 +180,12 @@ struct Args {
         help = "Exibe documentação técnica detalhada, exemplos incorretos/corretos e remediação de regras (ex: --explain SEC-SUDO, --explain RUST-NO-UNWRAP)"
     )]
     explain: Option<String>,
+
+    #[arg(
+        long,
+        help = "Quality Gate Pré-Entrega: auditoria de tolerância zero que bloqueia modelos de IA preguiçosos se houver qualquer erro"
+    )]
+    gate: bool,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -387,47 +393,54 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
 
-    // Teste sintético de Auto-Fix para SEC-SUDO (regex expandido: captura qualquer comando)
-    total += 1;
-    let sudo_rule = rules.iter().find(|r| r.id == "SEC-SUDO");
-    if let Some(rule) = sudo_rule {
-        if let Some(ref fix) = rule.fix_replacement {
-            let re = regex::Regex::new(&rule.pattern)?;
-            let sample = "sudo systemctl restart nginx";
-            let fixed = re.replace_all(sample, fix.as_str());
-            if fixed == "pkexec systemctl restart nginx" {
-                passed += 1;
-                println!(
-                    "   ✅ Teste {:<22} [{}] - OK",
-                    "Auto-Fix SEC-SUDO",
-                    "SEC-SUDO".cyan()
-                );
-            } else {
-                println!("   ❌ Teste Auto-Fix gerou resultado inesperado: {}", fixed);
-            }
-        }
-    }
-
-    // Teste Auto-Fix para comando não listado anteriormente (sudo curl — era ponto cego)
-    total += 1;
-    let sudo_rule2 = rules.iter().find(|r| r.id == "SEC-SUDO");
-    if let Some(rule) = sudo_rule2 {
-        if let Some(ref fix) = rule.fix_replacement {
-            let re = regex::Regex::new(&rule.pattern)?;
-            let sample = "sudo curl https://example.com";
-            let fixed = re.replace_all(sample, fix.as_str());
-            if fixed == "pkexec curl https://example.com" {
-                passed += 1;
-                println!(
-                    "   ✅ Teste {:<22} [{}] - OK",
-                    "Auto-Fix sudo curl",
-                    "SEC-SUDO".cyan()
-                );
-            } else {
-                println!("   ❌ Teste Auto-Fix (sudo curl) gerou: {}", fixed);
-            }
-        }
-    }
+    check_case!(
+        "Stub Rest of Code",
+        "AGENT-NO-LAZY-STUB",
+        "// rest of code here\nfn foo() {}",
+        true
+    );
+    check_case!(
+        "Stub Todo Rust",
+        "AGENT-NO-LAZY-STUB",
+        r#"todo!("implement later");"#,
+        true
+    );
+    check_case!(
+        "Código Completo Válido",
+        "AGENT-NO-LAZY-STUB",
+        "fn calculate() -> i32 { 42 }",
+        false
+    );
+    check_case!(
+        "Teste Ignorado Proibido",
+        "TEST-NO-SILENT-SKIP",
+        "#[test]\n#[ignore]\nfn test_failure() {}",
+        true
+    );
+    check_case!(
+        "Asserção Comentada",
+        "TEST-NO-SILENT-SKIP",
+        "// assert_eq!(res, 42);",
+        true
+    );
+    check_case!(
+        "Teste Válido",
+        "TEST-NO-SILENT-SKIP",
+        "#[test]\nfn test_valid() { assert_eq!(1, 1); }",
+        false
+    );
+    check_case!(
+        "Catch Vazio Proibido",
+        "CODE-NO-EMPTY-CATCH",
+        "try { run(); } catch (e) {}",
+        true
+    );
+    check_case!(
+        "Catch com Log Válido",
+        "CODE-NO-EMPTY-CATCH",
+        "try { run(); } catch (e) { log(e); }",
+        false
+    );
 
     println!();
     if passed == total {
@@ -451,6 +464,166 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     }
     println!();
     Ok(())
+}
+
+fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Result<()> {
+    println!();
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "StenioSentinel Quality Gate (v3.2) — Inspeção Rigorosa Pré-Entrega"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "🛡️  Executando auditoria holística de tolerância zero para liberação de tarefa...\n"
+            .white()
+    );
+
+    let engine = Engine::new(rules.to_vec(), whitelist.clone())?;
+    let report = engine.scan_directory(&args.path, None, None, false, None, false)?;
+
+    let gov_result = audit_governance(&args.path);
+    let doc_result = audit_documentation(&args.path);
+    let guardian_report =
+        audit_stenio_integrity(&PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio"));
+
+    let mut blocker_errors = Vec::new();
+
+    // 1. Violações de regras de severidade Error
+    for v in &report.violations {
+        if v.severity == Severity::Error {
+            blocker_errors.push(format!(
+                "[{}] {}:{}: {} (💡 {})",
+                v.rule_id.red().bold(),
+                v.file_path,
+                v.line_number,
+                v.message,
+                v.suggestion.as_deref().unwrap_or("Consulte --explain")
+            ));
+        }
+    }
+
+    // 2. Erros de governança (incluindo GOV-LEFTOVER-TEST-ARTIFACTS)
+    for err in &gov_result.errors {
+        blocker_errors.push(format!("[GOVERNANÇA] {}", err));
+    }
+
+    // 3. Documentação corrompida / links quebrados
+    for v in &doc_result.violations {
+        if v.severity == Severity::Error {
+            blocker_errors.push(format!(
+                "[DOC-ERROR] {}:{}: {}",
+                v.file_path, v.line_number, v.message
+            ));
+        }
+    }
+
+    // 4. Guardian anti-tampering
+    for alert in &guardian_report.tamper_alerts {
+        blocker_errors.push(format!("[GUARDIAN] {}", alert));
+    }
+
+    if blocker_errors.is_empty() {
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .green()
+                .bold()
+        );
+        println!(
+            "{}",
+            "🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras."
+                .green()
+                .bold()
+        );
+        println!(
+            "{}",
+            "══════════════════════════════════════════════════════════════════════════════"
+                .green()
+                .bold()
+        );
+        println!(
+            "   • {} arquivos auditados com sucesso.",
+            report.total_files_scanned
+        );
+        println!("   • Zero erros impeditivos.");
+        println!("   • Zero stubs ou placeholders detectados.");
+        println!("   • Zero testes neutralizados.");
+        println!("   • Zero artefatos residuais de teste.");
+        println!();
+        println!(
+            "{}",
+            "✨ A tarefa está formalmente LIBERADA para entrega ao usuário com garantia total de qualidade!"
+                .green()
+                .bold()
+        );
+        println!();
+        return Ok(());
+    }
+
+    // Se houver qualquer erro bloqueador
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        "🛑 [GATE REJEITADO] Entrega Bloqueada pelo StenioSentinel!"
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        format!(
+            "O agente de IA NÃO tem permissão para concluir a tarefa. Foram encontradas {} violação(ões) impeditiva(s):\n",
+            blocker_errors.len()
+        )
+        .red()
+    );
+
+    for (idx, err) in blocker_errors.iter().enumerate() {
+        println!("   {}. {}", idx + 1, err);
+    }
+
+    println!();
+    println!(
+        "{}",
+        "💡 INSTRUÇÕES MANDATÓRIAS PARA O AGENTE DE IA:"
+            .yellow()
+            .bold()
+    );
+    println!("   1. Você DEVE corrigir cada uma das violações listadas acima antes de finalizar.");
+    println!(
+        "   2. Execute 'stenio --explain <RULE_ID>' para visualizar o código correto e a remediação."
+    );
+    println!(
+        "   3. É ESTRITAMENTE PROIBIDO contornar erros desativando testes, adicionando stubs ou suprimindo regras."
+    );
+    println!("   4. Execute 'stenio --gate' novamente até receber [GATE APROVADO].");
+    println!();
+
+    std::process::exit(1);
 }
 
 fn main() -> Result<()> {
@@ -576,6 +749,12 @@ fn main() -> Result<()> {
     // Carrega configuração canônica steniocheck.toml
     let steniocheck_cfg = SteniocheckConfig::load_from_dir(&args.path);
     let rules = get_rules_from_config(&steniocheck_cfg);
+
+    // ── Modo Quality Gate Pré-Entrega (--gate) ─────────────────────────────
+    if args.gate {
+        run_quality_gate(&args, &rules, &whitelist)?;
+        return Ok(());
+    }
 
     // ── Modo MCP Server (Protocolo JSON-RPC 2.0 stdio para OpenCode, Antigravity, Claude) ──
     if args.mcp {

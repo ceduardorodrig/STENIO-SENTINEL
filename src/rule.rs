@@ -46,6 +46,7 @@ impl Rule {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_fix(mut self, fix: &str) -> Self {
         self.fix_replacement = Some(fix.to_string());
         self
@@ -126,19 +127,21 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Remova o import do módulo legado descomissionado."),
     ));
 
-    // ── 3. Proibição de Sudo Puro (AGENTS.md Regra 10) ──────────────────────
-    // Padrão cobre QUALQUER comando executado via sudo, sem lista branca.
-    // O fix substitui apenas "sudo " por "pkexec ", preservando o comando e args intactos.
+    // ── 3. Uso de Sudo e Privilégios de Sistema (AGENTS.md Regra 10) ────────
+    // Em automações profissionais, o usuário deve possuir regra NOPASSWD no sudoers
+    // ou as credenciais devem ser injetadas via .env/SOPS.
+    // 'pkexec' é apenas mecanismo gráfico opcional do KDE no psicopompo; em scripts de servidor
+    // ou tarefas repetidas deve ser evitado para não cansar o operador com diálogos de senha.
     rules.push(Rule::new(
         "SEC-SUDO",
         "sec",
-        Severity::Error,
-        "Proibição de sudo puro",
-        "Regra 10 do AGENTS.md: Use pkexec em vez de sudo em scripts sem TTY.",
+        Severity::Warning,
+        "Atenção ao Uso de Sudo em Scripts",
+        "Regra 10 do AGENTS.md: Automações devem utilizar sudoers (NOPASSWD) ou .env/SOPS. Evite senhas interativas ou forçar pkexec em servidores headless.",
         r"(?m)\bsudo\s+",
         &["sh", "bash"],
-        Some("Substitua 'sudo <comando>' por 'pkexec <comando>' ou execute dentro de container com privilégios configurados."),
-    ).with_fix("pkexec "));
+        Some("Configure regra NOPASSWD no sudoers para o usuário da máquina ou injete credenciais via .env/SOPS."),
+    ));
 
     // ── 4. Scanner Universal de Credenciais & Segredos ──────────────────────
     rules.push(Rule::new(
@@ -274,7 +277,43 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Substitua .unwrap()/.expect() por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros como .unwrap_or_default() / .ok_or(...)."),
     ));
 
-    // ── 15. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+    // ── 15. Anti-Preguiça: Proibição de Stubs e Placeholders de IA ─────────
+    rules.push(Rule::new(
+        "AGENT-NO-LAZY-STUB",
+        "gov",
+        Severity::Error,
+        "Placeholder ou Stub Preguiçoso de IA",
+        "Modelos de IA não devem deixar código incompleto com stubs, 'todo!()', 'unimplemented!()' ou '// rest of code'.",
+        r#"(?i)(//\s*(\.\.\.|rest of (the )?code|existing code|code remains|TODO:?\s*implement|add logic here)|\b(todo!|unimplemented!)\(|\bthrow new Error\(["'](Not implemented|TODO)["']\))"#,
+        &["rs", "ts", "tsx", "js", "py", "sh"],
+        Some("Implemente o código completo da funcionalidade. É expressamente proibido usar stubs, 'todo!()' ou placeholders em entregas."),
+    ));
+
+    // ── 16. Integridade de Testes: Proibição de Desativação Silenciosa de Testes ──
+    rules.push(Rule::new(
+        "TEST-NO-SILENT-SKIP",
+        "test",
+        Severity::Error,
+        "Teste Desativado ou Asserção Comentada",
+        "Proíbe o uso de #[ignore], test.skip ou asserções comentadas para mascarar falhas em testes.",
+        r#"(?m)(^\s*#\[ignore\]|^\s*//\s*(assert!|assert_eq!|assert_ne!|expect\()|\b(it|test|describe)\.skip\(|\b(xit|xtest)\(|@pytest\.mark\.skip)"#,
+        &["rs", "ts", "tsx", "js", "py"],
+        Some("Não desative testes nem comente asserções para fazer os testes passarem. Identifique e corrija a causa raiz no código."),
+    ));
+
+    // ── 17. Confiabilidade: Proibição de Tratamento de Erro Vazio (Catch Vazio) ──
+    rules.push(Rule::new(
+        "CODE-NO-EMPTY-CATCH",
+        "gov",
+        Severity::Warning,
+        "Tratamento de Erro Silenciado (Catch Vazio)",
+        "Blocos catch/except vazios engolem erros silenciosamente sem registrar log.",
+        r#"(?m)(catch\s*(\([^\)]*\))?\s*\{\s*\}|^\s*except(\s+\w+)?:\s*pass\s*$)"#,
+        &["ts", "tsx", "js", "py"],
+        Some("Registre o erro nos logs (tracing, logger, console.error) ou propague a falha com '?'. Nunca engula erros."),
+    ));
+
+    // ── 18. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
 
     if let Some(custom_rules) = &config.custom_rules {
         for cr in custom_rules {
