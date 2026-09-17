@@ -293,9 +293,9 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Thread Sleep Tokio",
         "RUST-ASYNC-SLEEP",
-        "std::thread::sleep(Duration::from_millis(100));",
+        "std::thread::sleep(Duration::from_millis(100));", // stenio-ignore: RUST-ASYNC-SLEEP
         true
-    ); // stenio-ignore: RUST-ASYNC-SLEEP
+    );
     check_case!(
         "Tokio Sleep Válido",
         "RUST-ASYNC-SLEEP",
@@ -305,9 +305,9 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Segredo Hardcoded",
         "SEC-SECRETS",
-        "api_key = \"ghp_123456789012345678901234567890123456\"",
+        "api_key = \"ghp_123456789012345678901234567890123456\"", // stenio-ignore: SEC-SECRETS
         true
-    ); // stenio-ignore: SEC-SECRETS
+    );
     check_case!(
         "Sudo Desprotegido",
         "SEC-SUDO",
@@ -396,13 +396,13 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Stub Rest of Code",
         "AGENT-NO-LAZY-STUB",
-        "// rest of code here\nfn foo() {}",
+        "// rest of code here\nfn foo() {}", // stenio-ignore: AGENT-NO-LAZY-STUB
         true
     );
     check_case!(
         "Stub Todo Rust",
         "AGENT-NO-LAZY-STUB",
-        r#"todo!("implement later");"#,
+        r#"todo!("implement later");"#, // stenio-ignore: AGENT-NO-LAZY-STUB
         true
     );
     check_case!(
