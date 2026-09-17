@@ -10,12 +10,12 @@ Este contexto sintetiza em alta densidade todas as leis, arquitetura e infraestr
 - **CNPJ:** 62.447.037/0001-10
 - **Email/PIX:** ceduardorodrig@gmail.com
 - **Espaço de Trabalho:** Monorepo/Vault Obsidian em `/mnt/NVME_PCI/agentic-ai` (Sincronizado via Syncthing).
-- **Backend & Plataforma:** `/mnt/NVME_PCI/sumaenimahub/SUMAENIMA-HUB` (Rust Axum + React/Vite).
+- **Backend & Plataforma:** `/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub` (Rust Axum + React/Vite).
 
 ## ⚡ Hardware & Aceleração Local (psicopompo)
 - **GPU:** NVIDIA GeForce RTX 5050 (Driver 615.71.09, Arquitetura Blackwell).
 - **VRAM:** 8.151 MiB total (~6.300 MiB livres dedicados a inferência).
-- **IA/ASR Local:** Whisper GGML Q8_0 em `/mnt/NVME_PCI/sumaenimahub/llm_model_cache/whisper-ggml/` executando no Rust com suporte CUDA.
+- **IA/ASR Local:** Whisper GGML Q8_0 em `/mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache/whisper-ggml/` executando no Rust com suporte CUDA.
 - **Storage:** NVMe PCI 2TB `/mnt/NVME_PCI` + NAS ZFS/Btrfs `/mnt/BACKUP`.
 
 ## 🌐 Malha Tailscale (Mnemocine Homelab)
@@ -71,7 +71,7 @@ Este contexto sintetiza em alta densidade todas as leis, arquitetura e infraestr
 
 ## 🦀 Sumænimá Hub Backend Cheat Sheet (Axum + Tokio + SQLx)
 - **E/S Assíncrona:** Nunca use `std::fs` síncrono em handlers de rota. Utilize `tokio::fs` com `.await`.
-- **Zero Panic em Produção:** Proibido `.unwrap()`, `.expect()`, `assert!()` ou `panic!()` em código do servidor. Retorne `Result<..., AppError>` ou mapeie em `StatusCode`.
+- **Zero Panic em Produção:** Proibido unwrap, expect, `assert!()` ou `panic!()` em código do servidor. Retorne `Result<..., AppError>` ou mapeie em `StatusCode`.
 - **Queries Parametrizadas:** Use sempre binds `$1`, `$2` do SQLx. Nunca formate strings diretamente em queries SQL.
 "#;
 

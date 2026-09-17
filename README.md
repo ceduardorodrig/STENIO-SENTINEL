@@ -23,7 +23,7 @@ Garante que nenhum arquivo com extensão `.enc.*` ou contendo atribuição de cr
 - Validação estrutural de units do Systemd (`.service`, `.timer`).
 
 ### 4. Typegen Automático Rust → TypeScript (`--typegen`)
-Gera automaticamente interfaces TypeScript espelhadas dos structs de DTO em Rust para o frontend Vite/React em [`app/frontend-v2/src/types/generated/stenio.ts`](../../sumaenimahub/SUMAENIMA-HUB/app/frontend-v2/src/types/generated/stenio.ts).
+Gera automaticamente interfaces TypeScript espelhadas dos structs de DTO em Rust para o frontend Vite/React em [`app/frontend-v2/src/types/generated/stenio.ts`](../../sumaenimahub/sumaenima-hub/app/frontend-v2/src/types/generated/stenio.ts).
 - Garante **Zero Débito Técnico** e paridade total entre backend e frontend.
 
 ```bash
