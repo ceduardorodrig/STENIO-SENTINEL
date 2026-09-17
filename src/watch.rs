@@ -13,25 +13,7 @@ pub fn start_watch_mode(
     tag_filter: Option<&str>,
     only_rule: Option<&str>,
 ) -> Result<()> {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "StenioSentinel — Daemon Watchdog em Tempo Real (Inotify/Rust)"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    crate::baseline::print_banner("StenioSentinel — Daemon Watchdog em Tempo Real (Inotify/Rust)");
     println!(
         "   👀 Monitorando alterações em: {}",
         root.display().to_string().green().bold()

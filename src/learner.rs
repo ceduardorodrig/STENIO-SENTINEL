@@ -109,26 +109,7 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
     file.write_all(toml_entry.as_bytes())
         .context("Falha ao escrever regra aprendida em steniocheck.toml")?;
 
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .green()
-            .bold()
-    );
-    println!(
-        "{} {}",
-        "✨ StênioKernel — Nova Regra Aprendida com Sucesso!"
-            .green()
-            .bold(),
-        format!("[{}]", id).cyan().bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .green()
-            .bold()
-    );
+    crate::baseline::print_banner_green(&format!("✨ StênioKernel — Nova Regra Aprendida com Sucesso! [{}]", id));
     println!("   {} {}", "ID:         ".dimmed(), id.cyan().bold());
     println!("   {} {}", "Nome:       ".dimmed(), name.bold());
     println!("   {} {}", "Tag:        ".dimmed(), tag.yellow());

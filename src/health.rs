@@ -6,25 +6,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub fn run_system_health() -> Result<()> {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    crate::baseline::print_banner("StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)");
 
     // 1. Armazenamento em Disco
     println!(
@@ -189,8 +171,7 @@ fn check_backup_chain() {
 
 fn check_disk_health(path: &str, label: &str) {
     // Exceção documentada: statvfs nativo requer dep nix (não incluso). Pendente ADR-xxx.
-    // stenio-ignore: ARCH-RUST-CMD-LEGACY — alternativa pura Rust (nix::sys::statvfs) depende de crate externo
-    let output = Command::new("df") // stenio-ignore: ARCH-RUST-CMD-LEGACY
+    let output = Command::new("df")
         .args(["-Pk", path])
         .output();
 
@@ -356,36 +337,41 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
     }
 }
 
-fn check_http_service(name: &str, url: &str, role: &str) {
+pub fn http_get_health(url: &str) -> Option<(bool, u128)> {
     let t0 = Instant::now();
     let health_url = format!("{}/v1/health", url);
-    // Usa xh (alternativa Rust ao curl) conforme AGENTS.md.
-    // stenio-ignore: ARCH-RUST-CMD-LEGACY — xh é a alternativa Rust; curl foi substituído.
+    // Usa xh (alternativa Rust ao curl) conforme AGENTS.md com fallback gracioso.
     let output = Command::new("xh") // nosemgrep: ARCH-RUST-CMD-LEGACY
         .args(["--timeout=1", "--quiet", &health_url])
         .output()
-        // Fallback para curl caso xh não esteja instalado no ambiente
         .or_else(|_| {
             Command::new("curl")
                 .args(["-s", "-m", "1", &health_url])
                 .output()
-        }); // stenio-ignore: ARCH-RUST-CMD-LEGACY
+        })
+        .ok()?;
 
     let elapsed = t0.elapsed().as_millis();
-    if let Ok(out) = output {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if s.contains("\"status\":\"ok\"") {
-                println!(
-                    "   {:<20} {:<6} [{}] - {} ({} ms)",
-                    name.bold(),
-                    ":9090",
-                    role.dimmed(),
-                    "ONLINE / HEALTHY".green().bold(),
-                    elapsed
-                );
-                return;
-            }
+    if output.status.success() {
+        let s = String::from_utf8_lossy(&output.stdout);
+        Some((s.contains("\"status\":\"ok\""), elapsed))
+    } else {
+        None
+    }
+}
+
+fn check_http_service(name: &str, url: &str, role: &str) {
+    if let Some((is_ok, elapsed)) = http_get_health(url) {
+        if is_ok {
+            println!(
+                "   {:<20} {:<6} [{}] - {} ({} ms)",
+                name.bold(),
+                ":9090",
+                role.dimmed(),
+                "ONLINE / HEALTHY".green().bold(),
+                elapsed
+            );
+            return;
         }
     }
     println!(

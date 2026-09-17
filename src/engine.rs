@@ -1,5 +1,4 @@
 use anyhow::Result;
-use ignore::WalkBuilder;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -163,17 +162,7 @@ impl Engine {
             let mut file_changed = false;
 
             for (idx, rule) in self.rules.iter().enumerate() {
-                if let Some(target) = only_rule {
-                    if !rule.id.eq_ignore_ascii_case(target) {
-                        continue;
-                    }
-                }
-                if let Some(tag) = tag_filter {
-                    if rule.tag != tag {
-                        continue;
-                    }
-                }
-                if !rule.file_extensions.iter().any(|e| e == &ext) {
+                if !rule.matches_filter(tag_filter, only_rule, &ext) {
                     continue;
                 }
                 let Some(ref replacement) = rule.fix_replacement else {
@@ -201,13 +190,7 @@ impl Engine {
     }
 
     fn collect_all_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
-        let mut walker = WalkBuilder::new(root);
-        walker
-            .hidden(true)
-            .parents(true)
-            .git_ignore(true)
-            .git_global(false)
-            .git_exclude(true);
+        let walker = crate::baseline::create_standard_walker(root);
 
         let mut file_paths = Vec::new();
         for result in walker.build() {
@@ -371,19 +354,7 @@ impl Engine {
 
         // 2. Auditoria por autômato de regras
         for (idx, rule) in self.rules.iter().enumerate() {
-            if let Some(target) = only_rule {
-                if !rule.id.eq_ignore_ascii_case(target) {
-                    continue;
-                }
-            }
-
-            if let Some(tag) = tag_filter {
-                if rule.tag != tag {
-                    continue;
-                }
-            }
-
-            if !rule.file_extensions.iter().any(|e| e == &ext) {
+            if !rule.matches_filter(tag_filter, only_rule, &ext) {
                 continue;
             }
 

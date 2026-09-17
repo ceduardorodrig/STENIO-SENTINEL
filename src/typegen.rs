@@ -74,24 +74,7 @@ export interface SentinelReport {
     let target_file = out_dir.join("stenio.ts");
     fs::write(&target_file, stenio_ts)?;
 
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "StenioSentinel — Typegen Automático Rust → TypeScript (ts-rs)"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    crate::baseline::print_banner("StenioSentinel — Typegen Automático Rust → TypeScript (ts-rs)");
     println!("   ✅ Definições TypeScript geradas com sucesso:");
     println!("      └── {}", target_file.display().to_string().green());
     println!();

@@ -1,5 +1,4 @@
 use ignore::WalkBuilder;
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -18,36 +17,10 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
 
     // 1. Carregar taxonomia universal de tags de governance/_tags.md
     let tags_file = vault_root.join("governance").join("_tags.md");
-    let mut valid_tags = HashSet::new();
-    if tags_file.is_file() {
-        if let Ok(content) = fs::read_to_string(&tags_file) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("- `#") || trimmed.starts_with("- `") {
-                    if let Some(first_tick) = trimmed.find('`') {
-                        if let Some(second_tick) = trimmed[first_tick + 1..].find('`') {
-                            let tag_clean = trimmed[first_tick + 1..first_tick + 1 + second_tick]
-                                .trim_start_matches('#')
-                                .trim();
-                            if !tag_clean.is_empty() {
-                                valid_tags.insert(tag_clean.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut walker = WalkBuilder::new(vault_root);
-    walker.hidden(true).git_ignore(true);
+    let valid_tags = crate::baseline::parse_tags_file(&tags_file);
 
     let mut scanned_count = 0;
-    for result in walker.build().flatten() {
-        if !result.file_type().map_or(false, |ft| ft.is_file()) {
-            continue;
-        }
-        let path = result.into_path();
+    for path in crate::baseline::build_file_walker(vault_root) {
         let path_str = path.to_string_lossy().to_string();
 
         if path_str.contains("/.stversions/")

@@ -77,3 +77,94 @@ impl Whitelist {
         false
     }
 }
+
+pub fn print_banner(title: &str) {
+    use colored::*;
+    println!();
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!("{}", title.cyan().bold());
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+}
+
+pub fn print_banner_with_badge(title: &str, badge: &str) {
+    use colored::*;
+    println!();
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!("{} {}", title.cyan().bold(), badge.yellow());
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+}
+
+pub fn print_banner_green(title: &str) {
+    use colored::*;
+    println!();
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
+    println!("{}", title.green().bold());
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
+}
+
+pub fn print_banner_red(title: &str) {
+    use colored::*;
+    println!();
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".red().bold());
+    println!("{}", title.red().bold());
+    println!("{}", "══════════════════════════════════════════════════════════════════════════════".red().bold());
+}
+
+pub fn parse_tags_file(tags_file: &Path) -> HashSet<String> {
+    let mut valid_tags = HashSet::new();
+    if tags_file.is_file() {
+        if let Ok(content) = fs::read_to_string(tags_file) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("- `#") || trimmed.starts_with("- `") {
+                    if let Some(first_tick) = trimmed.find('`') {
+                        if let Some(second_tick) = trimmed[first_tick + 1..].find('`') {
+                            let tag_clean = trimmed[first_tick + 1..first_tick + 1 + second_tick]
+                                .trim_start_matches('#')
+                                .trim();
+                            if !tag_clean.is_empty() {
+                                valid_tags.insert(tag_clean.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    valid_tags
+}
+
+pub fn is_common_ignored_path(path_str: &str) -> bool {
+    path_str.contains("/target/")
+        || path_str.contains("/node_modules/")
+        || path_str.contains("/.venv/")
+        || path_str.contains("/.git/")
+        || path_str.contains("/dist/")
+        || path_str.contains("/.obsidian/")
+        || path_str.contains("/dependencies/")
+        || path_str.contains("/archive/")
+        || path_str.contains("/cold-storage/")
+}
+
+pub fn build_file_walker(root: &Path) -> impl Iterator<Item = std::path::PathBuf> {
+    let mut walker = ignore::WalkBuilder::new(root);
+    walker.hidden(true).git_ignore(true);
+    walker.build().flatten().filter_map(|entry| {
+        if entry.file_type().map_or(false, |ft| ft.is_file()) {
+            Some(entry.into_path())
+        } else {
+            None
+        }
+    })
+}
+
+pub fn create_standard_walker(root: &Path) -> ignore::WalkBuilder {
+    let mut walker = ignore::WalkBuilder::new(root);
+    walker
+        .hidden(true)
+        .parents(true)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(true);
+    walker
+}

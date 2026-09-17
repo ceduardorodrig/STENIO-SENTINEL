@@ -8,6 +8,7 @@ use crate::baseline::Whitelist;
 use crate::engine::Engine;
 use crate::guardian::audit_stenio_integrity;
 use crate::rule::{Rule, Severity};
+use crate::Violation;
 
 #[derive(Debug, Deserialize)]
 struct McpRequest {
@@ -178,15 +179,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         {
                             "name": "stenio_gate",
                             "description": "Quality Gate Pré-Entrega: executa uma auditoria rigorosa de tolerância zero (regras críticas, governança, artefatos e duplicação DRY). O agente DEVE chamar esta ferramenta antes de declarar conclusão da tarefa e garantir que retorne APROVADO.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "path": {
-                                        "type": "string",
-                                        "description": "Caminho raiz a inspecionar (default: .)"
-                                    }
-                                }
-                            }
+                            "inputSchema": path_input_schema()
                         }
                     ]
                 });
@@ -224,22 +217,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             if violations.is_empty() {
                                 format!("✨ Arquivo '{}' 100% conforme. Zero violações.", path_str)
                             } else {
-                                let mut lines = Vec::new();
-                                for v in violations {
-                                    let sev = match v.severity {
-                                        Severity::Error => "ERROR",
-                                        Severity::Warning => "WARN",
-                                    };
-                                    lines.push(format!(
-                                        "[{}] {}:{}: [{}] {} (💡 {})",
-                                        sev,
-                                        v.file_path,
-                                        v.line_number,
-                                        v.rule_id,
-                                        v.message,
-                                        v.suggestion.as_deref().unwrap_or("N/A")
-                                    ));
-                                }
+                                let lines: Vec<String> = violations.iter().map(format_violation_line).collect();
                                 lines.join("\n")
                             }
                         } else {
@@ -255,19 +233,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                             path_str, report.error_count, report.warning_count, report.total_files_scanned
                                         ));
                                         for v in report.violations.iter().take(30) {
-                                            let sev = match v.severity {
-                                                Severity::Error => "ERROR",
-                                                Severity::Warning => "WARN",
-                                            };
-                                            lines.push(format!(
-                                                "[{}] {}:{}: [{}] {} (💡 {})",
-                                                sev,
-                                                v.file_path,
-                                                v.line_number,
-                                                v.rule_id,
-                                                v.message,
-                                                v.suggestion.as_deref().unwrap_or("N/A")
-                                            ));
+                                            lines.push(format_violation_line(v));
                                         }
                                         if report.violations.len() > 30 {
                                             lines.push(format!(
@@ -295,19 +261,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                         report.error_count, report.warning_count
                                     ));
                                     for v in &report.violations {
-                                        let sev = match v.severity {
-                                            Severity::Error => "ERROR",
-                                            Severity::Warning => "WARN",
-                                        };
-                                        lines.push(format!(
-                                            "[{}] {}:{}: [{}] {} (💡 {})",
-                                            sev,
-                                            v.file_path,
-                                            v.line_number,
-                                            v.rule_id,
-                                            v.message,
-                                            v.suggestion.as_deref().unwrap_or("N/A")
-                                        ));
+                                        lines.push(format_violation_line(v));
                                     }
                                     lines.join("\n")
                                 }
@@ -493,4 +447,32 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
     }
 
     Ok(())
+}
+
+fn format_violation_line(v: &Violation) -> String {
+    let sev = match v.severity {
+        Severity::Error => "ERROR",
+        Severity::Warning => "WARN",
+    };
+    format!(
+        "[{}] {}:{}: [{}] {} (💡 {})",
+        sev,
+        v.file_path,
+        v.line_number,
+        v.rule_id,
+        v.message,
+        v.suggestion.as_deref().unwrap_or("N/A")
+    )
+}
+
+fn path_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Caminho raiz a inspecionar (default: .)"
+            }
+        }
+    })
 }

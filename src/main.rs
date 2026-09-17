@@ -265,25 +265,7 @@ fi
 }
 
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "StênioKernel — Bateria de Auto-Testes Sintéticos (Self-Test)"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    baseline::print_banner("StênioKernel — Bateria de Auto-Testes Sintéticos (Self-Test)");
 
     let mut passed = 0;
     let mut total = 0;
@@ -750,25 +732,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 }
 
 fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Result<()> {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "StenioSentinel Quality Gate (v3.2) — Inspeção Rigorosa Pré-Entrega"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Inspeção Rigorosa Pré-Entrega");
     println!(
         "{}",
         "🛡️  Executando auditoria holística de tolerância zero para liberação de tarefa...\n"
@@ -833,24 +797,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     }
 
     if blocker_errors.is_empty() {
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .green()
-                .bold()
-        );
-        println!(
-            "{}",
-            "🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras."
-                .green()
-                .bold()
-        );
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .green()
-                .bold()
-        );
+        baseline::print_banner_green("🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras.");
         println!(
             "   • {} arquivos auditados com sucesso.",
             report.total_files_scanned
@@ -872,24 +819,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     }
 
     // Se houver qualquer erro bloqueador
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .red()
-            .bold()
-    );
-    println!(
-        "{}",
-        "🛑 [GATE REJEITADO] Entrega Bloqueada pelo StenioSentinel!"
-            .red()
-            .bold()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .red()
-            .bold()
-    );
+    baseline::print_banner_red("🛑 [GATE REJEITADO] Entrega Bloqueada pelo StenioSentinel!");
     println!(
         "{}",
         format!(
@@ -1017,25 +947,7 @@ fn main() -> Result<()> {
     if args.guardian {
         let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
         let rep = audit_stenio_integrity(&stenio_src);
-        println!();
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .cyan()
-                .bold()
-        );
-        println!(
-            "{}",
-            "StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering"
-                .cyan()
-                .bold()
-        );
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .cyan()
-                .bold()
-        );
+        baseline::print_banner("StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering");
         for m in &rep.messages {
             println!("   {}", m);
         }
@@ -1089,25 +1001,7 @@ fn main() -> Result<()> {
 
     // ── Modo Listagem (--list) ─────────────────────────────────────────────
     if args.list {
-        println!();
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .cyan()
-                .bold()
-        );
-        println!(
-            "{}",
-            "StênioKernel — Catálogo de Regras Ativas & Autômatos"
-                .cyan()
-                .bold()
-        );
-        println!(
-            "{}",
-            "══════════════════════════════════════════════════════════════════════════════"
-                .cyan()
-                .bold()
-        );
+        baseline::print_banner("StênioKernel — Catálogo de Regras Ativas & Autômatos");
         println!(
             "{:<26} {:<10} {:<8} {:<14} {}",
             "ID DA REGRA".bold(),
@@ -1520,29 +1414,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
+    let banner_title = format!(
+        "StenioSentinel (Rust Engine v{}) — Sistema Universal de Governança",
+        env!("CARGO_PKG_VERSION")
     );
-    println!(
-        "{} {}",
-        format!(
-            "StenioSentinel (Rust Engine v{}) — Sistema Universal de Governança",
-            env!("CARGO_PKG_VERSION")
-        )
-            .cyan()
-            .bold(),
-        format!("[{:.2?}]", report.duration).yellow()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
+    let badge = format!("[{:.2?}]", report.duration);
+    baseline::print_banner_with_badge(&banner_title, &badge);
 
     // Auditoria de Governança (AGENTS.md)
     if should_audit_gov {

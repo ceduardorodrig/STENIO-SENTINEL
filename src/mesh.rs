@@ -17,6 +17,21 @@ pub struct DynamicNode {
     pub shell: String,
 }
 
+impl DynamicNode {
+    pub fn from_tailscale(name: String, ip: String, raw_os: &str) -> Self {
+        let (role, is_server, os, shell) = resolve_node_role(&name, raw_os);
+        Self {
+            name,
+            ip,
+            role,
+            is_server,
+            port: 22,
+            os,
+            shell,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct NodeStatus {
@@ -25,6 +40,28 @@ pub struct NodeStatus {
     pub latency: Option<Duration>,
     pub tailscale_online: bool,
     pub error_msg: Option<String>,
+}
+
+impl NodeStatus {
+    pub fn ts_active(node: DynamicNode, tailscale_online: bool, msg: &str) -> Self {
+        Self {
+            node,
+            is_online: true,
+            latency: None,
+            tailscale_online,
+            error_msg: Some(msg.to_string()),
+        }
+    }
+
+    pub fn offline(node: DynamicNode, tailscale_online: bool, error: impl Into<String>) -> Self {
+        Self {
+            node,
+            is_online: false,
+            latency: None,
+            tailscale_online,
+            error_msg: Some(error.into()),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -149,19 +186,8 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
                         .and_then(|ips| ips.into_iter().find(|i| !i.contains(':')))
                         .unwrap_or_else(|| "100.82.51.112".to_string());
                     let raw_os = self_node.os.unwrap_or_else(|| "linux".to_string());
-                    let (role, is_server, os, shell) = resolve_node_role(&name, &raw_os);
-                    nodes.push((
-                        DynamicNode {
-                            name,
-                            ip,
-                            role,
-                            is_server,
-                            port: 22,
-                            os,
-                            shell,
-                        },
-                        true, // Local sempre online
-                    ));
+                    let node = DynamicNode::from_tailscale(name, ip, &raw_os);
+                    nodes.push((node, true)); // Local sempre online
                 }
 
                 // 2. Adiciona todos os peers da Tailnet dinamicamente
@@ -179,21 +205,9 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
                             None => continue,
                         };
                         let raw_os = peer.os.unwrap_or_else(|| "linux".to_string());
-                        let (role, is_server, os, shell) = resolve_node_role(&name, &raw_os);
                         let is_online = peer.online.unwrap_or(false);
-
-                        nodes.push((
-                            DynamicNode {
-                                name,
-                                ip,
-                                role,
-                                is_server,
-                                port: 22,
-                                os,
-                                shell,
-                            },
-                            is_online,
-                        ));
+                        let node = DynamicNode::from_tailscale(name, ip, &raw_os);
+                        nodes.push((node, is_online));
                     }
                 }
             }
@@ -300,40 +314,16 @@ async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
                 }
             } else if tailscale_online {
                 // Tailscale daemon confirmou que está online via WireGuard
-                NodeStatus {
-                    node,
-                    is_online: true,
-                    latency: None,
-                    tailscale_online,
-                    error_msg: Some("Ativo no Tailscale".to_string()),
-                }
+                NodeStatus::ts_active(node, tailscale_online, "Ativo no Tailscale")
             } else {
-                NodeStatus {
-                    node,
-                    is_online: false,
-                    latency: None,
-                    tailscale_online,
-                    error_msg: Some(e.to_string()),
-                }
+                NodeStatus::offline(node, tailscale_online, e.to_string())
             }
         }
         Err(_) => {
             if tailscale_online {
-                NodeStatus {
-                    node,
-                    is_online: true,
-                    latency: None,
-                    tailscale_online,
-                    error_msg: Some("Ativo no Tailscale (Porta com timeout)".to_string()),
-                }
+                NodeStatus::ts_active(node, tailscale_online, "Ativo no Tailscale (Porta com timeout)")
             } else {
-                NodeStatus {
-                    node,
-                    is_online: false,
-                    latency: None,
-                    tailscale_online,
-                    error_msg: Some("Timeout (>1500ms)".to_string()),
-                }
+                NodeStatus::offline(node, tailscale_online, "Timeout (>1500ms)")
             }
         }
     }
@@ -361,25 +351,10 @@ pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
 
 /// Imprime o relatório visual da malha Homelab no terminal
 pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
-    );
-    println!(
-        "{} {}",
-        "StenioSentinel — Topologia da Malha Tailscale (Mnemocine Homelab)"
-            .cyan()
-            .bold(),
-        format!("[{:.2?}]", total_duration).yellow()
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-            .bold()
+    let badge = format!("[{:.2?}]", total_duration);
+    crate::baseline::print_banner_with_badge(
+        "StenioSentinel — Topologia da Malha Tailscale (Mnemocine Homelab)",
+        &badge,
     );
 
     let mut online_count = 0;

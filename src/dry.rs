@@ -76,13 +76,8 @@ pub fn is_dry_eligible(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
 
     // Ignora pastas de build, cache, dependências e lockfiles
-    if path_str.contains("/target/")
-        || path_str.contains("/node_modules/")
-        || path_str.contains("/.venv/")
-        || path_str.contains("/.git/")
-        || path_str.contains("/dist/")
+    if crate::baseline::is_common_ignored_path(&path_str)
         || path_str.contains("/build/")
-        || path_str.contains("/.obsidian/")
         || path_str.contains("/llm_model_cache/")
         || path_str.contains("/migrations/")
         || path_str.ends_with(".d.ts")
@@ -287,13 +282,7 @@ pub fn scan_dry_directory(
     let t0 = Instant::now();
     let mut file_records = Vec::new();
 
-    let mut walker = ignore::WalkBuilder::new(root);
-    walker
-        .hidden(true)
-        .parents(true)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(true);
+    let walker = crate::baseline::create_standard_walker(root);
 
     for entry in walker.build().flatten() {
         if entry.file_type().map_or(false, |ft| ft.is_file()) {

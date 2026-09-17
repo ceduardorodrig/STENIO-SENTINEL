@@ -231,25 +231,22 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
 
             if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                 if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                    if name == "__pycache__" && !path_str.contains("/.venv/") {
-                        let sz = dir_size(p);
-                        items.push(CleanItem {
-                            path: p.to_path_buf(),
-                            rel_path: rel,
-                            bytes: sz,
-                            is_dir: true,
-                            category: CleanCategory::Cache,
-                            description: "Bytecode Python em cache (__pycache__)".to_string(),
-                        });
+                    let desc = if name == "__pycache__" && !path_str.contains("/.venv/") {
+                        Some("Bytecode Python em cache (__pycache__)")
                     } else if name == ".pytest_cache" {
-                        let sz = dir_size(p);
+                        Some("Cache do executor de testes Pytest")
+                    } else {
+                        None
+                    };
+
+                    if let Some(description) = desc {
                         items.push(CleanItem {
                             path: p.to_path_buf(),
                             rel_path: rel,
-                            bytes: sz,
+                            bytes: dir_size(p),
                             is_dir: true,
                             category: CleanCategory::Cache,
-                            description: "Cache do executor de testes Pytest".to_string(),
+                            description: description.to_string(),
                         });
                     }
                 }
@@ -295,21 +292,10 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
 
 /// Renderiza o relatório visual da zeladoria no terminal
 pub fn print_clean_report(report: &CleanReport) {
-    println!();
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
-    );
-    println!(
-        "{} — Zeladoria e Higiene Inteligente [{:?}]",
-        "StenioSentinel (Clean Engine v3.1.0)".bold().cyan(),
-        report.duration
-    );
-    println!(
-        "{}",
-        "══════════════════════════════════════════════════════════════════════════════"
-            .cyan()
+    let badge = format!("[{:?}]", report.duration);
+    crate::baseline::print_banner_with_badge(
+        "StenioSentinel (Clean Engine v3.1.0) — Zeladoria e Higiene Inteligente",
+        &badge,
     );
 
     let mode_desc = match report.mode.as_str() {

@@ -1,5 +1,3 @@
-use ignore::WalkBuilder;
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -30,26 +28,7 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
 
     // 1. Carregar taxonomia canônica de tags de mnemocine/_tags.md
     let tags_file = mnemocine_dir.join("_tags.md");
-    let mut valid_tags = HashSet::new();
-    if tags_file.is_file() {
-        if let Ok(content) = fs::read_to_string(&tags_file) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("- `#") || trimmed.starts_with("- `") {
-                    if let Some(first_tick) = trimmed.find('`') {
-                        if let Some(second_tick) = trimmed[first_tick + 1..].find('`') {
-                            let tag_clean = trimmed[first_tick + 1..first_tick + 1 + second_tick]
-                                .trim_start_matches('#')
-                                .trim();
-                            if !tag_clean.is_empty() {
-                                valid_tags.insert(tag_clean.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let mut valid_tags = crate::baseline::parse_tags_file(&tags_file);
 
     // Tags padrão universais
     valid_tags.insert("homelab".to_string());
@@ -59,15 +38,8 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
     valid_tags.insert("servidor".to_string());
 
     // 2. Coletar arquivos do mnemocine
-    let mut walker = WalkBuilder::new(&mnemocine_dir);
-    walker.hidden(true).git_ignore(true);
-
     let mut scanned_count = 0;
-    for result in walker.build().flatten() {
-        if !result.file_type().map_or(false, |ft| ft.is_file()) {
-            continue;
-        }
-        let path = result.into_path();
+    for path in crate::baseline::build_file_walker(&mnemocine_dir) {
         let path_str = path.to_string_lossy().to_string();
         if path_str.contains("/.stversions/") || path_str.contains("/.smart-env/") {
             continue;

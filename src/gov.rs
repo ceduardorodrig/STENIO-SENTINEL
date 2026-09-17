@@ -236,12 +236,7 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
         let path_str = path.to_string_lossy();
 
         // Ignora diretórios legítimos de build, target, git, obsidian e caches
-        if path_str.contains("/target/")
-            || path_str.contains("/node_modules/")
-            || path_str.contains("/.venv/")
-            || path_str.contains("/.git/")
-            || path_str.contains("/dist/")
-            || path_str.contains("/.obsidian/")
+        if crate::baseline::is_common_ignored_path(&path_str)
             || path_str.contains("/.stversions/")
             || path_str.contains("/temp/") // pasta temp/ canônica do Obsidian
             || path_str.contains("/scratch/") // diretório de scratch autorizado

@@ -51,6 +51,20 @@ impl Rule {
         self.fix_replacement = Some(fix.to_string());
         self
     }
+
+    pub fn matches_filter(&self, tag_filter: Option<&str>, only_rule: Option<&str>, ext: &str) -> bool {
+        if let Some(target) = only_rule {
+            if !self.id.eq_ignore_ascii_case(target) {
+                return false;
+            }
+        }
+        if let Some(tag) = tag_filter {
+            if self.tag != tag {
+                return false;
+            }
+        }
+        self.file_extensions.iter().any(|e| e == ext)
+    }
 }
 
 pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {

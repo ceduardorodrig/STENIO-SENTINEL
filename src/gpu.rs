@@ -137,21 +137,5 @@ fn query_host_gpu() -> Option<String> {
 }
 
 fn check_daemon_health(url: &str) -> bool {
-    let health_url = format!("{}/v1/health", url);
-    // Usa xh (alternativa Rust ao curl) conforme AGENTS.md.
-    let output = Command::new("xh") // stenio-ignore: ARCH-RUST-CMD-LEGACY
-        .args(["--timeout=1", "--quiet", &health_url])
-        .output()
-        .or_else(|_| {
-            Command::new("curl")
-                .args(["-s", "-m", "1", &health_url])
-                .output()
-        }); // stenio-ignore: ARCH-RUST-CMD-LEGACY
-    if let Ok(out) = output {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            return s.contains("\"status\":\"ok\"");
-        }
-    }
-    false
+    crate::health::http_get_health(url).map(|(ok, _)| ok).unwrap_or(false)
 }
