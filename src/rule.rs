@@ -269,9 +269,9 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     rules.push(Rule::new(
         "RUST-NO-UNWRAP",
         "rust",
-        Severity::Warning,
+        Severity::Error,
         "Uso de unwrap() ou expect() em Código de Produção",
-        "Chamadas a .unwrap() ou .expect() podem causar panics em runtime. Trate erros com '?', match, ou métodos com fallback.",
+        "Tanto .unwrap() quanto .expect() causam panics em runtime. Trocar unwrap por expect é proibido. Trate erros com '?', match, ou métodos com fallback (.unwrap_or_default).",
         r"\.(unwrap|expect)\(",
         &["rs"],
         Some("Substitua .unwrap()/.expect() por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros como .unwrap_or_default() / .ok_or(...)."),
@@ -295,8 +295,8 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "gov",
         Severity::Error,
         "Diretiva de Supressão ou Bypass Proibida",
-        "Proíbe o uso de @ts-ignore, @ts-nocheck, eslint-disable, type: ignore ou stenio-ignore: all para mascarar erros.",
-        r#"(?m)(//\s*@ts-(ignore|nocheck)|/\*\s*eslint-disable|#\s*type:\s*ignore|//\s*stenio-ignore:\s*all)"#,
+        "Proíbe o uso de @ts-ignore, @ts-nocheck, eslint-disable, type: ignore ou stenio-ignore inline para mascarar erros.",
+        r#"(?m)(//\s*@ts-(ignore|nocheck)|/\*\s*eslint-disable|#\s*type:\s*ignore|//\s*stenio-ignore:\s*(all|SEC-|AGENT-|ARCH-|RUST-|CONF-|TEST-)|#\s*stenio-ignore:\s*(all|SEC-|AGENT-|ARCH-|RUST-|CONF-|TEST-))"#,
         &["ts", "tsx", "js", "rs", "py", "sh"],
         Some("Corrija a tipagem ou a conformidade real do código. É proibido mascarar erros com diretivas de supressão."),
     ));

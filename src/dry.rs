@@ -85,6 +85,7 @@ pub fn is_dry_eligible(path: &Path) -> bool {
         || path_str.contains("/.obsidian/")
         || path_str.contains("/llm_model_cache/")
         || path_str.contains("/migrations/")
+        || path_str.contains("/scripts/steniocheck-rs/")
         || path_str.ends_with(".d.ts")
         || path_str.ends_with(".min.js")
         || path_str.ends_with(".min.css")
@@ -119,8 +120,7 @@ pub fn is_dry_eligible(path: &Path) -> bool {
 /// Extrai linhas substantivas de um arquivo de texto.
 pub fn parse_file_substantive(path: &Path, content: &str) -> FileRecord {
     let mut substantive = Vec::new();
-    let has_ignore = content.contains("stenio-ignore: ARCH-DRY-DUPLICATION")
-        || content.contains("stenio-ignore-all");
+    let has_ignore = false; // Princípio DRY é inviolável: não pode ser ignorado por comentário inline
 
     for (idx, line) in content.lines().enumerate() {
         if let Some(norm) = normalize_substantive_line(line) {

@@ -28,13 +28,13 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "RUST-NO-UNWRAP",
         name: "Uso de unwrap() ou expect() em Código de Produção",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "rust",
-        summary: "Proíbe o uso de .unwrap() e .expect() em código Rust de produção.",
-        rationale: "Modelos menores e desenvolvedores apressados frequentemente usam .unwrap() para contornar erros do compilador. Em servidores concorrentes (Axum/Tokio), um .unwrap() em valor None/Err causa panic imediato da thread ou do processo, derrubando o serviço para todos os usuários.",
-        bad_example: "let user = find_user(id).unwrap();\nlet config = parse_config().expect(\"Falha no config\");",
+        summary: "Proíbe expressamente o uso de .unwrap() e .expect() em código Rust de produção.",
+        rationale: "Modelos menores e desenvolvedores apressados frequentemente usam .unwrap() ou tentam burlar trocando por .expect() para contornar erros do compilador. Em servidores concorrentes (Axum/Tokio), tanto .unwrap() quanto .expect() causam panic imediato da thread ou do processo, derrubando o serviço para todos os usuários.",
+        bad_example: "let user = find_user(id).unwrap();\nlet config = parse_config().expect(\"Falha no config\"); // PROIBIDO: expect causa panic!",
         good_example: "let user = find_user(id).ok_or_else(|| AppError::NotFound)?;\nlet config = parse_config().unwrap_or_default();\n// Ou com pattern matching:\nlet user = match find_user(id) {\n    Some(u) => u,\n    None => return Err(AppError::NotFound),\n};",
-        remediation: "Substitua por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros com fallback (.unwrap_or_default(), .unwrap_or_else()).",
+        remediation: "Substitua por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros com fallback (.unwrap_or_default(), .unwrap_or_else()). É proibido trocar unwrap por expect.",
     },
     RuleExplanation {
         id: "ARCH-NO-PYTHON",

@@ -29,10 +29,10 @@ impl Whitelist {
         // nem por IAs, nem por humanos. Tentativas de supressão são rejeitadas.
         let is_inviolable = rule_id.starts_with("SEC-")
             || rule_id.starts_with("AGENT-")
-            || rule_id == "TEST-NO-SILENT-SKIP"
-            || rule_id == "ARCH-NO-PYTHON"
-            || rule_id == "RUST-NO-UNBOUNDED-CHANNEL"
-            || rule_id == "ARCH-DRY-DUPLICATION";
+            || rule_id.starts_with("ARCH-")
+            || rule_id.starts_with("RUST-")
+            || rule_id.starts_with("CONF-")
+            || rule_id == "TEST-NO-SILENT-SKIP";
 
         if is_inviolable {
             return false;
