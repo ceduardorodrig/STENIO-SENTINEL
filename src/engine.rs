@@ -114,9 +114,11 @@ impl Engine {
             .collect();
 
         // Verificação Automática de Isolamento de Escopo (Single Responsibility Worktree)
-        // Impede que uma LLM misture alterações de aplicação com adulterações no motor do Stênio
-        if let Some(v) = Self::check_scope_isolation(&file_paths) {
-            violations.push(v);
+        // Impede que uma LLM misture alterações de aplicação com adulterações no motor do Stênio em diffs/commits
+        if diff_target.is_some() || fast_mode {
+            if let Some(v) = Self::check_scope_isolation(&file_paths) {
+                violations.push(v);
+            }
         }
 
         let mut error_count = 0;
