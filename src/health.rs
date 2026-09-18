@@ -340,21 +340,15 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
 pub fn http_get_health(url: &str) -> Option<(bool, u128)> {
     let t0 = Instant::now();
     let health_url = format!("{}/v1/health", url);
-    // Usa xh (alternativa Rust ao curl) conforme AGENTS.md com fallback gracioso.
-    let output = Command::new("xh") // nosemgrep: ARCH-RUST-CMD-LEGACY
-        .args(["--timeout=1", "--quiet", &health_url])
+    let output = Command::new("xh")
+        .args(["-b", "--timeout=1", &health_url])
         .output()
-        .or_else(|_| {
-            Command::new("curl")
-                .args(["-s", "-m", "1", &health_url])
-                .output()
-        })
         .ok()?;
 
     let elapsed = t0.elapsed().as_millis();
     if output.status.success() {
         let s = String::from_utf8_lossy(&output.stdout);
-        Some((s.contains("\"status\":\"ok\""), elapsed))
+        Some((s.contains("\"status\"") && s.contains("\"ok\""), elapsed))
     } else {
         None
     }
