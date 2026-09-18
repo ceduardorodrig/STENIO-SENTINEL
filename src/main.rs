@@ -24,6 +24,7 @@ mod learner;
 mod mcp;
 mod mesh;
 mod migrations;
+mod ports;
 mod rule;
 mod typegen;
 mod vault;
@@ -118,6 +119,12 @@ struct Args {
         help = "Audita a malha Tailscale de todos os nós do Homelab via Tokio"
     )]
     mesh: bool,
+
+    #[arg(
+        long,
+        help = "Audita a superfície de ataque e portas abertas locais e remotas cruzando com o catálogo canônico"
+    )]
+    ports: bool,
 
     #[arg(
         long,
@@ -892,6 +899,13 @@ fn main() -> Result<()> {
         let start = std::time::Instant::now();
         let results = rt.block_on(mesh::audit_tailscale_mesh());
         mesh::print_mesh_report(&results, start.elapsed());
+        return Ok(());
+    }
+
+    // ── Modo Porteiro das Portas & Superfície de Ataque (--ports) ───────────
+    if args.ports {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(ports::run_ports_audit(&args.path))?;
         return Ok(());
     }
 

@@ -106,6 +106,14 @@ pub fn run_system_health() -> Result<()> {
     check_docker_health();
     println!();
 
+    // 8. Porteiro das Portas & Superfície de Ataque
+    println!(
+        "{}",
+        "── 🚪 Porteiro das Portas & Superfície de Ataque ──────────────────────".dimmed()
+    );
+    check_ports_health();
+    println!();
+
     println!(
         "{}",
         "✨ Diagnóstico concluído. Infraestrutura pronta para operação."
@@ -441,6 +449,51 @@ fn check_docker_health() {
         println!(
             "   ✨ Docker higienizado e enxuto ({:.2} MiB recuperável).",
             total_reclaimable as f64 / (1024.0 * 1024.0)
+        );
+    }
+}
+
+fn check_ports_health() {
+    let sockets = crate::ports::scan_local_active_sockets();
+    let catalog = crate::ports::load_port_catalog(std::path::Path::new("."));
+    let mut catalog_map = std::collections::HashMap::new();
+    for entry in &catalog {
+        catalog_map.entry(entry.port).or_insert(entry);
+    }
+
+    let mut open_count = 0;
+    let mut warn_count = 0;
+    let mut seen = std::collections::HashSet::new();
+
+    for sock in &sockets {
+        if !seen.insert(sock.port) {
+            continue;
+        }
+        open_count += 1;
+        let is_wide = sock.ip == "0.0.0.0" || sock.ip == "::";
+        let is_local = sock.ip.starts_with("127.0.0.") || sock.ip == "::1";
+
+        if let Some(entry) = catalog_map.get(&sock.port) {
+            let should_restrict = entry.bind.contains("127.0.0.1") || entry.bind.contains("tailscale0") || entry.bind.contains("100.");
+            if is_wide && should_restrict && entry.port != 2049 && entry.port != 111 && entry.port != 20048 {
+                warn_count += 1;
+            }
+        } else if !is_local && sock.port < 30000 && sock.port != 1716 && sock.port != 27036 && sock.port != 9863 {
+            warn_count += 1;
+        }
+    }
+
+    if warn_count == 0 {
+        println!(
+            "   ✨ {} portas ativas mapeadas. Superfície de ataque 100% conforme ao catálogo canônico.",
+            open_count.to_string().green().bold()
+        );
+    } else {
+        println!(
+            "   ⚠️  {} portas ativas ({} anomalia(s) ou bind 0.0.0.0 detectados). Use '{}' para auditar.",
+            open_count.to_string().yellow().bold(),
+            warn_count.to_string().red().bold(),
+            "stenio --ports".cyan().bold()
         );
     }
 }
