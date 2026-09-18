@@ -901,8 +901,6 @@ fn main() -> Result<()> {
             args.path.clone()
         } else if PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub").is_dir() {
             PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub")
-        } else if PathBuf::from("/mnt/NVME_PCI/sumaenimahub/SUMAENIMA-HUB").is_dir() {
-            PathBuf::from("/mnt/NVME_PCI/sumaenimahub/SUMAENIMA-HUB")
         } else {
             args.path.clone()
         };
@@ -1271,7 +1269,7 @@ fn main() -> Result<()> {
                     line_number: 1,
                     snippet: "".to_string(),
                     message: gpu_err,
-                    suggestion: Some("Verifique o arquivo GGML em /mnt/NVME_PCI/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
+                    suggestion: Some("Verifique o arquivo GGML em /mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
                 });
             }
         }
