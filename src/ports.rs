@@ -204,18 +204,34 @@ fn fallback_catalog() -> Vec<PortEntry> {
 
 /// Escaneia sockets ouvindo ativamente na máquina local via ss
 pub fn scan_local_active_sockets() -> Vec<ActiveSocket> {
-    let mut sockets = Vec::new();
-
     let output = match Command::new("ss").args(["-Htlpn"]).output() {
         Ok(o) if o.status.success() => o,
-        _ => return sockets,
+        _ => return Vec::new(),
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ss_output(&stdout)
+}
+
+/// Faz o parsing da saída tabular do comando ss (-Htlpn ou -tlpn)
+pub fn parse_ss_output(stdout: &str) -> Vec<ActiveSocket> {
+    let mut sockets = Vec::new();
     for line in stdout.lines() {
-        let cols: Vec<&str> = line.split_whitespace().collect();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("State") || trimmed.starts_with("Netid") {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split_whitespace().collect();
         if cols.len() >= 4 {
-            let addr_col = cols[3];
+            // No ss -Htlpn ou -tlpn com State Recv-Q Send-Q Local Address:Port Peer Address:Port
+            let addr_col = if cols[0] == "LISTEN" && cols.len() >= 4 {
+                cols[3]
+            } else if cols.len() >= 4 && cols[0].starts_with("tcp") || cols[0].starts_with("udp") {
+                cols[4]
+            } else {
+                cols[3]
+            };
+
             let (ip, port) = parse_addr(addr_col);
             if port > 0 {
                 let proc_name = if line.contains("users:((") {
@@ -236,7 +252,6 @@ pub fn scan_local_active_sockets() -> Vec<ActiveSocket> {
             }
         }
     }
-
     sockets
 }
 
@@ -255,6 +270,20 @@ fn parse_addr(addr: &str) -> (String, u16) {
     } else {
         ("0.0.0.0".to_string(), 0)
     }
+}
+
+/// Extrai links de autenticação gerados pelo Tailscale SSH
+fn extract_tailscale_auth_url(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some(idx) = line.find("https://login.tailscale.com/a/") {
+            let url_part = &line[idx..];
+            let end_idx = url_part
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                .unwrap_or(url_part.len());
+            return Some(url_part[..end_idx].to_string());
+        }
+    }
+    None
 }
 
 /// Executa a auditoria completa do Porteiro das Portas (Attack Surface Management)
@@ -372,39 +401,191 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
 
     println!();
 
-    // ── 2. Auditoria Remota na Malha Tailscale (Multi-Node Probing) ──────────
+    // ── 2. Auditoria Remota na Malha Tailscale & SSH Deep Inspection ──────────
     println!(
         "{}",
-        "── 🌐 Auditoria de Portas Remotas via Malha Tailscale (WireGuard) ─────".dimmed()
+        "── 🌐 Auditoria Remota dos Nós Homelab via Tailscale & SSH ─────────────".dimmed()
     );
 
     let remote_nodes = [
-        ("kavure", "100.124.146.77", vec![(5432, "PostgreSQL"), (6379, "Valkey"), (9090, "Core API")]),
-        ("ybyra", "100.66.224.34", vec![(80, "Nginx HTTP"), (443, "Nginx HTTPS")]),
-        ("ybytu", "100.115.253.109", vec![(53, "AdGuard DNS"), (3000, "AdGuard Web"), (3002, "Uptime Kuma")]),
-        ("kuaray", "100.94.209.99", vec![(8123, "Home Assistant")]),
+        ("kavure", "100.124.146.77"),
+        ("ybyra", "100.66.224.34"),
+        ("ybytu", "100.115.253.109"),
+        ("kuaray", "100.94.209.99"),
     ];
 
-    for (node_name, ip, targets) in remote_nodes {
+    for (node_name, ip) in remote_nodes {
         println!("   [{}] {} ({})", "NÓ".cyan().bold(), node_name.bold(), ip.dimmed());
-        for (port, svc_name) in targets {
-            let addr = format!("{}:{}", ip, port);
-            let t0 = std::time::Instant::now();
-            let status = match timeout(Duration::from_millis(400), TcpStream::connect(&addr)).await {
-                Ok(Ok(_stream)) => {
-                    let lat = t0.elapsed();
-                    format!("{} ({:.1}ms)", "ABERTA / ONLINE".green().bold(), lat.as_secs_f64() * 1000.0)
-                }
-                Ok(Err(_e)) => "FECHADA / REPOUSO".dimmed().to_string(),
-                Err(_) => "TIMEOUT / BLOQUEADA".yellow().dimmed().to_string(),
-            };
 
-            println!(
-                "      {:<10} {:<24} - {}",
-                format!(":{}", port).white().bold(),
-                svc_name.dimmed(),
-                status
+        // 1. Tentar SSH para raio-X completo interno com detecção de re-auth Tailscale
+        let ssh_attempt = Command::new("ssh")
+            .args([
+                "-o", "ConnectTimeout=4",
+                "-o", "BatchMode=no",
+                "-o", "StrictHostKeyChecking=accept-new",
+                node_name,
+                "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn",
+            ])
+            .output();
+
+        let mut ssh_success = false;
+
+        if let Ok(ref output) = ssh_attempt {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             );
+
+            // Verificar se a Tailscale gerou link de autenticação interativo
+            if let Some(auth_url) = extract_tailscale_auth_url(&combined) {
+                println!(
+                    "      ⚠️  {} {}",
+                    "AUTENTICAÇÃO TAILSCALE SSH NECESSÁRIA:".yellow().bold(),
+                    auth_url.cyan().underline().bold()
+                );
+                println!(
+                    "         {}",
+                    "👉 Abra o link acima no navegador para autorizar o acesso SSH a este nó."
+                        .dimmed()
+                );
+            }
+
+            if output.status.success() && !output.stdout.is_empty() {
+                let stdout_str = String::from_utf8_lossy(&output.stdout);
+                let sockets = parse_ss_output(&stdout_str);
+
+                if !sockets.is_empty() {
+                    ssh_success = true;
+                    let mut node_active_ports = HashMap::new();
+
+                    for sock in sockets {
+                        if node_active_ports.contains_key(&sock.port) {
+                            continue;
+                        }
+                        node_active_ports.insert(sock.port, sock.clone());
+
+                        let proc_label = sock
+                            .process
+                            .as_deref()
+                            .unwrap_or("sistema / docker")
+                            .cyan();
+
+                        let entries_for_port = catalog_map.get(&sock.port);
+                        let node_entry = entries_for_port.and_then(|v| {
+                            v.iter().find(|e| e.host == node_name)
+                        });
+
+                        if let Some(entry) = node_entry {
+                            let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
+                            let is_wan_allowed = (node_name == "ybyra" && (sock.port == 80 || sock.port == 443))
+                                || entry.bind.contains("LAN")
+                                || entry.bind.contains("Swarm Ingress")
+                                || sock.port == 7946;
+
+                            if is_wide_open && !is_wan_allowed {
+                                alerts_count += 1;
+                                println!(
+                                    "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                    format!("{}/{}", sock.port, sock.proto).yellow().bold(),
+                                    sock.ip.red().bold(),
+                                    entry.service.white().bold(),
+                                    "⚠️ BIND 0.0.0.0 NÃO AUTORIZADO".red().bold(),
+                                    entry.doc_link.dimmed()
+                                );
+                            } else {
+                                println!(
+                                    "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                    format!("{}/{}", sock.port, sock.proto).green().bold(),
+                                    sock.ip.dimmed(),
+                                    entry.service.white().bold(),
+                                    "CONFORME".green().bold(),
+                                    entry.doc_link.dimmed()
+                                );
+                            }
+                        } else if sock.ip.starts_with("127.0.0.") || sock.ip == "::1" {
+                            println!(
+                                "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                format!("{}/{}", sock.port, sock.proto).dimmed(),
+                                sock.ip.dimmed(),
+                                proc_label,
+                                "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
+                                "Não exposto à rede externa".dimmed()
+                            );
+                        } else if sock.port > 30000 || sock.port == 22 {
+                            println!(
+                                "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                format!("{}/{}", sock.port, sock.proto).blue(),
+                                sock.ip.dimmed(),
+                                proc_label,
+                                if sock.port == 22 { "SSH DAEMON".blue() } else { "CLIENTE / DESKTOP EFÊMERO".blue() },
+                                "Acesso de gestão / aplicação".dimmed()
+                            );
+                        } else {
+                            alerts_count += 1;
+                            println!(
+                                "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                format!("{}/{}", sock.port, sock.proto).red().bold(),
+                                sock.ip.yellow().bold(),
+                                proc_label,
+                                "PORTA ÓRFÃ NÃO CATALOGADA".red().bold(),
+                                "Cadastrar em mnemocine/network/ports.md".yellow()
+                            );
+                        }
+                    }
+
+                    // Reportar portas catalogadas em repouso no nó remoto
+                    for entry in &catalog {
+                        if entry.host == node_name && !node_active_ports.contains_key(&entry.port) {
+                            println!(
+                                "      {:<10} [{:<15}] {:<22} | {} | {}",
+                                format!("{}/{}", entry.port, entry.proto).dimmed(),
+                                entry.bind.dimmed(),
+                                entry.service.dimmed(),
+                                "EM REPOUSO / OFFLINE".dimmed(),
+                                entry.doc_link.dimmed()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Se o SSH não respondeu ou falhou, fallback transparente para TCP Probing
+        if !ssh_success {
+            println!(
+                "      {}",
+                "ℹ️  SSH indisponível ou pendente — executando TCP Probing direto via Tailnet..."
+                    .dimmed()
+            );
+
+            let node_catalog_entries: Vec<&PortEntry> =
+                catalog.iter().filter(|e| e.host == node_name).collect();
+
+            for entry in node_catalog_entries {
+                let addr = format!("{}:{}", ip, entry.port);
+                let t0 = std::time::Instant::now();
+                let status =
+                    match timeout(Duration::from_millis(400), TcpStream::connect(&addr)).await {
+                        Ok(Ok(_stream)) => {
+                            let lat = t0.elapsed();
+                            format!(
+                                "{} ({:.1}ms)",
+                                "ABERTA / ONLINE".green().bold(),
+                                lat.as_secs_f64() * 1000.0
+                            )
+                        }
+                        Ok(Err(_e)) => "FECHADA / REPOUSO".dimmed().to_string(),
+                        Err(_) => "TIMEOUT / BLOQUEADA".yellow().dimmed().to_string(),
+                    };
+
+                println!(
+                    "      {:<10} {:<24} - {}",
+                    format!(":{}", entry.port).white().bold(),
+                    entry.service.dimmed(),
+                    status
+                );
+            }
         }
     }
 
