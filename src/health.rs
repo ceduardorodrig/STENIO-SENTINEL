@@ -357,7 +357,8 @@ pub fn http_get_health(url: &str) -> Option<(bool, u128)> {
     let t0 = Instant::now();
     let health_url = format!("{}/v1/health", url);
     let output = Command::new("xh")
-        .args(["-b", "--timeout=1", &health_url])
+        .args(["get", &health_url, "-b", "--timeout=1"])
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
 
