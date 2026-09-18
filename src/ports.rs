@@ -300,8 +300,9 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
             // Verificar se o bind é seguro
             let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
             let should_be_restricted = entry.bind.contains("127.0.0.1") || entry.bind.contains("tailscale0") || entry.bind.contains("100.");
+            let is_lan_authorized = entry.bind.contains("LAN") || entry.bind.contains("Swarm Ingress") || entry.port == 7946;
 
-            if is_wide_open && should_be_restricted && entry.port != 2049 && entry.port != 111 && entry.port != 20048 {
+            if is_wide_open && should_be_restricted && !is_lan_authorized {
                 // Alerta de exposição
                 alerts_count += 1;
                 println!(
