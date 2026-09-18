@@ -395,12 +395,14 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
         let path = result.into_path();
         let path_str = path.to_string_lossy();
 
-        // Exclusões explícitas adicionais (proteção contra stversions não cobertos por .stignore)
+        // Exclusões explícitas adicionais (proteção contra stversions, archives e external docs)
         if path_str.contains("/.stversions/")
             || path_str.contains("/.smart-env/")
             || path_str.contains("/target/")
             || path_str.contains("/node_modules/")
             || path_str.contains("/.venv/")
+            || path_str.contains("/archive/")
+            || path_str.contains("/external/")
         {
             continue;
         }
