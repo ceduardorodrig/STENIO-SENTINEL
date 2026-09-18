@@ -98,6 +98,14 @@ pub fn run_system_health() -> Result<()> {
     }
     println!();
 
+    // 7. Infraestrutura Docker & Higiene de Imagens
+    println!(
+        "{}",
+        "── 🐳 Infraestrutura Docker & Higiene de Imagens ──────────────────────".dimmed()
+    );
+    check_docker_health();
+    println!();
+
     println!(
         "{}",
         "✨ Diagnóstico concluído. Infraestrutura pronta para operação."
@@ -376,3 +384,64 @@ fn check_http_service(name: &str, url: &str, role: &str) {
         "OFFLINE (em repouso)".dimmed()
     );
 }
+
+fn check_docker_health() {
+    let output = match Command::new("docker")
+        .args(["system", "df", "--format", "{{json .}}"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            println!(
+                "   {:<25} - {}",
+                "Docker Daemon".bold(),
+                "Inativo ou não instalado".dimmed()
+            );
+            return;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut total_reclaimable = 0u64;
+
+    for line in stdout.lines() {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            let row_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("");
+            let total = val.get("TotalCount").and_then(|v| v.as_str()).unwrap_or("0");
+            let active = val.get("Active").and_then(|v| v.as_str()).unwrap_or("0");
+            let size = val.get("Size").and_then(|v| v.as_str()).unwrap_or("0B");
+            let reclaimable = val.get("Reclaimable").and_then(|v| v.as_str()).unwrap_or("0B");
+
+            let rec_bytes = crate::clean::parse_docker_size(reclaimable);
+            total_reclaimable += rec_bytes;
+
+            let badge = if rec_bytes > 1024 * 1024 * 1024 {
+                format!("{} ({})", size.bold(), reclaimable.yellow().bold())
+            } else {
+                format!("{} ({})", size.bold(), reclaimable.dimmed())
+            };
+
+            println!(
+                "   {:<25} [{:>2} ativos / {:>2} total] - {}",
+                format!("Docker {}", row_type).bold(),
+                active.green().bold(),
+                total.white(),
+                badge
+            );
+        }
+    }
+
+    if total_reclaimable > 1024 * 1024 * 1024 {
+        println!(
+            "   ⚠️  {} acumulado em imagens órfãs/cache. Dica: use '{}' para limpar.",
+            crate::clean::format_bytes(total_reclaimable).yellow().bold(),
+            "stenio --clean docker".cyan().bold()
+        );
+    } else {
+        println!(
+            "   ✨ Docker higienizado e enxuto ({:.2} MiB recuperável).",
+            total_reclaimable as f64 / (1024.0 * 1024.0)
+        );
+    }
+}
+

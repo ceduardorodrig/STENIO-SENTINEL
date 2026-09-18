@@ -200,7 +200,7 @@ struct Args {
         long,
         num_args = 0..=1,
         default_missing_value = "safe",
-        help = "Zeladoria e Higiene Inteligente: limpa caches, arquivos temporários (*.tmp, *.bak) e árvores de build Rust (target/debug, incremental). Modos: 'safe' (padrão), 'targets' (apenas build targets), 'temp' (apenas arquivos temporários), 'all' (limpeza profunda total)"
+        help = "Zeladoria e Higiene Inteligente: limpa caches, arquivos temporários (*.tmp, *.bak), árvores de build Rust (target/) e lixo Docker (imagens dangling, containers parados). Modos: 'safe' (padrão), 'targets', 'temp', 'docker', 'all'"
     )]
     clean: Option<String>,
 

@@ -9,6 +9,7 @@ pub enum CleanCategory {
     RustTarget,
     TempJunk,
     Cache,
+    Docker,
 }
 
 impl CleanCategory {
@@ -17,6 +18,7 @@ impl CleanCategory {
             CleanCategory::RustTarget => "Build Rust",
             CleanCategory::TempJunk => "Arquivo Temporário",
             CleanCategory::Cache => "Cache Descartável",
+            CleanCategory::Docker => "Docker Descartável",
         }
     }
 }
@@ -86,12 +88,38 @@ fn is_temp_file(name: &str) -> bool {
         || (name.ends_with(".pyc") || name.ends_with(".pyo"))
 }
 
+/// Converte strings de tamanho do Docker (ex: "1.849GB (52%)", "5.583MB", "117.5MB", "9.106kB") em bytes
+pub fn parse_docker_size(size_str: &str) -> u64 {
+    let clean = size_str.split('(').next().unwrap_or("").trim();
+    if clean.is_empty() || clean == "0B" {
+        return 0;
+    }
+    let lower = clean.to_lowercase();
+    let (num_part, multiplier) = if lower.ends_with("gib") || lower.ends_with("gb") {
+        (lower.trim_end_matches("gib").trim_end_matches("gb").trim(), 1024 * 1024 * 1024)
+    } else if lower.ends_with("mib") || lower.ends_with("mb") {
+        (lower.trim_end_matches("mib").trim_end_matches("mb").trim(), 1024 * 1024)
+    } else if lower.ends_with("kib") || lower.ends_with("kb") {
+        (lower.trim_end_matches("kib").trim_end_matches("kb").trim(), 1024)
+    } else if lower.ends_with('b') {
+        (lower.trim_end_matches('b').trim(), 1)
+    } else {
+        (lower.as_str(), 1)
+    };
+    if let Ok(val) = num_part.parse::<f64>() {
+        (val * multiplier as f64) as u64
+    } else {
+        0
+    }
+}
+
 /// Executa a varredura e higienização inteligente do workspace
 pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> {
     let t0 = Instant::now();
     let mut items = Vec::new();
     let clean_targets = mode == "targets" || mode == "safe" || mode == "all";
     let clean_temps = mode == "temp" || mode == "safe" || mode == "all";
+    let clean_docker = mode == "docker" || mode == "safe" || mode == "all";
     let deep_target_wipe = mode == "all" || mode == "targets";
 
     // ── 1. Localização e Limpeza de Pastas target/ Rust ─────────────────────
@@ -268,15 +296,89 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
         }
     }
 
+    // ── 2.5. Localização de Desperdício Docker (Imagens órfãs, containers e cache) ──
+    if clean_docker {
+        if let Ok(output) = std::process::Command::new("docker")
+            .args(["system", "df", "--format", "{{json .}}"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                        let row_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("");
+                        let active = val.get("Active").and_then(|v| v.as_str()).unwrap_or("0");
+                        let total = val.get("TotalCount").and_then(|v| v.as_str()).unwrap_or("0");
+                        let reclaimable = val.get("Reclaimable").and_then(|v| v.as_str()).unwrap_or("");
+                        let bytes = parse_docker_size(reclaimable);
+
+                        if bytes > 0 {
+                            match row_type {
+                                "Images" => {
+                                    items.push(CleanItem {
+                                        path: PathBuf::from("docker://images/dangling"),
+                                        rel_path: "docker/images (dangling & unused)".to_string(),
+                                        bytes,
+                                        is_dir: false,
+                                        category: CleanCategory::Docker,
+                                        description: format!("Imagens Docker descartáveis ({}/{} ativas)", active, total),
+                                    });
+                                }
+                                "Containers" => {
+                                    items.push(CleanItem {
+                                        path: PathBuf::from("docker://containers/stopped"),
+                                        rel_path: "docker/containers (stopped)".to_string(),
+                                        bytes,
+                                        is_dir: false,
+                                        category: CleanCategory::Docker,
+                                        description: format!("Containers finalizados ({}/{} ativos)", active, total),
+                                    });
+                                }
+                                "Build Cache" if mode == "docker" || mode == "all" => {
+                                    items.push(CleanItem {
+                                        path: PathBuf::from("docker://builder/cache"),
+                                        rel_path: "docker/build-cache".to_string(),
+                                        bytes,
+                                        is_dir: false,
+                                        category: CleanCategory::Docker,
+                                        description: "Cache intermediário de builds Docker".to_string(),
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── 3. Remoção Física (quando não for dry-run) ──────────────────────────
     let total_bytes: u64 = items.iter().map(|i| i.bytes).sum();
 
     if !dry_run {
         for item in &items {
+            if item.category == CleanCategory::Docker {
+                continue;
+            }
             if item.is_dir {
                 let _ = fs::remove_dir_all(&item.path);
             } else {
                 let _ = fs::remove_file(&item.path);
+            }
+        }
+
+        if clean_docker {
+            let _ = std::process::Command::new("docker")
+                .args(["image", "prune", "-f"])
+                .output();
+            let _ = std::process::Command::new("docker")
+                .args(["container", "prune", "-f"])
+                .output();
+            if mode == "docker" || mode == "all" {
+                let _ = std::process::Command::new("docker")
+                    .args(["builder", "prune", "-f"])
+                    .output();
             }
         }
     }
@@ -301,8 +403,9 @@ pub fn print_clean_report(report: &CleanReport) {
     let mode_desc = match report.mode.as_str() {
         "targets" => "Build Targets Rust",
         "temp" => "Arquivos Temporários e Caches",
-        "all" => "Limpeza Profunda Total (Targets + Caches + Temporários)",
-        _ => "Modo Seguro (Debug/Incremental + Temporários)",
+        "docker" => "Higiene do Ecossistema Docker (Imagens + Containers + Cache)",
+        "all" => "Limpeza Profunda Total (Targets + Caches + Temporários + Docker)",
+        _ => "Modo Seguro (Debug/Incremental + Temporários + Docker Prune)",
     };
 
     println!(
@@ -347,6 +450,7 @@ pub fn print_clean_report(report: &CleanReport) {
             CleanCategory::RustTarget => item.category.label().magenta().bold(),
             CleanCategory::TempJunk => item.category.label().red().bold(),
             CleanCategory::Cache => item.category.label().blue().bold(),
+            CleanCategory::Docker => item.category.label().cyan().bold(),
         };
 
         println!(
@@ -413,6 +517,15 @@ mod tests {
         assert!(is_temp_file(".DS_Store"));
         assert!(!is_temp_file("main.rs"));
         assert!(!is_temp_file("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_parse_docker_size() {
+        assert_eq!(parse_docker_size("1.849GB (52%)"), (1.849 * 1024.0 * 1024.0 * 1024.0) as u64);
+        assert_eq!(parse_docker_size("5.583MB (73%)"), (5.583 * 1024.0 * 1024.0) as u64);
+        assert_eq!(parse_docker_size("117.5MB"), (117.5 * 1024.0 * 1024.0) as u64);
+        assert_eq!(parse_docker_size("9.106kB (100%)"), (9.106 * 1024.0) as u64);
+        assert_eq!(parse_docker_size("0B"), 0);
     }
 }
 
