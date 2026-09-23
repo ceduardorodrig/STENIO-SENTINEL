@@ -15,6 +15,17 @@ pub struct RuleExplanation {
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
+        id: "DOC-VIBE-DISCLAIMER",
+        name: "Disclaimer Padronizado de Governança StênioSentinel Ausente ou Inconsistente",
+        severity: "WARN",
+        tag: "doc",
+        summary: "Exige o disclaimer padronizado de governança humana-IA ('Yes... This is a Vibe Coded project') em repositórios públicos.",
+        rationale: "Garante transparência sobre a governança de código assistido por IA e autoria em projetos open-source e públicos sob o ecossistema de Carlos Eduardo Rodrigues, destacando o StênioSentinel como guardião de integridade.",
+        bad_example: "> 🔮 **Vibe Coded with StenioSentinel**\n# Ou README sem qualquer menção de governança.",
+        good_example: "<div align=\"center\">\n\n> **Yes... This is a Vibe Coded project**\n>\n> Governed by 🤖 **StenioSentinel** (our Rust-based AI Governance Sentinel) with **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)).\n\n</div>",
+        remediation: "Insira o bloco padronizado HTML centralizado no final do arquivo README.md.",
+    },
+    RuleExplanation {
         id: "SEC-SUDO",
         name: "Atenção ao Uso de Sudo e Privilégios de Sistema",
         severity: "WARN",
@@ -552,6 +563,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         bad_example: "sumaenimahub/SUMAENIMA-HUB\nsumaenimahub/STIRPS-PETRI\napp/MyFolder",
         good_example: "sumaenimahub/sumaenima-hub\nsumaenimahub/stirps-petri\napp/my-folder",
         remediation: "Renomeie a pasta para minúsculas usando hífens em vez de sublinhados ou caixa alta (ex: 'sumaenima-hub', 'stirps-petri').",
+    },
+    RuleExplanation {
+        id: "OPS-STATIC-PARITY",
+        name: "Deriva de Paridade Estática do Frontend em Produção",
+        severity: "WARN",
+        tag: "infra",
+        summary: "Detecta quando a borda remota (Ybyra/Kavure) está servindo uma versão legada do bundle SPA em relação à compilação local.",
+        rationale: "Quando o frontend React/Vite é compilado com novos recursos, otimizações de cache (como espelhamento local do Arandu) ou endpoints de API atualizados, mas os arquivos estáticos não foram sincronizados nos nós de borda (/var/www/sumaenima), clientes continuam baixando scripts defasados. Isso provoca degradação severa de desempenho, erros visuais e chamadas a contratos de API inexistentes.",
+        bad_example: "Compilar novas otimizações no frontend mas deixar os nós de borda com index-DEcIyMkJ.js antigo.",
+        good_example: "stenio --deploy front  # Compila e sincroniza atômica e instantaneamente com Ybyra e Kavure via rsync e recarrega Nginx",
+        remediation: "Execute 'stenio --deploy front' para sincronizar atômica e instantaneamente os nós de borda (Ybyra/Kavure) e recarregar o Nginx sem downtime.",
+    },
+    RuleExplanation {
+        id: "RUST-CANONICAL-REMOTE",
+        name: "Comando Remoto Raw Proibido (Use crate::remote)",
+        severity: "ERROR",
+        tag: "rust",
+        summary: "Proíbe Command::new(\"ssh\") e Command::new(\"rsync\") dispersos no código; exige o driver unificado crate::remote.",
+        rationale: "Comandos remotos ad-hoc sem padronização de flags de rede causam congelamento silencioso de processos quando o Tailscale SSH exige renovação de credenciais via web. O driver 'crate::remote' encapsula timeouts estritos, flags canônicas (-o BatchMode=yes) e captura inteligente da URL de reautenticação sem travar agentes de IA ou daemons.",
+        bad_example: "let output = Command::new(\"ssh\").arg(\"ybyra\").arg(\"ls\").output();\nlet rsync = Command::new(\"rsync\").args(&[\"-avz\", src, dest]).status();",
+        good_example: "let outcome = crate::remote::run_ssh(\"ybyra\", \"ls\", 5);\nlet outcome = crate::remote::run_rsync(src, dest, 10);",
+        remediation: "Substitua a chamada direta de Command::new(\"ssh\") ou Command::new(\"rsync\") pelas funções padronizadas 'crate::remote::run_ssh' ou 'crate::remote::run_rsync'.",
     },
 ];
 

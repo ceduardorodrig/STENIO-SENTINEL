@@ -33,12 +33,23 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
             base.join("SUMAENIMA-HUB/AGENTS.md")
         } else if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
             base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
-        } else if base.join("../AGENTS.md").is_file() {
-            base.join("../AGENTS.md")
-        } else if base.join("../../AGENTS.md").is_file() {
-            base.join("../../AGENTS.md")
         } else {
-            base.join("AGENTS.md")
+            // Sobe recursivamente pela árvore de diretórios até encontrar o AGENTS.md raiz (suporta subpastas profundas)
+            let mut curr = base.to_path_buf();
+            let mut found = None;
+            for _ in 0..10 {
+                let candidate = curr.join("AGENTS.md");
+                if candidate.is_file() {
+                    found = Some(candidate);
+                    break;
+                }
+                if let Some(parent) = curr.parent() {
+                    curr = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| base.join("AGENTS.md"))
         }
     };
 
@@ -67,6 +78,34 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     } else {
                         let err =
                             "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
+                        messages.push(err.clone());
+                        errors.push(err);
+                    }
+                } else if content.contains("currículo")
+                    || content.contains("curriculum-vitae")
+                    || content.contains("WITH-SMOOTH-MOTION")
+                    || (content.contains("StenioSentinel")
+                        && !content.contains("sumaenima-hub")
+                        && !content.contains("SUMAENIMA-HUB"))
+                {
+                    // AGENTS.md de Repositório Satélite / Público especializado
+                    for line in content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                            laws_count += 1;
+                        }
+                    }
+
+                    if laws_count >= 5 {
+                        messages.push(format!(
+                            "✅ AGENTS.md satélite íntegro com {} regras específicas preservadas",
+                            laws_count
+                        ));
+                    } else {
+                        let err = format!(
+                            "❌ AGENTS.md satélite contém apenas {} regras (esperado >= 5).",
+                            laws_count
+                        );
                         messages.push(err.clone());
                         errors.push(err);
                     }
@@ -240,8 +279,9 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             || path_str.contains("/.stversions/")
             || path_str.contains("/temp/") // pasta temp/ canônica do Obsidian
             || path_str.contains("/scratch/") // diretório de scratch autorizado
-            || path_str.contains("/brain/")
-        // brain artifacts
+            || path_str.contains("/brain/") // brain artifacts
+            || path_str.contains("/legado/") // histórico legado arquivado
+            || path_str.contains("/archive/") // arquivos históricos arquivados
         {
             continue;
         }

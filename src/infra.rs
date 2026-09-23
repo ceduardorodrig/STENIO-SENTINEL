@@ -266,6 +266,25 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         }
     }
 
+    // ── 7. Verificação de Paridade Estática de Produção (OPS-STATIC-PARITY) ──
+    if let Some(parity) = crate::deploy::check_static_parity(root) {
+        if !parity.in_sync {
+            violations.push(Violation {
+                rule_id: "OPS-STATIC-PARITY".to_string(),
+                rule_name: "Deriva de Paridade Estática do Frontend em Produção".to_string(),
+                severity: Severity::Warning,
+                file_path: "app/frontend-v2/dist/index.html".to_string(),
+                line_number: 1,
+                snippet: format!("Local: {} | Remoto: {}", parity.local_bundle, parity.remote_bundle),
+                message: format!(
+                    "Nó de borda em produção está servindo bundle legado ('{}'), divergente da build local ('{}').",
+                    parity.remote_bundle, parity.local_bundle
+                ),
+                suggestion: Some("Sincronize a produção imediatamente executando: stenio --deploy front".to_string()),
+            });
+        }
+    }
+
     if violations.is_empty() {
         messages.push(format!(
             "✅ {} arquivos de infraestrutura (Compose/Systemd/SOPS) auditados e conformes.",

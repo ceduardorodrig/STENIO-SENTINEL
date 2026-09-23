@@ -136,9 +136,9 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
         if let Ok(content) = fs::read_to_string(&readme_path) {
             let has_thread_pt =
                 content.contains("O Fio da Meada") || content.contains("Fio da Meada");
-            let has_thread_en = content.contains("The Thread");
+            let has_thread_en = content.contains("The Thread") || content.contains("Common Thread");
 
-            if !has_thread_pt || !has_thread_en {
+            if !has_thread_pt && !has_thread_en {
                 violations.push(Violation {
                     rule_id: "CV-README-THREAD".to_string(),
                     rule_name: "Narrativa Contínua do README Ausente".to_string(),
@@ -146,8 +146,8 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
                     file_path: "README.md".to_string(),
                     line_number: 1,
                     snippet: "".to_string(),
-                    message: "O README deve manter a história contínua em ambas as línguas ('O Fio da Meada' e 'The Thread').".to_string(),
-                    suggestion: Some("Atualize a seção 'O Fio da Meada' / 'The Thread' no README.md.".to_string()),
+                    message: "O README deve manter a narrativa contínua ('The Thread' ou 'O Fio da Meada').".to_string(),
+                    suggestion: Some("Atualize a seção 'The Thread' / 'O Fio da Meada' no README.md.".to_string()),
                 });
             }
         }

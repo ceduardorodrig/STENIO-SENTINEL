@@ -398,6 +398,12 @@ impl Engine {
                 }
             }
 
+            if rule.id == "RUST-CANONICAL-REMOTE" {
+                if path_str.ends_with("/remote.rs") || path_str.ends_with("/src/remote.rs") {
+                    continue;
+                }
+            }
+
             if rule.id == "ARCH-NO-PYTHON"
                 || rule.id.starts_with("SEC-BAN-")
                 || rule.id == "ARCH-BANNED-MODULES"

@@ -1,8 +1,15 @@
 [package]
 name = "stenio-sentinel"
 version = "3.1.0"
-edition = "2021"
-description = "Universal Governance & Homelab Sentinel in Rust"
+edition = "2024"
+description = "Sub-millisecond static governance engine, anti-bypass quality gate, and architectural integrity sentinel for AI coding agents written in Rust 2024."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ceduardorodrig/STENIO-SENTINEL"
+homepage = "https://github.com/ceduardorodrig/STENIO-SENTINEL"
+readme = "README.md"
+authors = ["Carlos Eduardo Rodrigues <ceduardorodrig@gmail.com>"]
+keywords = ["governance", "ai-agents", "linter", "static-analysis", "code-quality"]
+categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
 name = "stenio"
@@ -24,12 +31,9 @@ serde_yaml = "0.9"
 tokio = { version = "1.38", features = ["rt-multi-thread", "net", "time", "macros"] }
 notify = "6.1"
 
-
-
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
-

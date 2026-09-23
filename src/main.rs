@@ -9,6 +9,7 @@ mod clean;
 mod config;
 mod context;
 mod cv;
+mod deploy;
 mod doc;
 mod dry;
 mod engine;
@@ -17,6 +18,7 @@ mod frontend;
 mod gov;
 mod gpu;
 mod guardian;
+mod gaming;
 mod health;
 mod homelab;
 mod infra;
@@ -25,6 +27,7 @@ mod mcp;
 mod mesh;
 mod migrations;
 mod ports;
+pub mod remote;
 mod rule;
 mod typegen;
 mod vault;
@@ -113,6 +116,12 @@ struct Args {
         help = "Executar raio-X completo de infraestrutura, disco, RAM, GPU e serviços"
     )]
     health: bool,
+
+    #[arg(
+        long,
+        help = "Executar raio-X de Gaming Health (sessão-aware: VRAM dmemcg, scanout Hyprland, stack de jogos, kernel, shader cache)"
+    )]
+    gaming: bool,
 
     #[arg(
         long,
@@ -216,6 +225,14 @@ struct Args {
         help = "Simula a limpeza (--clean) exibindo o que seria removido e o espaço recuperável sem alterar o disco"
     )]
     dry_run: bool,
+
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "front",
+        help = "Deploy automatizado do ecossistema Sumænimá (ex: --deploy front, --deploy sync)"
+    )]
+    deploy: Option<String>,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -863,6 +880,28 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // ── Modo Deploy Automatizado (--deploy [target]) ────────────────────────
+    if let Some(ref target) = args.deploy {
+        match target.as_str() {
+            "front" | "frontend" => {
+                deploy::execute_front_deploy(&args.path, true)?;
+                return Ok(());
+            }
+            "sync" | "sync-front" => {
+                deploy::execute_front_deploy(&args.path, false)?;
+                return Ok(());
+            }
+            other => {
+                eprintln!(
+                    "{} Alvo de deploy desconhecido: '{}'. Opções disponíveis: 'front' (compila + sync), 'sync' (sync sem compilar).",
+                    "⚠️".yellow(),
+                    other
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     // ── Modo Explicação de Regras (--explain [RULE_ID]) ─────────────────────
     if let Some(ref rule_target) = args.explain {
         if rule_target == "all" || rule_target.is_empty() {
@@ -890,6 +929,12 @@ fn main() -> Result<()> {
     // ── Modo Raio-X de Infraestrutura (--health) ───────────────────────────
     if args.health {
         health::run_system_health()?;
+        return Ok(());
+    }
+
+    // ── Modo Raio-X de Gaming Health (--gaming) ────────────────────────────
+    if args.gaming {
+        gaming::run_gaming_health()?;
         return Ok(());
     }
 
@@ -1069,14 +1114,23 @@ fn main() -> Result<()> {
             || (args.path.join("app").is_dir() && args.path.join("migrations").is_dir())
         {
             "hub".to_string()
-        } else if p_str.ends_with("mnemocine") {
+        } else if p_str.contains("mnemocine") {
             "homelab".to_string()
         } else if p_str.contains("curriculum-vitae") {
             "cv".to_string()
-        } else if args.path.join("mnemocine").is_dir() && args.path.join("governance").is_dir() {
-            "all".to_string()
         } else if p_str.contains("governance/stenio") {
             "rust".to_string()
+        } else if p_str.contains("projects")
+            || p_str.contains("personal")
+            || p_str.contains("temp")
+            || p_str.contains("templates")
+            || p_str.contains("sumænimá")
+            || p_str.contains("assets")
+            || p_str.contains("docs")
+        {
+            "vault".to_string()
+        } else if args.path.join("mnemocine").is_dir() && args.path.join("governance").is_dir() {
+            "all".to_string()
         } else {
             "all".to_string()
         }

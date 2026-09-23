@@ -291,6 +291,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Substitua .unwrap()/.expect() por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros como .unwrap_or_default() / .ok_or(...)."),
     ));
 
+    // ── 14.1 Soberania Rust: Invocação Canônica de Comandos Remotos ────────
+    rules.push(Rule::new(
+        "RUST-CANONICAL-REMOTE",
+        "rust",
+        Severity::Error,
+        "Comando Remoto Raw Proibido (Use crate::remote)",
+        "Invocação direta de 'Command::new(\"ssh\")' ou 'Command::new(\"rsync\")' é proibida. Utilize o driver canônico unificado 'crate::remote::run_ssh' ou 'crate::remote::run_rsync' para garantir isolamento de timeouts, flags de BatchMode e detecção de Tailscale SSH.",
+        r#"Command::new\(["'](ssh|rsync)["']\)"#,
+        &["rs"],
+        Some("Substitua a chamada raw de Command::new(\"ssh\"/\"rsync\") pelo driver unificado 'crate::remote::run_ssh' ou 'crate::remote::run_rsync'."),
+    ));
+
     // ── 15. Anti-Preguiça: Proibição de Stubs e Placeholders de IA ─────────
     rules.push(Rule::new(
         "AGENT-NO-LAZY-STUB",

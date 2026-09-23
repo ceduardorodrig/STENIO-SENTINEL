@@ -50,6 +50,7 @@ pub fn run_system_health() -> Result<()> {
         "http://127.0.0.1:9090",
         "Servidor Rust Axum + Whisper",
     );
+    check_frontend_parity();
     println!();
 
     // 5. Cadeia Canônica de Backups do Homelab (/mnt/BACKUP)
@@ -156,7 +157,20 @@ fn check_backup_chain() {
     for (folder, desc) in targets {
         let p = backup_dir.join(folder);
         if p.exists() {
-            let mod_time = fs::metadata(&p).and_then(|m| m.modified()).ok();
+            // Fonte da verdade de freshness = health file do job (/srv/health),
+            // não o mtime do payload (rsync preserva mtime da fonte → falso "velho").
+            let host_dir = p.join("psicopompo");
+            let mod_time = find_matching_health_file(folder).or_else(|| most_recent_mtime(&p));
+            let mod_time = if mod_time.is_none() {
+                // fallback: subdir do host quando o mirror usa {host}/ (configs-homelab)
+                if host_dir.exists() {
+                    most_recent_mtime(&host_dir)
+                } else {
+                    None
+                }
+            } else {
+                mod_time
+            };
             let age_str = if let Some(m) = mod_time {
                 let elapsed_secs = m.elapsed().map(|d| d.as_secs()).unwrap_or(0);
                 let hours = elapsed_secs / 3600;
@@ -183,6 +197,104 @@ fn check_backup_chain() {
             );
         }
     }
+
+    // Git push do espelho → GitHub privado mnemocine (off-site versionado).
+    // Antes: token vazio no `gh` do edu → o push falhava SILENCIOSAMENTE desde ~09/2026
+    // (script engole stderr). Canônico 21/09: credential store + token no store sops.
+    let mirror = backup_dir.join("configs-homelab");
+    let mirror_synced = Command::new("git")
+        .args(["-C", mirror.to_str().unwrap_or("/mnt/BACKUP/configs-homelab"), "status", "-sb"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let behind = s.contains("behind");
+            let ahead = s.contains("ahead");
+            let diverged = behind && ahead;
+            if diverged {
+                "DIVERGIDO local×remoto (push manual + timer em conflito)".to_string()
+            } else if ahead {
+                "AHEAD — mudanças locais ainda não pushadas (timer 05:55 pendente)".to_string()
+            } else if behind {
+                "BEHIND — remoto tem commits que o local não tem".to_string()
+            } else {
+                "SINCRONIZADO com GitHub (push OK)".to_string()
+            }
+        })
+        .unwrap_or_else(|_| "Não foi possível verificar o git".to_string());
+    let synced_ok = mirror_synced.contains("SINCRONIZADO");
+    println!(
+        "   {:<30} - {:<30} [{}]",
+        "git push (GitHub)".bold(),
+        if synced_ok {
+            mirror_synced.green().bold()
+        } else {
+            mirror_synced.yellow().bold()
+        },
+        "Off-site versionado".dimmed()
+    );
+}
+
+/// casa a pasta de backup com o health file do job correspondente (/srv/health/)
+/// — padrão: health file = {prefixo}-last-ok ; o Grafana já usa estes como fonte da verdade.
+fn find_matching_health_file(target_folder: &str) -> Option<std::time::SystemTime> {
+    let prefix = match target_folder {
+        "configs-homelab" => "config-backup-psicopompo",
+        "agentic-ai-server-psicopompo" => "agentic-ai-backup",
+        "zomboid-server-kavure" => "zomboid-backup",
+        "monitoring-server-kavure" => "monitoring-backup",
+        "sumaenima-server-kavure" => "sumaenima-backup",
+        _ => return None,
+    };
+    let dir = std::path::Path::new("/srv/health");
+    if let Ok(entries) = fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name == format!("{}-last-ok", prefix) {
+                if let Ok(md) = e.metadata() {
+                    if let Ok(t) = md.modified() {
+                        return Some(t);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// mtime do item mais recente dentro do diretório — proxy real de freshness
+/// (a raiz do espelho não muda no rsync, apenas os subdirs por host).
+/// Recursa até 4 níveis (espelhos têm payload aninhado: daily/prometheus/<ts>/chunks).
+fn most_recent_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut best: Option<std::time::SystemTime> = None;
+    let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    let mut depth: std::collections::HashMap<std::path::PathBuf, usize> = std::collections::HashMap::new();
+    depth.insert(dir.to_path_buf(), 0);
+    while let Some(p) = stack.pop() {
+        let d = depth.get(&p).copied().unwrap_or(0);
+        if d > 4 {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(&p) {
+            for e in entries.flatten() {
+                let path = e.path();
+                if let Ok(md) = e.metadata() {
+                    if md.is_file() {
+                        if let Ok(t) = md.modified() {
+                            best = Some(match best {
+                                Some(b) if b >= t => b,
+                                _ => t,
+                            });
+                        }
+                    } else if md.is_dir() {
+                        depth.insert(path.clone(), d + 1);
+                        stack.push(path);
+                    }
+                }
+            }
+        }
+    }
+    best
 }
 
 fn check_disk_health(path: &str, label: &str) {
@@ -392,6 +504,29 @@ fn check_http_service(name: &str, url: &str, role: &str) {
         role.dimmed(),
         "OFFLINE (em repouso)".dimmed()
     );
+}
+
+fn check_frontend_parity() {
+    let root = std::path::Path::new(".");
+    if let Some(parity) = crate::deploy::check_static_parity(root) {
+        let status_badge = if parity.in_sync {
+            format!("PARIDADE OK ({})", parity.local_bundle).green().bold()
+        } else {
+            format!(
+                "DRIFT DETECTADO (local: {}, borda: {})",
+                parity.local_bundle, parity.remote_bundle
+            )
+            .yellow()
+            .bold()
+        };
+        println!(
+            "   {:<20} {:<6} [{}] - {}",
+            "frontend-v2".bold(),
+            ":443",
+            "Borda Ybyra vs Local Build".dimmed(),
+            status_badge
+        );
+    }
 }
 
 fn check_docker_health() {

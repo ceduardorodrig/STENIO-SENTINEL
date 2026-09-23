@@ -272,20 +272,6 @@ fn parse_addr(addr: &str) -> (String, u16) {
     }
 }
 
-/// Extrai links de autenticação gerados pelo Tailscale SSH
-fn extract_tailscale_auth_url(text: &str) -> Option<String> {
-    for line in text.lines() {
-        if let Some(idx) = line.find("https://login.tailscale.com/a/") {
-            let url_part = &line[idx..];
-            let end_idx = url_part
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-                .unwrap_or(url_part.len());
-            return Some(url_part[..end_idx].to_string());
-        }
-    }
-    None
-}
-
 /// Executa a auditoria completa do Porteiro das Portas (Attack Surface Management)
 pub async fn run_ports_audit(root: &Path) -> Result<()> {
     crate::baseline::print_banner("StênioKernel — Porteiro das Portas & Superfície de Ataque (--ports)");
@@ -418,42 +404,17 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         println!("   [{}] {} ({})", "NÓ".cyan().bold(), node_name.bold(), ip.dimmed());
 
         // 1. Tentar SSH para raio-X completo interno com detecção de re-auth Tailscale
-        let ssh_attempt = Command::new("ssh")
-            .args([
-                "-o", "ConnectTimeout=4",
-                "-o", "BatchMode=no",
-                "-o", "StrictHostKeyChecking=accept-new",
-                node_name,
-                "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn",
-            ])
-            .output();
+        let outcome = crate::remote::run_ssh(
+            node_name,
+            "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn",
+            4,
+        );
 
         let mut ssh_success = false;
 
-        if let Ok(ref output) = ssh_attempt {
-            let combined = format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-
-            // Verificar se a Tailscale gerou link de autenticação interativo
-            if let Some(auth_url) = extract_tailscale_auth_url(&combined) {
-                println!(
-                    "      ⚠️  {} {}",
-                    "AUTENTICAÇÃO TAILSCALE SSH NECESSÁRIA:".yellow().bold(),
-                    auth_url.cyan().underline().bold()
-                );
-                println!(
-                    "         {}",
-                    "👉 Abra o link acima no navegador para autorizar o acesso SSH a este nó."
-                        .dimmed()
-                );
-            }
-
-            if output.status.success() && !output.stdout.is_empty() {
-                let stdout_str = String::from_utf8_lossy(&output.stdout);
-                let sockets = parse_ss_output(&stdout_str);
+        match outcome {
+            crate::remote::RemoteOutcome::Success(ref stdout_str) if !stdout_str.is_empty() => {
+                let sockets = parse_ss_output(stdout_str);
 
                 if !sockets.is_empty() {
                     ssh_success = true;
@@ -549,6 +510,19 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                     }
                 }
             }
+            crate::remote::RemoteOutcome::AuthRequired { ref auth_url, .. } => {
+                println!(
+                    "      ⚠️  {} {}",
+                    "AUTENTICAÇÃO TAILSCALE SSH NECESSÁRIA:".yellow().bold(),
+                    auth_url.cyan().underline().bold()
+                );
+                println!(
+                    "         {}",
+                    "👉 Abra o link acima no navegador para autorizar o acesso SSH a este nó."
+                        .dimmed()
+                );
+            }
+            _ => {}
         }
 
         // 2. Se o SSH não respondeu ou falhou, fallback transparente para TCP Probing

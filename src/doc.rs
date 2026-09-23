@@ -63,8 +63,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     ];
 
     if services_dir.is_dir() {
-        let mut service_files = Vec::new();
-        collect_md_files(&services_dir, &mut service_files);
+        let service_files = collect_md_files(&services_dir);
 
         for service_path in service_files {
             let file_name = service_path
@@ -281,8 +280,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
             continue;
         }
 
-        let mut doc_files = Vec::new();
-        collect_md_files(docs_dir, &mut doc_files);
+        let doc_files = collect_md_files(docs_dir);
 
         for doc_path in doc_files {
             total_docs += 1;
@@ -364,6 +362,92 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
+    // ── 5. Auditoria de Disclaimer de Governança Stênio (DOC-VIBE-DISCLAIMER) ────
+    let mut check_targets = Vec::new();
+
+    // Alvo 1: README.md da raiz do escopo sendo auditado
+    let root_readme = repo_root.join("README.md");
+    if root_readme.is_file() {
+        check_targets.push(root_readme);
+    }
+
+    // Alvo 2: Se auditando o vault geral, auditar também curriculum-vitae/README.md
+    let cv_readme = repo_root.join("curriculum-vitae").join("README.md");
+    if cv_readme.is_file() && !check_targets.contains(&cv_readme) {
+        check_targets.push(cv_readme);
+    }
+
+    // Alvo 3: Repositórios gerenciados em ~/homelab/
+    let homelab_dir = PathBuf::from("/home/edu/homelab");
+    if homelab_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&homelab_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let dir_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                // Ignora forks externos
+                if dir_name == "macrokey-driver" || !p.join(".git").exists() {
+                    continue;
+                }
+                let repo_readme = p.join("README.md");
+                if repo_readme.is_file() && !check_targets.contains(&repo_readme) {
+                    check_targets.push(repo_readme);
+                }
+            }
+        }
+    }
+
+    for readme_path in check_targets {
+        total_docs += 1;
+        if let Ok(content) = fs::read_to_string(&readme_path) {
+            let path_display = readme_path
+                .strip_prefix(repo_root)
+                .unwrap_or(&readme_path)
+                .to_string_lossy()
+                .to_string();
+
+            let has_valid_title = content.contains("**Yes... This is a Vibe Coded project**")
+                || content.contains("Yes... This is a Vibe Coded project");
+            let has_legacy_phrase = content.contains("Vibe Coded with StenioSentinel");
+            let has_gov = content.contains("StenioSentinel");
+            let has_author = content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
+
+            let is_valid = has_valid_title && !has_legacy_phrase && has_gov && has_author;
+
+            if !is_valid {
+                let (reason, suggestion) = if has_legacy_phrase {
+                    (
+                        "Disclaimer no README contém formato legado ('Vibe Coded with StenioSentinel').",
+                        "Atualize o cabeçalho para '**Yes... This is a Vibe Coded project**' e utilize o emoji 🤖 para o StenioSentinel."
+                    )
+                } else if !has_valid_title {
+                    (
+                        "Disclaimer '**Yes... This is a Vibe Coded project**' não encontrado no README.",
+                        "Adicione o bloco padronizado com o disclaimer de governança do Stênio no rodapé do README.md."
+                    )
+                } else {
+                    (
+                        "Disclaimer incompleto (menção ao autor ou à governança do Stênio ausente).",
+                        "Garanta que o bloco de governança contenha as referências completas ao StenioSentinel e ao autor."
+                    )
+                };
+
+                violations.push(Violation {
+                    rule_id: "DOC-VIBE-DISCLAIMER".to_string(),
+                    rule_name: "Disclaimer Padronizado de Governança Ausente ou Obsoleto".to_string(),
+                    severity: Severity::Warning,
+                    file_path: path_display,
+                    line_number: content.lines().count().max(1),
+                    snippet: "Yes... This is a Vibe Coded project".to_string(),
+                    message: format!("README '{}': {}", readme_path.display(), reason),
+                    suggestion: Some(format!(
+                        "{}\nFormato obrigatório:\n<div align=\"center\">\n\n> **Yes... This is a Vibe Coded project**\n>\n> Governed by 🤖 **StenioSentinel** (our Rust-based AI Governance Sentinel) with **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)).\n\n</div>",
+                        suggestion
+                    )),
+                });
+            }
+        }
+    }
+
     if violations.is_empty() && broken_links.is_empty() {
         messages.push(format!("✅ {} documentos técnicos (serviços, servidores, ADRs e cold storage) auditados e íntegros.", total_docs));
     } else {
@@ -382,7 +466,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     }
 }
 
-fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
+fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
     // Usa WalkBuilder (crate ignore) para respeitar .gitignore e .stignore do Syncthing.
     // Isso evita auditar arquivos em .stversions/, .smart-env/ e outros diretórios ignorados.
     let mut walker = WalkBuilder::new(dir);
@@ -411,4 +496,5 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
             files.push(path);
         }
     }
+    files
 }
