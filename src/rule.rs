@@ -52,7 +52,12 @@ impl Rule {
         self
     }
 
-    pub fn matches_filter(&self, tag_filter: Option<&str>, only_rule: Option<&str>, ext: &str) -> bool {
+    pub fn matches_filter(
+        &self,
+        tag_filter: Option<&str>,
+        only_rule: Option<&str>,
+        ext: &str,
+    ) -> bool {
         if let Some(target) = only_rule {
             if !self.id.eq_ignore_ascii_case(target) {
                 return false;

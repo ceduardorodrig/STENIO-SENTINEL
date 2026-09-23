@@ -90,7 +90,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
             let caps = match file_pattern.captures(&filename) {
                 Some(c) => c,
                 None => {
-                    let err = format!("Nomenclatura inválida em migrations/: '{}' (esperado: v<major>.<minor>_<desc>.sql)", filename);
+                    let err = format!(
+                        "Nomenclatura inválida em migrations/: '{}' (esperado: v<major>.<minor>_<desc>.sql)",
+                        filename
+                    );
                     errors.push(err.clone());
                     messages.push(format!("❌ {}", err));
                     continue;

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::*;
 use regex::Regex;
 use serde::Deserialize;
@@ -96,7 +96,16 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
 
     let toml_entry = format!(
         "\n[[custom_rules]]\nid = \"{}\"\ntag = \"{}\"\nseverity = \"{}\"\nname = \"{}\"\ndescription = \"{}\"\npattern = \"{}\"\nextensions = [{}]\nmust_match = {}\n{}{}",
-        id, tag, severity, escaped_name, escaped_desc, escaped_pattern, extensions_fmt, must_match, suggestion_line, fix_line
+        id,
+        tag,
+        severity,
+        escaped_name,
+        escaped_desc,
+        escaped_pattern,
+        extensions_fmt,
+        must_match,
+        suggestion_line,
+        fix_line
     );
 
     // 4. Persistência atômica / append
@@ -109,7 +118,10 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
     file.write_all(toml_entry.as_bytes())
         .context("Falha ao escrever regra aprendida em steniocheck.toml")?;
 
-    crate::baseline::print_banner_green(&format!("✨ StênioKernel — Nova Regra Aprendida com Sucesso! [{}]", id));
+    crate::baseline::print_banner_green(&format!(
+        "✨ StênioKernel — Nova Regra Aprendida com Sucesso! [{}]",
+        id
+    ));
     println!("   {} {}", "ID:         ".dimmed(), id.cyan().bold());
     println!("   {} {}", "Nome:       ".dimmed(), name.bold());
     println!("   {} {}", "Tag:        ".dimmed(), tag.yellow());

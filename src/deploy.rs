@@ -62,7 +62,8 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
     }
 
     let remote_html = String::from_utf8_lossy(&output.stdout);
-    let remote_bundle = extract_script_bundle(&remote_html).unwrap_or_else(|| "desconhecido".to_string());
+    let remote_bundle =
+        extract_script_bundle(&remote_html).unwrap_or_else(|| "desconhecido".to_string());
 
     let in_sync = local_bundle == remote_bundle;
 
@@ -75,14 +76,21 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
 
 /// Executa a sincronização atômica do frontend para Ybyra e Kavure
 pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
-    crate::baseline::print_banner("StênioSentinel — Automação de Deploy do Frontend (--deploy front)");
+    crate::baseline::print_banner(
+        "StênioSentinel — Automação de Deploy do Frontend (--deploy front)",
+    );
 
     let fe_dir = find_frontend_dir(root)
         .context("Diretório do frontend (app/frontend-v2) não encontrado no workspace.")?;
     let dist_dir = fe_dir.join("dist");
 
     if build_first || !dist_dir.exists() {
-        println!("{}", "[*] Compilando frontend SPA (npm run build)...".cyan().bold());
+        println!(
+            "{}",
+            "[*] Compilando frontend SPA (npm run build)..."
+                .cyan()
+                .bold()
+        );
         let status = Command::new("npm")
             .arg("run")
             .arg("build")
@@ -91,7 +99,10 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
             .context("Falha ao executar 'npm run build' no frontend.")?;
 
         if !status.success() {
-            anyhow::bail!("Compilação do frontend falhou com exit code: {:?}", status.code());
+            anyhow::bail!(
+                "Compilação do frontend falhou com exit code: {:?}",
+                status.code()
+            );
         }
         println!("{}", "  ✅ Build compilado com sucesso!".green());
     }
@@ -99,17 +110,26 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
     let dist_str = format!("{}/", dist_dir.display());
 
     // 1. Sincronização Ybyra (Edge primário)
-    println!("{}", "[*] Sincronizando assets com nó de borda Ybyra (/var/www/sumaenima)...".cyan());
+    println!(
+        "{}",
+        "[*] Sincronizando assets com nó de borda Ybyra (/var/www/sumaenima)...".cyan()
+    );
     let ybyra_outcome = crate::remote::run_rsync(&dist_str, "ybyra:/var/www/sumaenima/", 5);
     ybyra_outcome.print_status("Sincronização Ybyra");
 
     // 2. Sincronização Kavure (Warm standby)
-    println!("{}", "[*] Sincronizando com nó standby Kavure (/var/www/sumaenima)...".cyan());
+    println!(
+        "{}",
+        "[*] Sincronizando com nó standby Kavure (/var/www/sumaenima)...".cyan()
+    );
     let kavure_outcome = crate::remote::run_rsync(&dist_str, "kavure:/var/www/sumaenima/", 5);
     kavure_outcome.print_status("Sincronização Kavure");
 
     // 3. Recarrega Nginx no Ybyra sem downtime
-    println!("{}", "[*] Recarregando Nginx no Ybyra (zero downtime)...".cyan());
+    println!(
+        "{}",
+        "[*] Recarregando Nginx no Ybyra (zero downtime)...".cyan()
+    );
     let reload_outcome = crate::remote::run_ssh(
         "ybyra",
         "docker exec $(docker ps -f name=sae-edge_proxy -q | head -1) nginx -s reload",
@@ -122,7 +142,12 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
         if parity.in_sync {
             println!(
                 "{}",
-                format!("  ✨ Paridade confirmada em produção! Bundle ativo: {}", parity.local_bundle).green().bold()
+                format!(
+                    "  ✨ Paridade confirmada em produção! Bundle ativo: {}",
+                    parity.local_bundle
+                )
+                .green()
+                .bold()
             );
         } else {
             println!(
@@ -133,7 +158,12 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
     }
 
     println!();
-    println!("{}", "🚀 Deploy rápido de frontend finalizado com sucesso!".bold().green());
+    println!(
+        "{}",
+        "🚀 Deploy rápido de frontend finalizado com sucesso!"
+            .bold()
+            .green()
+    );
     Ok(())
 }
 

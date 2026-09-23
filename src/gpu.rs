@@ -137,5 +137,7 @@ fn query_host_gpu() -> Option<String> {
 }
 
 fn check_daemon_health(url: &str) -> bool {
-    crate::health::http_get_health(url).map(|(ok, _)| ok).unwrap_or(false)
+    crate::health::http_get_health(url)
+        .map(|(ok, _)| ok)
+        .unwrap_or(false)
 }

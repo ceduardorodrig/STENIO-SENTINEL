@@ -96,11 +96,20 @@ pub fn parse_docker_size(size_str: &str) -> u64 {
     }
     let lower = clean.to_lowercase();
     let (num_part, multiplier) = if lower.ends_with("gib") || lower.ends_with("gb") {
-        (lower.trim_end_matches("gib").trim_end_matches("gb").trim(), 1024 * 1024 * 1024)
+        (
+            lower.trim_end_matches("gib").trim_end_matches("gb").trim(),
+            1024 * 1024 * 1024,
+        )
     } else if lower.ends_with("mib") || lower.ends_with("mb") {
-        (lower.trim_end_matches("mib").trim_end_matches("mb").trim(), 1024 * 1024)
+        (
+            lower.trim_end_matches("mib").trim_end_matches("mb").trim(),
+            1024 * 1024,
+        )
     } else if lower.ends_with("kib") || lower.ends_with("kb") {
-        (lower.trim_end_matches("kib").trim_end_matches("kb").trim(), 1024)
+        (
+            lower.trim_end_matches("kib").trim_end_matches("kb").trim(),
+            1024,
+        )
     } else if lower.ends_with('b') {
         (lower.trim_end_matches('b').trim(), 1)
     } else {
@@ -163,7 +172,8 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes: sz,
                                         is_dir: true,
                                         category: CleanCategory::RustTarget,
-                                        description: "Árvore completa de build Rust (target/)".to_string(),
+                                        description: "Árvore completa de build Rust (target/)"
+                                            .to_string(),
                                     });
                                 }
                             } else {
@@ -178,7 +188,8 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Artefatos de compilação debug".to_string(),
+                                            description: "Artefatos de compilação debug"
+                                                .to_string(),
                                         });
                                     }
                                 }
@@ -193,7 +204,8 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Cache de compilação incremental".to_string(),
+                                            description: "Cache de compilação incremental"
+                                                .to_string(),
                                         });
                                     }
                                 }
@@ -208,7 +220,8 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Documentação HTML gerada (rustdoc)".to_string(),
+                                            description: "Documentação HTML gerada (rustdoc)"
+                                                .to_string(),
                                         });
                                     }
                                 }
@@ -308,8 +321,14 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
                         let row_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("");
                         let active = val.get("Active").and_then(|v| v.as_str()).unwrap_or("0");
-                        let total = val.get("TotalCount").and_then(|v| v.as_str()).unwrap_or("0");
-                        let reclaimable = val.get("Reclaimable").and_then(|v| v.as_str()).unwrap_or("");
+                        let total = val
+                            .get("TotalCount")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0");
+                        let reclaimable = val
+                            .get("Reclaimable")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let bytes = parse_docker_size(reclaimable);
 
                         if bytes > 0 {
@@ -321,7 +340,10 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes,
                                         is_dir: false,
                                         category: CleanCategory::Docker,
-                                        description: format!("Imagens Docker descartáveis ({}/{} ativas)", active, total),
+                                        description: format!(
+                                            "Imagens Docker descartáveis ({}/{} ativas)",
+                                            active, total
+                                        ),
                                     });
                                 }
                                 "Containers" => {
@@ -331,7 +353,10 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes,
                                         is_dir: false,
                                         category: CleanCategory::Docker,
-                                        description: format!("Containers finalizados ({}/{} ativos)", active, total),
+                                        description: format!(
+                                            "Containers finalizados ({}/{} ativos)",
+                                            active, total
+                                        ),
                                     });
                                 }
                                 "Build Cache" if mode == "docker" || mode == "all" => {
@@ -341,7 +366,8 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes,
                                         is_dir: false,
                                         category: CleanCategory::Docker,
-                                        description: "Cache intermediário de builds Docker".to_string(),
+                                        description: "Cache intermediário de builds Docker"
+                                            .to_string(),
                                     });
                                 }
                                 _ => {}
@@ -422,13 +448,18 @@ pub fn print_clean_report(report: &CleanReport) {
     if report.items.is_empty() {
         println!(
             "{}",
-            "✨ O workspace já está 100% limpo! Zero lixo acumulado encontrado.".green().bold()
+            "✨ O workspace já está 100% limpo! Zero lixo acumulado encontrado."
+                .green()
+                .bold()
         );
         println!();
         return;
     }
 
-    println!("{}", "Itens catalogados para higienização (ordenados por tamanho):".bold());
+    println!(
+        "{}",
+        "Itens catalogados para higienização (ordenados por tamanho):".bold()
+    );
     let mut sorted_items = report.items.clone();
     sorted_items.sort_by(|a, b| b.bytes.cmp(&a.bytes));
 
@@ -439,9 +470,13 @@ pub fn print_clean_report(report: &CleanReport) {
             let remaining_bytes: u64 = sorted_items[max_display..].iter().map(|i| i.bytes).sum();
             println!(
                 "  {}",
-                format!("... e mais {} itens menores ({})", remaining, format_bytes(remaining_bytes))
-                    .dimmed()
-                    .italic()
+                format!(
+                    "... e mais {} itens menores ({})",
+                    remaining,
+                    format_bytes(remaining_bytes)
+                )
+                .dimmed()
+                .italic()
             );
             break;
         }
@@ -465,8 +500,7 @@ pub fn print_clean_report(report: &CleanReport) {
     println!();
     println!(
         "{}",
-        "──────────────────────────────────────────────────────────────────────────────"
-            .dimmed()
+        "──────────────────────────────────────────────────────────────────────────────".dimmed()
     );
 
     if report.dry_run {
@@ -491,7 +525,9 @@ pub fn print_clean_report(report: &CleanReport) {
         );
         println!(
             "{}",
-            "✨ Higienização concluída! Workspace pronto e enxuto.".green().bold()
+            "✨ Higienização concluída! Workspace pronto e enxuto."
+                .green()
+                .bold()
         );
     }
     println!();
@@ -521,11 +557,19 @@ mod tests {
 
     #[test]
     fn test_parse_docker_size() {
-        assert_eq!(parse_docker_size("1.849GB (52%)"), (1.849 * 1024.0 * 1024.0 * 1024.0) as u64);
-        assert_eq!(parse_docker_size("5.583MB (73%)"), (5.583 * 1024.0 * 1024.0) as u64);
-        assert_eq!(parse_docker_size("117.5MB"), (117.5 * 1024.0 * 1024.0) as u64);
+        assert_eq!(
+            parse_docker_size("1.849GB (52%)"),
+            (1.849 * 1024.0 * 1024.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            parse_docker_size("5.583MB (73%)"),
+            (5.583 * 1024.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            parse_docker_size("117.5MB"),
+            (117.5 * 1024.0 * 1024.0) as u64
+        );
         assert_eq!(parse_docker_size("9.106kB (100%)"), (9.106 * 1024.0) as u64);
         assert_eq!(parse_docker_size("0B"), 0);
     }
 }
-

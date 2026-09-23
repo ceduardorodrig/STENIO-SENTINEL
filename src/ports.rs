@@ -274,7 +274,9 @@ fn parse_addr(addr: &str) -> (String, u16) {
 
 /// Executa a auditoria completa do Porteiro das Portas (Attack Surface Management)
 pub async fn run_ports_audit(root: &Path) -> Result<()> {
-    crate::baseline::print_banner("StênioKernel — Porteiro das Portas & Superfície de Ataque (--ports)");
+    crate::baseline::print_banner(
+        "StênioKernel — Porteiro das Portas & Superfície de Ataque (--ports)",
+    );
 
     let catalog = load_port_catalog(root);
     let local_sockets = scan_local_active_sockets();
@@ -300,22 +302,21 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         }
         active_ports_found.insert(sock.port, sock);
 
-        let proc_label = sock
-            .process
-            .as_deref()
-            .unwrap_or("sistema / docker")
-            .cyan();
+        let proc_label = sock.process.as_deref().unwrap_or("sistema / docker").cyan();
 
         let entries_for_port = catalog_map.get(&sock.port);
-        let psicopompo_entry = entries_for_port.and_then(|v| {
-            v.iter().find(|e| e.host == "psicopompo")
-        });
+        let psicopompo_entry =
+            entries_for_port.and_then(|v| v.iter().find(|e| e.host == "psicopompo"));
 
         if let Some(entry) = psicopompo_entry {
             // Verificar se o bind é seguro
             let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
-            let should_be_restricted = entry.bind.contains("127.0.0.1") || entry.bind.contains("tailscale0") || entry.bind.contains("100.");
-            let is_lan_authorized = entry.bind.contains("LAN") || entry.bind.contains("Swarm Ingress") || entry.port == 7946;
+            let should_be_restricted = entry.bind.contains("127.0.0.1")
+                || entry.bind.contains("tailscale0")
+                || entry.bind.contains("100.");
+            let is_lan_authorized = entry.bind.contains("LAN")
+                || entry.bind.contains("Swarm Ingress")
+                || entry.port == 7946;
 
             if is_wide_open && should_be_restricted && !is_lan_authorized {
                 // Alerta de exposição
@@ -348,7 +349,8 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                 "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
                 "Não exposto à rede externa".dimmed()
             );
-        } else if sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863 {
+        } else if sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863
+        {
             // Cliente desktop / efêmero
             println!(
                 "   {:<10} [{:<15}] {:<22} | {} | {}",
@@ -401,14 +403,16 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     ];
 
     for (node_name, ip) in remote_nodes {
-        println!("   [{}] {} ({})", "NÓ".cyan().bold(), node_name.bold(), ip.dimmed());
+        println!(
+            "   [{}] {} ({})",
+            "NÓ".cyan().bold(),
+            node_name.bold(),
+            ip.dimmed()
+        );
 
         // 1. Tentar SSH para raio-X completo interno com detecção de re-auth Tailscale
-        let outcome = crate::remote::run_ssh(
-            node_name,
-            "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn",
-            4,
-        );
+        let outcome =
+            crate::remote::run_ssh(node_name, "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn", 4);
 
         let mut ssh_success = false;
 
@@ -426,20 +430,17 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                         }
                         node_active_ports.insert(sock.port, sock.clone());
 
-                        let proc_label = sock
-                            .process
-                            .as_deref()
-                            .unwrap_or("sistema / docker")
-                            .cyan();
+                        let proc_label =
+                            sock.process.as_deref().unwrap_or("sistema / docker").cyan();
 
                         let entries_for_port = catalog_map.get(&sock.port);
-                        let node_entry = entries_for_port.and_then(|v| {
-                            v.iter().find(|e| e.host == node_name)
-                        });
+                        let node_entry =
+                            entries_for_port.and_then(|v| v.iter().find(|e| e.host == node_name));
 
                         if let Some(entry) = node_entry {
                             let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
-                            let is_wan_allowed = (node_name == "ybyra" && (sock.port == 80 || sock.port == 443))
+                            let is_wan_allowed = (node_name == "ybyra"
+                                && (sock.port == 80 || sock.port == 443))
                                 || entry.bind.contains("LAN")
                                 || entry.bind.contains("Swarm Ingress")
                                 || sock.port == 7946;
@@ -479,7 +480,11 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                                 format!("{}/{}", sock.port, sock.proto).blue(),
                                 sock.ip.dimmed(),
                                 proc_label,
-                                if sock.port == 22 { "SSH DAEMON".blue() } else { "CLIENTE / DESKTOP EFÊMERO".blue() },
+                                if sock.port == 22 {
+                                    "SSH DAEMON".blue()
+                                } else {
+                                    "CLIENTE / DESKTOP EFÊMERO".blue()
+                                },
                                 "Acesso de gestão / aplicação".dimmed()
                             );
                         } else {
@@ -566,8 +571,7 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     println!();
     println!(
         "{}",
-        "──────────────────────────────────────────────────────────────────────────────"
-            .dimmed()
+        "──────────────────────────────────────────────────────────────────────────────".dimmed()
     );
 
     if alerts_count == 0 {

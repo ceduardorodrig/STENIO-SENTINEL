@@ -4,11 +4,16 @@ use std::process::{Command, Stdio};
 
 /// Argumentos universais padronizados para SSH não-interativo no ecossistema Tailscale / Homelab
 pub const CANONICAL_SSH_OPTS: &[&str] = &[
-    "-o", "ConnectTimeout=3",
-    "-o", "BatchMode=yes",
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ServerAliveInterval=2",
-    "-o", "ServerAliveCountMax=1",
+    "-o",
+    "ConnectTimeout=3",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ServerAliveInterval=2",
+    "-o",
+    "ServerAliveCountMax=1",
 ];
 
 /// Resultado semântico estruturado de uma operação remota
@@ -17,20 +22,11 @@ pub enum RemoteOutcome {
     /// Executado com êxito (stdout capturado)
     Success(String),
     /// Requer autenticação interativa / renovação de check web no Tailscale SSH
-    AuthRequired {
-        node: String,
-        auth_url: String,
-    },
+    AuthRequired { node: String, auth_url: String },
     /// A conexão expirou dentro do tempo limite
-    Timeout {
-        node: String,
-        timeout_secs: u64,
-    },
+    Timeout { node: String, timeout_secs: u64 },
     /// Falha de conexão ou nó inacessível
-    Unreachable {
-        node: String,
-        reason: String,
-    },
+    Unreachable { node: String, reason: String },
     /// Falha na execução do comando remoto
     Failed {
         node: String,
@@ -74,8 +70,14 @@ impl RemoteOutcome {
                     reason.dimmed()
                 );
             }
-            RemoteOutcome::Failed { node, exit_code, error } => {
-                let code_str = exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string());
+            RemoteOutcome::Failed {
+                node,
+                exit_code,
+                error,
+            } => {
+                let code_str = exit_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "?".to_string());
                 println!(
                     "  ❌ Falha ao executar {} no nó '{}' (exit {}): {}",
                     action_label,
@@ -136,7 +138,11 @@ pub fn run_rsync(src: &str, dest: &str, timeout_secs: u64) -> RemoteOutcome {
 }
 
 /// Executa o comando e faz o parsing semântico de erros de rede e do Tailscale SSH
-fn execute_command_with_detection(mut cmd: Command, node: &str, timeout_secs: u64) -> RemoteOutcome {
+fn execute_command_with_detection(
+    mut cmd: Command,
+    node: &str,
+    timeout_secs: u64,
+) -> RemoteOutcome {
     let output = match cmd.output() {
         Ok(out) => out,
         Err(e) => {

@@ -256,9 +256,12 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
     // ── 11. PERF-GPU-ZERO-REPAINT: Proibição de Transições de Paint em Containers 3D ──
     if path_str.ends_with(".css") || path_str.ends_with(".tsx") {
         for (line_idx, line) in content.lines().enumerate() {
-            let has_paint_transition = (line.contains("transition:") || line.contains("transition "))
+            let has_paint_transition = (line.contains("transition:")
+                || line.contains("transition "))
                 && (line.contains("box-shadow") || line.contains("backdrop-filter"))
-                && (line.contains("magic-card") || line.contains("card-cell") || line.contains("tilt"));
+                && (line.contains("magic-card")
+                    || line.contains("card-cell")
+                    || line.contains("tilt"));
 
             let has_tsx_paint_anim = line.contains("magic-card-tilt-container")
                 && (line.contains("transition-colors") || line.contains("transition-all"));
@@ -282,7 +285,9 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
 
     // ── 12. PERF-NO-LAYOUT-THRASH: Proibição de Leitura Síncrona de DOM em Eventos ──
     if (path_str.ends_with(".tsx") || path_str.ends_with(".ts"))
-        && (content.contains("handleMouseMove") || content.contains("onMouseMove") || content.contains("pointermove"))
+        && (content.contains("handleMouseMove")
+            || content.contains("onMouseMove")
+            || content.contains("pointermove"))
     {
         for (line_idx, line) in content.lines().enumerate() {
             let calls_geometry = line.contains(".getBoundingClientRect()")
@@ -296,7 +301,10 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                 || content.contains("boundsRef.current")
                 || content.contains("rectCacheRef");
 
-            if calls_geometry && !is_cached && !whitelist.is_ignored(&path_str, "PERF-NO-LAYOUT-THRASH", line) {
+            if calls_geometry
+                && !is_cached
+                && !whitelist.is_ignored(&path_str, "PERF-NO-LAYOUT-THRASH", line)
+            {
                 violations.push(Violation {
                     rule_id: "PERF-NO-LAYOUT-THRASH".to_string(),
                     rule_name: "Leitura Síncrona de Geometria em Event Loop".to_string(),
@@ -343,7 +351,9 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                     || prev_line.contains(":focus")
                     || line.contains(":hover");
 
-                if !is_hover_scoped && !whitelist.is_ignored(&path_str, "PERF-GPU-WILL-CHANGE", line) {
+                if !is_hover_scoped
+                    && !whitelist.is_ignored(&path_str, "PERF-GPU-WILL-CHANGE", line)
+                {
                     violations.push(Violation {
                         rule_id: "PERF-GPU-WILL-CHANGE".to_string(),
                         rule_name: "will-change Estático em Repouso".to_string(),
@@ -388,10 +398,14 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
     if (path_str.ends_with(".tsx") || path_str.ends_with(".ts"))
         && !path_str.ends_with(".test.ts")
         && !path_str.ends_with(".test.tsx")
-        && (path_str.contains("components/") || path_str.contains("features/") || path_str.contains("pages/") || path_str.contains("hooks/"))
+        && (path_str.contains("components/")
+            || path_str.contains("features/")
+            || path_str.contains("pages/")
+            || path_str.contains("hooks/"))
     {
         for (line_idx, line) in content.lines().enumerate() {
-            let is_bare_console_error = line.contains("console.error(") || line.contains("console.warn(");
+            let is_bare_console_error =
+                line.contains("console.error(") || line.contains("console.warn(");
             if is_bare_console_error {
                 // Checa se o arquivo ou o contexto próximo provê feedback visual
                 let has_visual_feedback = content.contains("toast.")
@@ -401,7 +415,9 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                     || content.contains("snackbar")
                     || content.contains("alert(");
 
-                if !has_visual_feedback && !whitelist.is_ignored(&path_str, "FRONT-FEEDBACK-ON-ERROR", line) {
+                if !has_visual_feedback
+                    && !whitelist.is_ignored(&path_str, "FRONT-FEEDBACK-ON-ERROR", line)
+                {
                     violations.push(Violation {
                         rule_id: "FRONT-FEEDBACK-ON-ERROR".to_string(),
                         rule_name: "Erro em UI sem Feedback Visual ao Usuário".to_string(),

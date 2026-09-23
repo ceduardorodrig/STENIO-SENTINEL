@@ -409,7 +409,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 || content.contains("Yes... This is a Vibe Coded project");
             let has_legacy_phrase = content.contains("Vibe Coded with StenioSentinel");
             let has_gov = content.contains("StenioSentinel");
-            let has_author = content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
+            let has_author =
+                content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
 
             let is_valid = has_valid_title && !has_legacy_phrase && has_gov && has_author;
 
@@ -417,17 +418,17 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 let (reason, suggestion) = if has_legacy_phrase {
                     (
                         "Disclaimer no README contém formato legado ('Vibe Coded with StenioSentinel').",
-                        "Atualize o cabeçalho para '**Yes... This is a Vibe Coded project**' e utilize o emoji 🤖 para o StenioSentinel."
+                        "Atualize o cabeçalho para '**Yes... This is a Vibe Coded project**' e utilize o emoji 🤖 para o StenioSentinel.",
                     )
                 } else if !has_valid_title {
                     (
                         "Disclaimer '**Yes... This is a Vibe Coded project**' não encontrado no README.",
-                        "Adicione o bloco padronizado com o disclaimer de governança do Stênio no rodapé do README.md."
+                        "Adicione o bloco padronizado com o disclaimer de governança do Stênio no rodapé do README.md.",
                     )
                 } else {
                     (
                         "Disclaimer incompleto (menção ao autor ou à governança do Stênio ausente).",
-                        "Garanta que o bloco de governança contenha as referências completas ao StenioSentinel e ao autor."
+                        "Garanta que o bloco de governança contenha as referências completas ao StenioSentinel e ao autor.",
                     )
                 };
 

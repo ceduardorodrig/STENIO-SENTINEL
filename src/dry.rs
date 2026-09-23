@@ -42,7 +42,8 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
     }
 
     // Ignora divisores e molduras visuais de terminal
-    if trimmed.contains("═════") || trimmed.contains("─────") || trimmed.contains("-----") {
+    if trimmed.contains("═════") || trimmed.contains("─────") || trimmed.contains("-----")
+    {
         return None;
     }
 
@@ -195,8 +196,9 @@ pub fn detect_dry_duplication(
                 }
 
                 // Validação de paridade estrita do bloco base de tamanho `min_lines`
-                let matches_base = (0..min_lines)
-                    .all(|k| files[f1].substantive[idx1 + k].text == files[f2].substantive[idx2 + k].text);
+                let matches_base = (0..min_lines).all(|k| {
+                    files[f1].substantive[idx1 + k].text == files[f2].substantive[idx2 + k].text
+                });
 
                 if !matches_base {
                     continue;
@@ -301,8 +303,15 @@ pub fn scan_dry_directory(
 }
 
 /// Renderiza relatório formatado para o terminal.
-pub fn print_dry_report(violations: &[Violation], files_count: usize, duration: std::time::Duration) {
-    println!("\n{}", "═══ MOTOR DRY (Don't Repeat Yourself) ═══".cyan().bold());
+pub fn print_dry_report(
+    violations: &[Violation],
+    files_count: usize,
+    duration: std::time::Duration,
+) {
+    println!(
+        "\n{}",
+        "═══ MOTOR DRY (Don't Repeat Yourself) ═══".cyan().bold()
+    );
     println!(
         "Arquivos analisados: {} | Duração: {:?}",
         files_count.to_string().yellow().bold(),
@@ -312,7 +321,9 @@ pub fn print_dry_report(violations: &[Violation], files_count: usize, duration: 
     if violations.is_empty() {
         println!(
             "{}",
-            "✨ Princípio DRY 100% cumprido: Zero duplicações de blocos encontradas!".green().bold()
+            "✨ Princípio DRY 100% cumprido: Zero duplicações de blocos encontradas!"
+                .green()
+                .bold()
         );
         return;
     }

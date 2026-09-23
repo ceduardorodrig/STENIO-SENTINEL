@@ -6,7 +6,9 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub fn run_system_health() -> Result<()> {
-    crate::baseline::print_banner("StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)");
+    crate::baseline::print_banner(
+        "StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)",
+    );
 
     // 1. Armazenamento em Disco
     println!(
@@ -203,7 +205,12 @@ fn check_backup_chain() {
     // (script engole stderr). Canônico 21/09: credential store + token no store sops.
     let mirror = backup_dir.join("configs-homelab");
     let mirror_synced = Command::new("git")
-        .args(["-C", mirror.to_str().unwrap_or("/mnt/BACKUP/configs-homelab"), "status", "-sb"])
+        .args([
+            "-C",
+            mirror.to_str().unwrap_or("/mnt/BACKUP/configs-homelab"),
+            "status",
+            "-sb",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .map(|o| {
@@ -268,7 +275,8 @@ fn find_matching_health_file(target_folder: &str) -> Option<std::time::SystemTim
 fn most_recent_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
     let mut best: Option<std::time::SystemTime> = None;
     let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
-    let mut depth: std::collections::HashMap<std::path::PathBuf, usize> = std::collections::HashMap::new();
+    let mut depth: std::collections::HashMap<std::path::PathBuf, usize> =
+        std::collections::HashMap::new();
     depth.insert(dir.to_path_buf(), 0);
     while let Some(p) = stack.pop() {
         let d = depth.get(&p).copied().unwrap_or(0);
@@ -299,9 +307,7 @@ fn most_recent_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
 
 fn check_disk_health(path: &str, label: &str) {
     // Exceção documentada: statvfs nativo requer dep nix (não incluso). Pendente ADR-xxx.
-    let output = Command::new("df")
-        .args(["-Pk", path])
-        .output();
+    let output = Command::new("df").args(["-Pk", path]).output();
 
     if let Ok(out) = output {
         if out.status.success() {
@@ -510,7 +516,9 @@ fn check_frontend_parity() {
     let root = std::path::Path::new(".");
     if let Some(parity) = crate::deploy::check_static_parity(root) {
         let status_badge = if parity.in_sync {
-            format!("PARIDADE OK ({})", parity.local_bundle).green().bold()
+            format!("PARIDADE OK ({})", parity.local_bundle)
+                .green()
+                .bold()
         } else {
             format!(
                 "DRIFT DETECTADO (local: {}, borda: {})",
@@ -551,10 +559,16 @@ fn check_docker_health() {
     for line in stdout.lines() {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
             let row_type = val.get("Type").and_then(|v| v.as_str()).unwrap_or("");
-            let total = val.get("TotalCount").and_then(|v| v.as_str()).unwrap_or("0");
+            let total = val
+                .get("TotalCount")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0");
             let active = val.get("Active").and_then(|v| v.as_str()).unwrap_or("0");
             let size = val.get("Size").and_then(|v| v.as_str()).unwrap_or("0B");
-            let reclaimable = val.get("Reclaimable").and_then(|v| v.as_str()).unwrap_or("0B");
+            let reclaimable = val
+                .get("Reclaimable")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0B");
 
             let rec_bytes = crate::clean::parse_docker_size(reclaimable);
             total_reclaimable += rec_bytes;
@@ -578,7 +592,9 @@ fn check_docker_health() {
     if total_reclaimable > 1024 * 1024 * 1024 {
         println!(
             "   ⚠️  {} acumulado em imagens órfãs/cache. Dica: use '{}' para limpar.",
-            crate::clean::format_bytes(total_reclaimable).yellow().bold(),
+            crate::clean::format_bytes(total_reclaimable)
+                .yellow()
+                .bold(),
             "stenio --clean docker".cyan().bold()
         );
     } else {
@@ -610,11 +626,23 @@ fn check_ports_health() {
         let is_local = sock.ip.starts_with("127.0.0.") || sock.ip == "::1";
 
         if let Some(entry) = catalog_map.get(&sock.port) {
-            let should_restrict = entry.bind.contains("127.0.0.1") || entry.bind.contains("tailscale0") || entry.bind.contains("100.");
-            if is_wide && should_restrict && entry.port != 2049 && entry.port != 111 && entry.port != 20048 {
+            let should_restrict = entry.bind.contains("127.0.0.1")
+                || entry.bind.contains("tailscale0")
+                || entry.bind.contains("100.");
+            if is_wide
+                && should_restrict
+                && entry.port != 2049
+                && entry.port != 111
+                && entry.port != 20048
+            {
                 warn_count += 1;
             }
-        } else if !is_local && sock.port < 30000 && sock.port != 1716 && sock.port != 27036 && sock.port != 9863 {
+        } else if !is_local
+            && sock.port < 30000
+            && sock.port != 1716
+            && sock.port != 27036
+            && sock.port != 9863
+        {
             warn_count += 1;
         }
     }
@@ -633,4 +661,3 @@ fn check_ports_health() {
         );
     }
 }
-

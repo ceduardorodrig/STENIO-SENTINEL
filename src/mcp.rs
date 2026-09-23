@@ -1,14 +1,14 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
+use crate::Violation;
 use crate::baseline::Whitelist;
 use crate::engine::Engine;
 use crate::guardian::audit_stenio_integrity;
 use crate::rule::{Rule, Severity};
-use crate::Violation;
 
 #[derive(Debug, Deserialize)]
 struct McpRequest {
@@ -217,7 +217,8 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             if violations.is_empty() {
                                 format!("✨ Arquivo '{}' 100% conforme. Zero violações.", path_str)
                             } else {
-                                let lines: Vec<String> = violations.iter().map(format_violation_line).collect();
+                                let lines: Vec<String> =
+                                    violations.iter().map(format_violation_line).collect();
                                 lines.join("\n")
                             }
                         } else {
@@ -225,7 +226,10 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             {
                                 Ok(report) => {
                                     if report.violations.is_empty() {
-                                        format!("✨ Diretório '{}' 100% conforme. Zero violações em {} arquivos.", path_str, report.total_files_scanned)
+                                        format!(
+                                            "✨ Diretório '{}' 100% conforme. Zero violações em {} arquivos.",
+                                            path_str, report.total_files_scanned
+                                        )
                                     } else {
                                         let mut lines = Vec::new();
                                         lines.push(format!(
@@ -253,7 +257,10 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         match engine.scan_directory(repo_root, None, None, false, rev, false) {
                             Ok(report) => {
                                 if report.violations.is_empty() {
-                                    format!("✨ Scan cirúrgico limpo! Zero violações nos {} arquivos modificados.", report.total_files_scanned)
+                                    format!(
+                                        "✨ Scan cirúrgico limpo! Zero violações nos {} arquivos modificados.",
+                                        report.total_files_scanned
+                                    )
                                 } else {
                                     let mut lines = Vec::new();
                                     lines.push(format!(
@@ -344,7 +351,9 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                         dv.file_path,
                                         dv.line_number,
                                         dv.message,
-                                        dv.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada.")
+                                        dv.suggestion
+                                            .as_deref()
+                                            .unwrap_or("Abstraia a lógica duplicada.")
                                     ));
                                 }
 
@@ -403,7 +412,9 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                     v.line_number,
                                     v.message,
                                     v.snippet,
-                                    v.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada.")
+                                    v.suggestion
+                                        .as_deref()
+                                        .unwrap_or("Abstraia a lógica duplicada.")
                                 ));
                             }
                             msg

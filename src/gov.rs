@@ -15,7 +15,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     let mut errors = Vec::new();
     let mut laws_count = 0;
 
-    let agents_md_path = if repo_root.is_file() && repo_root.file_name().and_then(|s| s.to_str()) == Some("AGENTS.md") {
+    let agents_md_path = if repo_root.is_file()
+        && repo_root.file_name().and_then(|s| s.to_str()) == Some("AGENTS.md")
+    {
         repo_root.to_path_buf()
     } else {
         let base = if repo_root.is_file() {
@@ -63,21 +65,24 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                 // Se for o AGENTS.md universal do Vault/Homelab
                 if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
                     let has_conventions = content.contains("agent-conventions.md");
-                    let has_rust_tools =
-                        content.contains("Ferramentas Rust") || content.contains("Preferências de Terminal");
+                    let has_rust_tools = content.contains("Ferramentas Rust")
+                        || content.contains("Preferências de Terminal");
                     let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
 
                     if has_conventions && has_rust_tools && has_homelab_or_mei {
                         messages.push(
-                            "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança".to_string(),
+                            "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança"
+                                .to_string(),
                         );
                         messages.push(
-                            "✅ Regras de ferramentas Rust e privilégios de sistema preservadas".to_string(),
+                            "✅ Regras de ferramentas Rust e privilégios de sistema preservadas"
+                                .to_string(),
                         );
                         laws_count = 14;
                     } else {
                         let err =
-                            "❌ AGENTS.md universal com convenções ou regras essenciais ausentes".to_string();
+                            "❌ AGENTS.md universal com convenções ou regras essenciais ausentes"
+                                .to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
@@ -91,7 +96,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     // AGENTS.md de Repositório Satélite / Público especializado
                     for line in content.lines() {
                         let trimmed = line.trim();
-                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit())
+                            && trimmed.contains(". **")
+                        {
                             laws_count += 1;
                         }
                     }
@@ -113,7 +120,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     // AGENTS.md do Hub de Engenharia (38 Leis Absolutas)
                     for line in content.lines() {
                         let trimmed = line.trim();
-                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit())
+                            && trimmed.contains(". **")
+                        {
                             laws_count += 1;
                         }
                     }
@@ -144,7 +153,8 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     if content.contains("HERANÇA DE CONTEXTO") {
                         messages.push("✅ Cláusula de Herança de Contexto presente".to_string());
                     } else {
-                        let err = "❌ Cláusula 'HERANÇA DE CONTEXTO' ausente no AGENTS.md".to_string();
+                        let err =
+                            "❌ Cláusula 'HERANÇA DE CONTEXTO' ausente no AGENTS.md".to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
@@ -281,7 +291,8 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             || path_str.contains("/scratch/") // diretório de scratch autorizado
             || path_str.contains("/brain/") // brain artifacts
             || path_str.contains("/legado/") // histórico legado arquivado
-            || path_str.contains("/archive/") // arquivos históricos arquivados
+            || path_str.contains("/archive/")
+        // arquivos históricos arquivados
         {
             continue;
         }
@@ -402,4 +413,3 @@ pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation>
 
     violations
 }
-

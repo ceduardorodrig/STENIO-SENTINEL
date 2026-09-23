@@ -20,12 +20,26 @@ pub fn run_gaming_health() -> Result<()> {
     let session = detect_session();
     match session.as_str() {
         "Hyprland" => {
-            println!("   {:<34} [{}]", "Sessão".bold(), "Hyprland (Wayland)".green().bold());
-            println!("   {:<34} KWin-equivalent: Hyprland compõe via scanout opt-in", "Compositor".bold());
+            println!(
+                "   {:<34} [{}]",
+                "Sessão".bold(),
+                "Hyprland (Wayland)".green().bold()
+            );
+            println!(
+                "   {:<34} KWin-equivalent: Hyprland compõe via scanout opt-in",
+                "Compositor".bold()
+            );
         }
         "KDE" => {
-            println!("   {:<34} [{}]", "Sessão".bold(), "KDE Plasma (Wayland)".cyan().bold());
-            println!("   {:<34} KWin compõe SEMPRE (sem direct scanout → SM funciona)", "Compositor".bold());
+            println!(
+                "   {:<34} [{}]",
+                "Sessão".bold(),
+                "KDE Plasma (Wayland)".cyan().bold()
+            );
+            println!(
+                "   {:<34} KWin compõe SEMPRE (sem direct scanout → SM funciona)",
+                "Compositor".bold()
+            );
         }
         _ => {
             println!(
@@ -108,9 +122,7 @@ fn detect_session() -> String {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if desktop.to_lowercase().contains("hyprland") {
         "Hyprland".to_string()
-    } else if desktop.to_lowercase().contains("plasma")
-        || desktop.to_lowercase().contains("kde")
-    {
+    } else if desktop.to_lowercase().contains("plasma") || desktop.to_lowercase().contains("kde") {
         "KDE".to_string()
     } else if !desktop.is_empty() {
         desktop
@@ -163,18 +175,8 @@ fn check_dmemcg_stack(_session: &str) {
     let sys_boost = service_active(true, "dmemcg-booster-system");
     let user_boost = service_active(false, "dmemcg-booster-user");
     let hlf_boost = service_active(false, "hyprland-focused-booster");
-    check_status(
-        "dmemcg-booster-system",
-        sys_boost,
-        "ativo",
-        "INATIVO",
-    );
-    check_status(
-        "dmemcg-booster-user",
-        user_boost,
-        "ativo",
-        "INATIVO",
-    );
+    check_status("dmemcg-booster-system", sys_boost, "ativo", "INATIVO");
+    check_status("dmemcg-booster-user", user_boost, "ativo", "INATIVO");
     check_status(
         "hyprland-focused-booster",
         hlf_boost,
@@ -200,12 +202,17 @@ fn check_dmemcg_stack(_session: &str) {
         })
         .unwrap_or(0);
     let boosted = max_low > 1_000_000_000; // >1GB de dmem.low na janela mais alta
-    let ok_msg = format!("ativo (máx ~{:.1} GB de VRAM protegida)", max_low as f64 / 1e9);
-    let fail_msg = format!(
-        "INATIVO (máx {} B — booster não elevou dmem.low)",
-        max_low
+    let ok_msg = format!(
+        "ativo (máx ~{:.1} GB de VRAM protegida)",
+        max_low as f64 / 1e9
     );
-    check_status("Boost funcional (dmem.low janela focada)", boosted, &ok_msg, &fail_msg);
+    let fail_msg = format!("INATIVO (máx {} B — booster não elevou dmem.low)", max_low);
+    check_status(
+        "Boost funcional (dmem.low janela focada)",
+        boosted,
+        &ok_msg,
+        &fail_msg,
+    );
 }
 
 fn check_hyprland_scanout() {
@@ -214,13 +221,19 @@ fn check_hyprland_scanout() {
         .args(["getoption", "render:direct_scanout"])
         .stdin(std::process::Stdio::null())
         .output();
-    let ds_str = ds.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let ds_str = ds
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
     let ds_ok = ds_str.contains("int: 2");
     check_status(
         "direct_scanout (Hyprland)",
         ds_ok,
         "= 2 (auto: ativa p/ content 'game')",
-        format!("≠ 2 — atual: {}", ds_str.lines().next().unwrap_or("?").trim()).as_str(),
+        format!(
+            "≠ 2 — atual: {}",
+            ds_str.lines().next().unwrap_or("?").trim()
+        )
+        .as_str(),
     );
 
     // b) windowrule marca jogos como content = 'game' (gatilho do scanout)
@@ -243,7 +256,9 @@ fn check_hyprland_scanout() {
         .args(["getoption", "misc:vrr"])
         .stdin(std::process::Stdio::null())
         .output();
-    let vrr_str = vrr.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let vrr_str = vrr
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
     check_status(
         "VRR (misc:vrr)",
         vrr_str.contains("int: 3") || vrr_str.contains("int: 1"),
@@ -351,8 +366,7 @@ fn check_gaming_stack() {
     );
 
     // d) DLSS upgrade global (environment.d)
-    let env_gaming =
-        std::fs::read_to_string("/home/edu/.config/environment.d/gaming.conf");
+    let env_gaming = std::fs::read_to_string("/home/edu/.config/environment.d/gaming.conf");
     let env_body = env_gaming.unwrap_or_default();
     let dlss_ok = env_body.contains("PROTON_DLSS_UPGRADE=1");
     check_status(
@@ -380,8 +394,8 @@ fn check_kernel_gaming() {
 
     // b) NTSYNC (kernel + dev)
     let ntsync_dev = std::path::Path::new("/dev/ntsync").exists();
-    let ntsync_env = std::fs::read_to_string("/home/edu/.config/environment.d/env.conf")
-        .unwrap_or_default();
+    let ntsync_env =
+        std::fs::read_to_string("/home/edu/.config/environment.d/env.conf").unwrap_or_default();
     let ntsync_ok = ntsync_dev && ntsync_env.contains("PROTON_USE_NTSYNC=1");
     check_status(
         "NTSYNC (kernel + env)",
@@ -461,7 +475,9 @@ fn check_game_performance() {
         "/home/edu/.local/share/Steam/userdata/115099278/config/localconfig.vdf",
     )
     .unwrap_or_default();
-    let in_all_games = vdf.matches("systemd-run --user --scope game-performance").count();
+    let in_all_games = vdf
+        .matches("systemd-run --user --scope game-performance")
+        .count();
     check_status(
         "game-performance (nos jogos)",
         in_all_games >= 36,
@@ -485,8 +501,7 @@ fn check_game_performance() {
 
 fn check_shader_cache_warnings() {
     // a) shader cache 12GB (CachyOS wiki §Increase shader cache size)
-    let env_gaming =
-        std::fs::read_to_string("/home/edu/.config/environment.d/gaming.conf");
+    let env_gaming = std::fs::read_to_string("/home/edu/.config/environment.d/gaming.conf");
     let env_body = env_gaming.unwrap_or_default();
     let sc_ok = env_body.contains("__GL_SHADER_DISK_CACHE_SIZE=12000000000");
     check_status(
@@ -588,7 +603,9 @@ fn game_names_from_list() -> std::collections::HashMap<u64, String> {
         .arg("list")
         .stdin(std::process::Stdio::null())
         .output();
-    let body = out.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+    let body = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
     for line in body.lines() {
         // Formato do cmd_list: "{:<10} {:<32} ..." → appid na col 0-9, nome na col 10-41.
         if line.len() < 42 {

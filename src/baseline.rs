@@ -42,7 +42,9 @@ impl Whitelist {
         // NOTA DE SEGURANÇA: 'stenio-ignore: all' é expressamente PROIBIDO e não tem efeito.
         if line_content.contains("# stenio-ignore") || line_content.contains("// stenio-ignore") {
             // Proibição estrita de bypass global 'all'
-            if line_content.contains("stenio-ignore: all") || line_content.contains("stenio-ignore:all") {
+            if line_content.contains("stenio-ignore: all")
+                || line_content.contains("stenio-ignore:all")
+            {
                 return false;
             }
             if line_content.contains(rule_id) {
@@ -81,33 +83,73 @@ impl Whitelist {
 pub fn print_banner(title: &str) {
     use colored::*;
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
     println!("{}", title.cyan().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
 }
 
 pub fn print_banner_with_badge(title: &str, badge: &str) {
     use colored::*;
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
     println!("{} {}", title.cyan().bold(), badge.yellow());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".cyan().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .cyan()
+            .bold()
+    );
 }
 
 pub fn print_banner_green(title: &str) {
     use colored::*;
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .green()
+            .bold()
+    );
     println!("{}", title.green().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".green().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .green()
+            .bold()
+    );
 }
 
 pub fn print_banner_red(title: &str) {
     use colored::*;
     println!();
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".red().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .red()
+            .bold()
+    );
     println!("{}", title.red().bold());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".red().bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════"
+            .red()
+            .bold()
+    );
 }
 
 pub fn parse_tags_file(tags_file: &Path) -> HashSet<String> {

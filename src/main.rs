@@ -15,10 +15,10 @@ mod dry;
 mod engine;
 mod explain;
 mod frontend;
+mod gaming;
 mod gov;
 mod gpu;
 mod guardian;
-mod gaming;
 mod health;
 mod homelab;
 mod infra;
@@ -46,7 +46,7 @@ use gpu::audit_gpu_subsystem;
 use homelab::audit_homelab;
 use infra::audit_infrastructure;
 use migrations::audit_migrations;
-use rule::{get_rules_from_config, Rule, Severity};
+use rule::{Rule, Severity, get_rules_from_config};
 use vault::audit_vault;
 
 #[derive(Parser, Debug)]
@@ -581,9 +581,17 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     );
     if v_lh.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
         passed += 1;
-        println!("   ✅ Teste {:<22} [{}] - OK", "Hardcoded Localhost", "FRONT-NO-HARDCODED-HOST".cyan());
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "Hardcoded Localhost",
+            "FRONT-NO-HARDCODED-HOST".cyan()
+        );
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "Hardcoded Localhost", "FRONT-NO-HARDCODED-HOST".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "Hardcoded Localhost",
+            "FRONT-NO-HARDCODED-HOST".red()
+        );
     }
 
     total += 1;
@@ -594,26 +602,50 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     );
     if !v_ok.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
         passed += 1;
-        println!("   ✅ Teste {:<22} [{}] - OK", "Host Relativo Válido", "FRONT-NO-HARDCODED-HOST".cyan());
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "Host Relativo Válido",
+            "FRONT-NO-HARDCODED-HOST".cyan()
+        );
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "Host Relativo Válido", "FRONT-NO-HARDCODED-HOST".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "Host Relativo Válido",
+            "FRONT-NO-HARDCODED-HOST".red()
+        );
     }
 
     // ── Teste de Idempotência SQL (check_sql_idempotency) ───────────────
     total += 1;
     if migrations::check_sql_idempotency("CREATE TABLE users (id INT);").is_some() {
         passed += 1;
-        println!("   ✅ Teste {:<22} [{}] - OK", "SQL Não-Idempotente", "DB-IDEMPOTENT-MIGRATION".cyan());
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "SQL Não-Idempotente",
+            "DB-IDEMPOTENT-MIGRATION".cyan()
+        );
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "SQL Não-Idempotente", "DB-IDEMPOTENT-MIGRATION".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "SQL Não-Idempotente",
+            "DB-IDEMPOTENT-MIGRATION".red()
+        );
     }
 
     total += 1;
     if migrations::check_sql_idempotency("CREATE TABLE IF NOT EXISTS users (id INT);").is_none() {
         passed += 1;
-        println!("   ✅ Teste {:<22} [{}] - OK", "SQL Idempotente Válido", "DB-IDEMPOTENT-MIGRATION".cyan());
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "SQL Idempotente Válido",
+            "DB-IDEMPOTENT-MIGRATION".cyan()
+        );
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "SQL Idempotente Válido", "DB-IDEMPOTENT-MIGRATION".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "SQL Idempotente Válido",
+            "DB-IDEMPOTENT-MIGRATION".red()
+        );
     }
 
     // ── Testes das 6 Boas Práticas Rust Anti-Preguiça / Anti-Bug ────────
@@ -691,12 +723,30 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         rel_path: "ComponentA.tsx".to_string(),
         has_ignore: false,
         substantive: vec![
-            dry::SubstantiveLine { line_no: 10, text: "const filtered = items.filter(x => x.active);".to_string() },
-            dry::SubstantiveLine { line_no: 11, text: "const sorted = filtered.sort((a, b) => a.order - b.order);".to_string() },
-            dry::SubstantiveLine { line_no: 12, text: "const paginated = sorted.slice(0, 20);".to_string() },
-            dry::SubstantiveLine { line_no: 13, text: "const totalCount = filtered.length;".to_string() },
-            dry::SubstantiveLine { line_no: 14, text: "const isMaxReached = totalCount >= 100;".to_string() },
-            dry::SubstantiveLine { line_no: 15, text: "return { paginated, totalCount, isMaxReached };".to_string() },
+            dry::SubstantiveLine {
+                line_no: 10,
+                text: "const filtered = items.filter(x => x.active);".to_string(),
+            },
+            dry::SubstantiveLine {
+                line_no: 11,
+                text: "const sorted = filtered.sort((a, b) => a.order - b.order);".to_string(),
+            },
+            dry::SubstantiveLine {
+                line_no: 12,
+                text: "const paginated = sorted.slice(0, 20);".to_string(),
+            },
+            dry::SubstantiveLine {
+                line_no: 13,
+                text: "const totalCount = filtered.length;".to_string(),
+            },
+            dry::SubstantiveLine {
+                line_no: 14,
+                text: "const isMaxReached = totalCount >= 100;".to_string(),
+            },
+            dry::SubstantiveLine {
+                line_no: 15,
+                text: "return { paginated, totalCount, isMaxReached };".to_string(),
+            },
         ],
     };
     let sample_f2 = dry::FileRecord {
@@ -709,26 +759,48 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     let dry_v = dry::detect_dry_duplication(&[sample_f1, sample_f2], 6, &empty_whitelist);
     if !dry_v.is_empty() && dry_v[0].rule_id == "ARCH-DRY-DUPLICATION" {
         passed += 1;
-        println!("   ✅ Teste {:<22} [{}] - OK", "DRY Block Duplication", "ARCH-DRY-DUPLICATION".cyan());
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "DRY Block Duplication",
+            "ARCH-DRY-DUPLICATION".cyan()
+        );
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "DRY Block Duplication", "ARCH-DRY-DUPLICATION".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "DRY Block Duplication",
+            "ARCH-DRY-DUPLICATION".red()
+        );
     }
 
     // ── Teste de Isolamento de Escopo Monorepo (ARCH-SCOPE-ISOLATION) ───
     total += 1;
     let mixed_paths = vec![
-        PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub/app/frontend-v2/src/App.tsx"),
+        PathBuf::from(
+            "/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub/app/frontend-v2/src/App.tsx",
+        ),
         PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio/src/engine.rs"),
     ];
     if let Some(v) = engine::Engine::check_scope_isolation(&mixed_paths) {
         if v.rule_id == "ARCH-SCOPE-ISOLATION" {
             passed += 1;
-            println!("   ✅ Teste {:<22} [{}] - OK", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".cyan());
+            println!(
+                "   ✅ Teste {:<22} [{}] - OK",
+                "Isolamento de Escopo",
+                "ARCH-SCOPE-ISOLATION".cyan()
+            );
         } else {
-            println!("   ❌ Teste {:<22} [{}] - FALHA", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".red());
+            println!(
+                "   ❌ Teste {:<22} [{}] - FALHA",
+                "Isolamento de Escopo",
+                "ARCH-SCOPE-ISOLATION".red()
+            );
         }
     } else {
-        println!("   ❌ Teste {:<22} [{}] - FALHA", "Isolamento de Escopo", "ARCH-SCOPE-ISOLATION".red());
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "Isolamento de Escopo",
+            "ARCH-SCOPE-ISOLATION".red()
+        );
     }
 
     println!();
@@ -816,12 +888,16 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
             dv.file_path,
             dv.line_number,
             dv.message,
-            dv.suggestion.as_deref().unwrap_or("Abstraia a lógica duplicada")
+            dv.suggestion
+                .as_deref()
+                .unwrap_or("Abstraia a lógica duplicada")
         ));
     }
 
     if blocker_errors.is_empty() {
-        baseline::print_banner_green("🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras.");
+        baseline::print_banner_green(
+            "🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras.",
+        );
         println!(
             "   • {} arquivos auditados com sucesso.",
             report.total_files_scanned
@@ -1004,7 +1080,9 @@ fn main() -> Result<()> {
     if args.guardian {
         let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
         let rep = audit_stenio_integrity(&stenio_src);
-        baseline::print_banner("StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering");
+        baseline::print_banner(
+            "StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering",
+        );
         for m in &rep.messages {
             println!("   {}", m);
         }
@@ -1358,7 +1436,10 @@ fn main() -> Result<()> {
                 line_number: 1,
                 snippet: err.clone(),
                 message: err.clone(),
-                suggestion: Some("Use 'IF NOT EXISTS' em CREATE TABLE/INDEX ou 'IF EXISTS' em DROP TABLE/INDEX.".to_string()),
+                suggestion: Some(
+                    "Use 'IF NOT EXISTS' em CREATE TABLE/INDEX ou 'IF EXISTS' em DROP TABLE/INDEX."
+                        .to_string(),
+                ),
             });
         }
     }

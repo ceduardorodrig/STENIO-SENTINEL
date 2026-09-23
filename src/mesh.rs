@@ -321,7 +321,11 @@ async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
         }
         Err(_) => {
             if tailscale_online {
-                NodeStatus::ts_active(node, tailscale_online, "Ativo no Tailscale (Porta com timeout)")
+                NodeStatus::ts_active(
+                    node,
+                    tailscale_online,
+                    "Ativo no Tailscale (Porta com timeout)",
+                )
             } else {
                 NodeStatus::offline(node, tailscale_online, "Timeout (>1500ms)")
             }
