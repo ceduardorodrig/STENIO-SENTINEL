@@ -195,7 +195,7 @@ at your option.
 ## 📬 Author & Community
 
 - **Creator & Maintainer:** **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig))
-- **Portfolio & Curriculum:** [CURRICULUM-VITAE](https://github.com/ceduardorodrig/CURRICULUM-VITAE)
+- **Portfolio & Profile:** [ceduardorodrig](https://github.com/ceduardorodrig/ceduardorodrig)
 - **Venture:** [Sumænimá](https://sumaenima.chimaera-heptatonic.ts.net)
 
 ---
