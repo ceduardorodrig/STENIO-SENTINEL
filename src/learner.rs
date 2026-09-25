@@ -20,6 +20,8 @@ pub struct LearnPayload {
     pub must_match: Option<bool>,
     pub suggestion: Option<String>,
     pub fix_replacement: Option<String>,
+    pub path_include: Option<Vec<String>>,
+    pub path_exclude: Option<Vec<String>>,
 }
 
 pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
@@ -93,9 +95,31 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
         ),
         None => "".to_string(),
     };
+    let path_inc_line = match &payload.path_include {
+        Some(inc) => {
+            let list = inc
+                .iter()
+                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("path_include = [{}]\n", list)
+        }
+        None => "".to_string(),
+    };
+    let path_exc_line = match &payload.path_exclude {
+        Some(exc) => {
+            let list = exc
+                .iter()
+                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("path_exclude = [{}]\n", list)
+        }
+        None => "".to_string(),
+    };
 
     let toml_entry = format!(
-        "\n[[custom_rules]]\nid = \"{}\"\ntag = \"{}\"\nseverity = \"{}\"\nname = \"{}\"\ndescription = \"{}\"\npattern = \"{}\"\nextensions = [{}]\nmust_match = {}\n{}{}",
+        "\n[[custom_rules]]\nid = \"{}\"\ntag = \"{}\"\nseverity = \"{}\"\nname = \"{}\"\ndescription = \"{}\"\npattern = \"{}\"\nextensions = [{}]\nmust_match = {}\n{}{}{}{}",
         id,
         tag,
         severity,
@@ -105,7 +129,9 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
         extensions_fmt,
         must_match,
         suggestion_line,
-        fix_line
+        fix_line,
+        path_inc_line,
+        path_exc_line
     );
 
     // 4. Persistência atômica / append

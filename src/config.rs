@@ -86,6 +86,8 @@ pub struct CustomRuleConfig {
     pub must_match: Option<bool>,
     pub suggestion: Option<String>,
     pub fix_replacement: Option<String>,
+    pub path_include: Option<Vec<String>>,
+    pub path_exclude: Option<Vec<String>>,
 }
 
 #[allow(dead_code)]

@@ -89,9 +89,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                 } else if content.contains("currículo")
                     || content.contains("curriculum-vitae")
                     || content.contains("WITH-SMOOTH-MOTION")
-                    || (content.contains("StenioSentinel")
-                        && !content.contains("sumaenima-hub")
-                        && !content.contains("SUMAENIMA-HUB"))
+                    || ((content.contains("StenioSentinel") || content.contains("StênioKernel"))
+                        && !content.contains("Orientação para assistentes")
+                        && !content.contains("LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA)"))
                 {
                     // AGENTS.md de Repositório Satélite / Público especializado
                     for line in content.lines() {

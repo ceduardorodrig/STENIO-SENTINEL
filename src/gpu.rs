@@ -15,7 +15,13 @@ pub struct GpuAuditResult {
 pub fn audit_gpu_subsystem() -> GpuAuditResult {
     let mut messages = Vec::new();
     let mut errors = Vec::new();
-    let cache_dir = Path::new("/mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache");
+    let primary_cache = Path::new("/mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache");
+    let fallback_cache = Path::new("/mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache");
+    let cache_dir = if primary_cache.is_dir() {
+        primary_cache
+    } else {
+        fallback_cache
+    };
 
     // 1. Hardware & Driver Query direta via host nvidia-smi (<5ms)
     let hardware_info = query_host_gpu();
@@ -48,7 +54,10 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
             false
         }
     } else if cache_dir.is_dir() {
-        let err = "❌ Modelo Whisper GGML Q8_0 ausente no cache NVMe (/mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache/whisper-ggml/)".to_string();
+        let err = format!(
+            "❌ Modelo Whisper GGML Q8_0 ausente no cache NVMe ({}/whisper-ggml/)",
+            cache_dir.display()
+        );
         messages.push(err.clone());
         errors.push(err);
         false

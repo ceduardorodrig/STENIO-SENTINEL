@@ -57,7 +57,7 @@ impl Engine {
     pub fn check_scope_isolation(file_paths: &[PathBuf]) -> Option<Violation> {
         let has_hub_files = file_paths.iter().any(|p| {
             let s = p.to_string_lossy();
-            s.contains("sumaenimahub") || s.contains("/app/")
+            s.contains("sumaenima-hub") || s.contains("SUMAENIMA-HUB") || s.contains("/app/")
         });
         let has_stenio_engine_files = file_paths.iter().any(|p| {
             let s = p.to_string_lossy();
@@ -359,6 +359,18 @@ impl Engine {
                 continue;
             }
 
+            if !rule.path_includes.is_empty()
+                && !rule.path_includes.iter().any(|inc| path_str.contains(inc))
+            {
+                continue;
+            }
+
+            if !rule.path_excludes.is_empty()
+                && rule.path_excludes.iter().any(|exc| path_str.contains(exc))
+            {
+                continue;
+            }
+
             // Pula regras com marcador avaliadas exclusivamente por subsistemas dedicados
             if rule.pattern.contains("stenio-") && rule.pattern.contains("-marker") {
                 continue;
@@ -408,7 +420,10 @@ impl Engine {
                 || rule.id.starts_with("SEC-BAN-")
                 || rule.id == "ARCH-BANNED-MODULES"
             {
-                if !path_str.contains("sumaenimahub") && !path_str.contains("/app/") {
+                if !path_str.contains("sumaenima-hub")
+                    && !path_str.contains("SUMAENIMA-HUB")
+                    && !path_str.contains("/app/")
+                {
                     continue;
                 }
             }

@@ -22,6 +22,7 @@ pub fn find_frontend_dir(root: &Path) -> Option<PathBuf> {
     let candidates = [
         root.join("sumaenimahub/sumaenima-hub/app/frontend-v2"),
         root.join("app/frontend-v2"),
+        PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub/app/frontend-v2"),
         PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub/app/frontend-v2"),
     ];
 

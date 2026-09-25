@@ -1034,6 +1034,8 @@ fn main() -> Result<()> {
     if args.typegen {
         let target_dir = if args.path.join("app/frontend-v2").is_dir() {
             args.path.clone()
+        } else if PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub").is_dir() {
+            PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub")
         } else if PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub").is_dir() {
             PathBuf::from("/mnt/NVME_PCI/agentic-ai/sumaenimahub/sumaenima-hub")
         } else {
@@ -1180,15 +1182,16 @@ fn main() -> Result<()> {
 
     let tag_lower = args.tag.as_deref().map(|s| s.to_lowercase());
     let only_rule = args.only.as_deref();
+    let p_canon = args
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| args.path.clone());
+    let p_str = p_canon.to_string_lossy();
     let scope = if let Some(s) = args.scope.as_deref() {
         s.to_lowercase()
     } else {
-        let p_canon = args
-            .path
-            .canonicalize()
-            .unwrap_or_else(|_| args.path.clone());
-        let p_str = p_canon.to_string_lossy();
-        if p_str.contains("sumaenimahub")
+        if p_str.contains("sumaenima-hub")
+            || p_str.contains("SUMAENIMA-HUB")
             || (args.path.join("app").is_dir() && args.path.join("migrations").is_dir())
         {
             "hub".to_string()
@@ -1198,19 +1201,20 @@ fn main() -> Result<()> {
             "cv".to_string()
         } else if p_str.contains("governance/stenio") {
             "rust".to_string()
-        } else if p_str.contains("projects")
-            || p_str.contains("personal")
-            || p_str.contains("temp")
-            || p_str.contains("templates")
-            || p_str.contains("sumænimá")
-            || p_str.contains("assets")
-            || p_str.contains("docs")
+        } else if p_str.contains("agentic-ai")
+            && (p_str.contains("projects")
+                || p_str.contains("personal")
+                || p_str.contains("temp")
+                || p_str.contains("templates")
+                || p_str.contains("sumænimá")
+                || p_str.contains("assets")
+                || p_str.contains("docs"))
         {
             "vault".to_string()
         } else if args.path.join("mnemocine").is_dir() && args.path.join("governance").is_dir() {
             "all".to_string()
         } else {
-            "all".to_string()
+            "project".to_string()
         }
     };
 
@@ -1250,10 +1254,16 @@ fn main() -> Result<()> {
             args.path.clone()
         }
     } else if scope == "hub" {
-        if args.path.join("sumaenimahub/sumaenima-hub").is_dir() {
+        if p_str.contains("sumaenima-hub") || p_str.contains("SUMAENIMA-HUB") {
+            args.path.clone()
+        } else if args.path.join("sumaenimahub/sumaenima-hub").is_dir() {
             args.path.join("sumaenimahub/sumaenima-hub")
         } else if args.path.join("sumaenimahub/SUMAENIMA-HUB").is_dir() {
             args.path.join("sumaenimahub/SUMAENIMA-HUB")
+        } else if args.path.join("sumaenima-hub").is_dir() {
+            args.path.join("sumaenima-hub")
+        } else if PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub").is_dir() {
+            PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub")
         } else {
             args.path.clone()
         }
@@ -1415,7 +1425,7 @@ fn main() -> Result<()> {
                     line_number: 1,
                     snippet: "".to_string(),
                     message: gpu_err,
-                    suggestion: Some("Verifique o arquivo GGML em /mnt/NVME_PCI/agentic-ai/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
+                    suggestion: Some("Verifique o arquivo GGML em /mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
                 });
             }
         }

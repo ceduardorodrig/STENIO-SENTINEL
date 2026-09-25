@@ -19,6 +19,8 @@ pub struct Rule {
     pub must_match: bool,
     pub suggestion: Option<String>,
     pub fix_replacement: Option<String>,
+    pub path_includes: Vec<String>,
+    pub path_excludes: Vec<String>,
 }
 
 impl Rule {
@@ -43,6 +45,8 @@ impl Rule {
             must_match: false,
             suggestion: suggestion.map(|s| s.to_string()),
             fix_replacement: None,
+            path_includes: Vec::new(),
+            path_excludes: Vec::new(),
         }
     }
 
@@ -639,6 +643,8 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
                 must_match: cr.must_match.unwrap_or(false),
                 suggestion: cr.suggestion.clone(),
                 fix_replacement: cr.fix_replacement.clone(),
+                path_includes: cr.path_include.clone().unwrap_or_default(),
+                path_excludes: cr.path_exclude.clone().unwrap_or_default(),
             };
             rules.push(rule);
         }
