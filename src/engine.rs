@@ -55,24 +55,24 @@ impl Engine {
     }
 
     pub fn check_scope_isolation(file_paths: &[PathBuf]) -> Option<Violation> {
-        let has_hub_files = file_paths.iter().any(|p| {
-            let s = p.to_string_lossy();
-            s.contains("sumaenima-hub") || s.contains("SUMAENIMA-HUB") || s.contains("/app/")
-        });
         let has_stenio_engine_files = file_paths.iter().any(|p| {
             let s = p.to_string_lossy();
             s.contains("governance/stenio/src/")
         });
+        let has_app_or_project_files = file_paths.iter().any(|p| {
+            let s = p.to_string_lossy();
+            !s.contains("governance/stenio/")
+        });
 
-        if has_hub_files && has_stenio_engine_files {
+        if has_stenio_engine_files && has_app_or_project_files {
             Some(Violation {
                 rule_id: "ARCH-SCOPE-ISOLATION".to_string(),
                 rule_name: "Violação de Isolamento de Escopo Monorepo".to_string(),
                 severity: Severity::Error,
                 file_path: "governance/stenio".to_string(),
                 line_number: 1,
-                snippet: "Diff misto contendo código do App (sumaenimahub/) e motor de governança (governance/stenio/src/)".to_string(),
-                message: "Violação de Governança: É proibido alterar código da aplicação e o motor do Stênio no mesmo commit/tarefa.".to_string(),
+                snippet: "Diff misto contendo código de aplicação/projetos e motor de governança (governance/stenio/src/)".to_string(),
+                message: "Violação de Governança: É proibido alterar código da aplicação/projetos e o motor do Stênio no mesmo commit/tarefa.".to_string(),
                 suggestion: Some("Isole as tarefas: submeta primeiro a evolução do Stênio em commit isolado, ou desfaça a alteração de governança se o foco for a aplicação.".to_string()),
             })
         } else {
@@ -416,10 +416,7 @@ impl Engine {
                 }
             }
 
-            if rule.id == "ARCH-NO-PYTHON"
-                || rule.id.starts_with("SEC-BAN-")
-                || rule.id == "ARCH-BANNED-MODULES"
-            {
+            if rule.id == "ARCH-BANNED-MODULES" {
                 if !path_str.contains("sumaenima-hub")
                     && !path_str.contains("SUMAENIMA-HUB")
                     && !path_str.contains("/app/")
