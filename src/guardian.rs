@@ -75,7 +75,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             "engine.rs",
             &[
                 "ARCH-SCOPE-ISOLATION",
-                "has_hub_files",
+                "has_app_or_project_files",
                 "has_stenio_engine_files",
             ],
         ),
