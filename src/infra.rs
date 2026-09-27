@@ -223,19 +223,30 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
             }
         }
 
-        // ── 5. Detecção de Débito Técnico: Python Fora do Hub (ARCH-LEGACY-PYTHON)
+        // ── 5. Detecção de Débito Técnico: Python Solto (ARCH-LEGACY-PYTHON)
+        // Regra: scripts/archive/ é o lugar correto para scripts legados — silêncio total lá.
+        // Projetos Rust dedicados (docx-extractor/, validador-roteiro/) têm seu próprio
+        // steniocheck.toml, não auditamos aqui.
+        // Só disparamos WARN para .py soltos fora do archive e fora de projeto próprio.
         if file_name.ends_with(".py") {
             scanned_count += 1;
-            violations.push(Violation {
-                rule_id: "ARCH-LEGACY-PYTHON".to_string(),
-                rule_name: "Script Python Legado Detectado".to_string(),
-                severity: Severity::Warning,
-                file_path: path_str.clone(),
-                line_number: 1,
-                snippet: format!("Arquivo: {}", file_name),
-                message: "Script Python legado encontrado no workspace. Avaliar migração para Rust nativo ou congelamento.".to_string(),
-                suggestion: Some("Reescreva o script em Rust ou documente a exceção com metadados.".to_string()),
-            });
+            let in_archive = path_str.contains("/scripts/archive/")
+                || path_str.contains("/archive/");
+            let in_dedicated_project = path_str.contains("/scripts/docx-extractor/")
+                || path_str.contains("/scripts/validador-roteiro/");
+
+            if !in_archive && !in_dedicated_project {
+                violations.push(Violation {
+                    rule_id: "ARCH-LEGACY-PYTHON".to_string(),
+                    rule_name: "Script Python Solto (Fora do Archive)".to_string(),
+                    severity: Severity::Warning,
+                    file_path: path_str.clone(),
+                    line_number: 1,
+                    snippet: format!("Arquivo: {}", file_name),
+                    message: "Script Python encontrado fora de scripts/archive/. Scripts legados devem ser movidos para archive/ ou migrados para Rust.".to_string(),
+                    suggestion: Some("Mova para scripts/archive/ se for legado/referência, ou reescreva em Rust se ainda estiver em uso ativo.".to_string()),
+                });
+            }
         }
 
         // ── 6. Auditoria de Permissões POSIX em Segredos (SEC-PERM-LEAK) ──────
