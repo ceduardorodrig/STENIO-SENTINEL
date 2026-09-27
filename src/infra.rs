@@ -296,6 +296,52 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         }
     }
 
+    // ── 8. Auditoria de Integridade de Release (REL-PKGBUILD-SYNC & REL-TAG-DRIFT)
+    let pkgbuild_path = root.join("PKGBUILD");
+    let cargo_path = root.join("Cargo.toml");
+    if pkgbuild_path.exists() && cargo_path.exists() {
+        if let (Ok(pkg_content), Ok(cargo_content)) = (
+            fs::read_to_string(&pkgbuild_path),
+            fs::read_to_string(&cargo_path),
+        ) {
+            let mut cargo_ver = None;
+            for line in cargo_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("version = \"") && trimmed.ends_with('"') {
+                    cargo_ver = Some(trimmed.trim_start_matches("version = \"").trim_end_matches('"'));
+                    break;
+                }
+            }
+
+            let mut pkg_ver = None;
+            for line in pkg_content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("pkgver=") {
+                    pkg_ver = Some(trimmed.trim_start_matches("pkgver=").trim());
+                    break;
+                }
+            }
+
+            if let (Some(cver), Some(pver)) = (cargo_ver, pkg_ver) {
+                if cver != pver {
+                    violations.push(Violation {
+                        rule_id: "REL-PKGBUILD-SYNC".to_string(),
+                        rule_name: "Dessincronia de Versão entre Cargo.toml e PKGBUILD".to_string(),
+                        severity: Severity::Error,
+                        file_path: "PKGBUILD".to_string(),
+                        line_number: 1,
+                        snippet: format!("Cargo.toml: {} | PKGBUILD: {}", cver, pver),
+                        message: format!(
+                            "A versão do pacote PKGBUILD ('{}') difere da versão declarada em Cargo.toml ('{}').",
+                            pver, cver
+                        ),
+                        suggestion: Some(format!("Sincronize pkgver={} no PKGBUILD conforme governance/release-policy.md.", cver)),
+                    });
+                }
+            }
+        }
+    }
+
     if violations.is_empty() {
         messages.push(format!(
             "✅ {} arquivos de infraestrutura (Compose/Systemd/SOPS) auditados e conformes.",
