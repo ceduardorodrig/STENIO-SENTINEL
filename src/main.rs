@@ -29,6 +29,7 @@ mod migrations;
 mod ports;
 pub mod remote;
 mod rule;
+mod tools;
 mod typegen;
 mod vault;
 mod watch;
@@ -134,6 +135,12 @@ struct Args {
         help = "Audita a superfície de ataque e portas abertas locais e remotas cruzando com o catálogo canônico"
     )]
     ports: bool,
+
+    #[arg(
+        long,
+        help = "Audita ferramentas de operação em /usr/local/bin contra o que o repositório versiona (fonte da verdade)"
+    )]
+    tools: bool,
 
     #[arg(
         long,
@@ -1027,6 +1034,24 @@ fn main() -> Result<()> {
     if args.ports {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(ports::run_ports_audit(&args.path))?;
+        return Ok(());
+    }
+
+    // ── Modo Ferramentas de Operação (--tools) ──────────────────────────────
+    //
+    // POR QUE EXISTE (29/09/2026): as ferramentas de operação viviam APENAS em
+    // `/usr/local/bin`, fora do repositório. O gate audita arquivos do repo, não
+    // o sistema de arquivos — então ele nunca as via. Custou caro:
+    //   - `smart-metrics.py` violou ARCH-NO-PYTHON em 3 hosts, invisível;
+    //   - `scryfall-prefetch` morreu em /tmp e ninguém soube (cobertura do mirror
+    //     congelada em 62% por um mês);
+    //   - um script instalado estava CORROMPIDO e ninguém tinha diff para ver.
+    //
+    // Este modo cruza o que o host tem com o que `provisioning/` declara. A
+    // fonte da verdade é o instalador (`install-homelab-tools.sh`), que lista as
+    // ferramentas conhecidas.
+    if args.tools {
+        tools::run_tools_audit(&args.path)?;
         return Ok(());
     }
 
