@@ -11,6 +11,67 @@ pub struct InfraReport {
     pub violations: Vec<Violation>,
 }
 
+/// Redacts the matched value so the report never re-leaks the credential it found.
+fn mask_snippet(line: &str) -> String {
+    let trimmed = line.trim();
+    let head: String = trimmed.chars().take(28).collect();
+    if trimmed.chars().count() > 28 {
+        format!("{head}…[REDACTED]")
+    } else {
+        format!("{head}[REDACTED]")
+    }
+}
+
+/// Distinguishes a real credential from prose that merely mentions one.
+///
+/// Documentation frequently shows illustrative values ("Garantir
+/// `ADMINPASSWORD=adminpz123` em ...") or lists variable names as a concept.
+/// Those are not leaks: nothing is being exposed. Real leaks have random-looking
+/// values; examples are short, dictionary-like, or match a well-known demo
+/// value. This keeps the rule actionable instead of training everyone to
+/// ignore it.
+fn is_documentation_example(line: &str, value: &str) -> bool {
+    // Prose markers around the assignment (bullets in guides, "definir X em ...",
+    // backticked inline examples).
+    let prose_markers = ["Garantir", "definir", "ex.:", "exemplo", "Exemplo", "por exemplo"];
+    if prose_markers.iter().any(|m| line.contains(m)) {
+        return true;
+    }
+    if line.trim_start().starts_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+        && line.contains(". ")
+    {
+        // numbered list item in a guide, e.g. "1. Garantir ..."
+        return true;
+    }
+
+    // Well-known demo values used in docs.
+    let demo_values = [
+        "adminpz123",
+        "password123",
+        "secret123",
+        "admin123",
+        "changeme123",
+        "example123",
+        "test1234",
+        "mysecret",
+        "supersecret",
+        "sua_senha",
+        "seu_segredo",
+        "yourpassword",
+    ];
+    let lowered = value.to_ascii_lowercase();
+    if demo_values.iter().any(|d| lowered == *d) {
+        return true;
+    }
+
+    // Very short or purely alphabetic values are almost always words in prose,
+    // not generated credentials (which mix case, digits and symbols).
+    let has_digit = value.chars().any(|c| c.is_ascii_digit());
+    let has_symbol = value.chars().any(|c| !c.is_alphanumeric());
+    let all_lower_alpha = value.chars().all(|c| c.is_ascii_lowercase());
+    value.len() < 12 && !has_symbol && (!has_digit || all_lower_alpha)
+}
+
 pub fn audit_infrastructure(root: &Path) -> InfraReport {
     let mut messages = Vec::new();
     let mut violations = Vec::new();
@@ -93,16 +154,52 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                             continue;
                         }
 
+                        // Reconhece o padrão mesmo com prefixos de YAML/Compose
+                        // (`- VAR=valor`), chaves JSON/YAML (`VAR: valor`) e
+                        // sufixos (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
+                        // A versão anterior só aceitava a linha começando em
+                        // PASSWORD=/API_KEY=/SECRET=, então um
+                        // `- INITIAL_ADMIN_PASSWORD=segredo` passava batido.
+                        let trimmed_no_prefix = trimmed
+                            .trim_start_matches(['-', ' '])
+                            .trim_start_matches("export ")
+                            .trim();
+                        let (maybe_key, maybe_value) = trimmed_no_prefix
+                            .split_once('=')
+                            .or_else(|| trimmed_no_prefix.split_once(':'))
+                            .unwrap_or(("", ""));
+                        let key = maybe_key.trim().trim_matches('"');
+                        let value = maybe_value.trim().trim_matches(['"', '\'']);
+                        let key_upper = key.to_ascii_uppercase();
+
+                        let looks_like_secret_key = key_upper.ends_with("PASSWORD")
+                            || key_upper.ends_with("PASSWD")
+                            || key_upper.ends_with("SECRET")
+                            || key_upper.ends_with("API_KEY")
+                            || key_upper.ends_with("ACCESS_TOKEN")
+                            || key_upper.ends_with("AUTH_TOKEN")
+                            || key_upper.ends_with("_TOKEN")
+                            || key_upper == "PASSWORD"
+                            || key_upper == "SECRET";
+
+                        let value_is_literal = value.len() >= 8
+                            && !value.is_empty()
+                            && !value.contains("${")
+                            && !value.contains("$(")
+                            && !value.contains("ENC[AES256_GCM")
+                            && value != "\"\""
+                            && value != "''"
+                            // placeholders óbvios não são vazamento
+                            && !value.eq_ignore_ascii_case("changeme")
+                            && !value.eq_ignore_ascii_case("placeholder")
+                            && !value.eq_ignore_ascii_case("example")
+                            && !value.eq_ignore_ascii_case("your_password")
+                            && !value.starts_with('<')
+                            && !value.starts_with('%');
+
                         let is_leak = (trimmed.starts_with("ghp_")
                             || trimmed.starts_with("github_pat_"))
-                            || ((trimmed.starts_with("PASSWORD=")
-                                || trimmed.starts_with("API_KEY=")
-                                || trimmed.starts_with("SECRET="))
-                                && !trimmed.ends_with("=\"\"")
-                                && !trimmed.ends_with("=")
-                                && !trimmed.contains("ENC[AES256_GCM")
-                                && !trimmed.contains("${")
-                                && !trimmed.contains("$("));
+                            || (looks_like_secret_key && value_is_literal && !is_documentation_example(trimmed, value));
 
                         if is_leak && !is_sops_encrypted && !is_age_armored {
                             violations.push(Violation {
@@ -111,7 +208,7 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                                 severity: Severity::Error,
                                 file_path: path_str.clone(),
                                 line_number: line_idx + 1,
-                                snippet: format!("{:.30}...", trimmed),
+                                snippet: mask_snippet(trimmed),
                                 message: "Credencial ou token em texto claro encontrado em arquivo de infraestrutura.".to_string(),
                                 suggestion: Some("Substitua o valor por variável de ambiente ou criptografe via sops/age.".to_string()),
                             });
