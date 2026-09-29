@@ -1395,11 +1395,41 @@ fn main() -> Result<()> {
                 || {
                     rayon::join(
                         || {
+                            // ⚠️ CORREÇÃO DE SEGURANÇA (29/09/2026): o
+                            // `audit_infrastructure` roda agora também no escopo
+                            // `fork`/`derived` e no futuro `mirror`.
+                            //
+                            // BUG CORRIGIDO: ele só rodava com `is_homelab_active`,
+                            // mas é ele quem contém as regras de segurança que vivem
+                            // FORA de `get_rules_from_config`:
+                            //   SEC-PLAINTEXT-SECRET, SEC-PRIVATE-KEY-CLEARTEXT,
+                            //   SEC-PERM-LEAK, SEC-SOPS-UNENCRYPTED
+                            //
+                            // Efeito medido: um `DATABASE_PASSWORD` em claro num
+                            // `.env` plantado num repositório auditado com
+                            // `--scope fork` NÃO era detectado. O escopo parecia
+                            // auditado e tinha um falso senso de segurança —
+                            // exatamente o pior modo de falha de um gate.
+                            //
+                            // O filtro por prefixo do escopo trata as regras de
+                            // ARQUIVO (código). Segurança de infraestrutura não é
+                            // negociável por escopo: segredo em claro é segredo em
+                            // claro em qualquer repositório.
+                            let runs_infra_audit = is_homelab_active
+                                || scope_opt.eq_ignore_ascii_case("fork")
+                                || scope_opt.eq_ignore_ascii_case("derived")
+                                || scope_opt.eq_ignore_ascii_case("mirror");
+
                             let (h, inf) = if is_homelab_active {
                                 (
                                     Some(audit_homelab(&args.path)),
                                     Some(audit_infrastructure(&args.path)),
                                 )
+                            } else if runs_infra_audit {
+                                // Sem a auditoria de documentação do homelab (não se
+                                // aplica a um fork ou espelho), mas COM a de
+                                // infraestrutura, que traz as regras de segurança.
+                                (None, Some(audit_infrastructure(&args.path)))
                             } else {
                                 (None, None)
                             };
