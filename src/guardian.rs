@@ -1,6 +1,115 @@
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use crate::engine::Violation;
+use crate::rule::Severity;
+
+/// Extensions intentionally NOT scanned for secrets by [`scan_content_for_secrets`].
+///
+/// Rationale: the documentation vault is Syncthing-mirrored to phones, and it also
+/// hosts the encrypted SOPS store. A credential pasted into a note leaks everywhere,
+/// so documentation and config formats must be scanned too. Binary and lock formats
+/// are excluded to avoid false positives and noise.
+const SECRET_SCAN_SKIP_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "pdf", "zip", "gz", "xz", "zst", "bz2", "7z",
+    "so", "dylib", "dll", "exe", "bin", "o", "a", "rlib", "rmeta", "woff", "woff2", "ttf", "otf",
+    "mp3", "mp4", "wav", "ogg", "webm", "lock",
+];
+
+/// Path fragments never scanned for secrets (caches, mirrors, third-party trees).
+const SECRET_SCAN_SKIP_PATHS: &[&str] = &[
+    "/.git/",
+    "/target/",
+    "/node_modules/",
+    "/.venv/",
+    "/.stversions/",
+    "/.smart-env/",
+    "/dist/",
+    "/dependencies/",
+    "/archive/",
+    "/cold-storage/",
+    "/docs/external/",
+    "/openwiki/",
+];
+
+/// Secrets scan engine for documentation and infrastructure scopes (`homelab`, `vault`).
+///
+/// The `hub` scope runs the `SEC-SECRETS` rule from [`crate::rule`] against source-code
+/// extensions only. That left the vault — whose notes are Syncthing-mirrored *and* which
+/// contains the encrypted SOPS store — completely unscanned. This routine closes that gap
+/// by reusing the exact same canonical patterns over the remaining formats.
+///
+/// It returns a [`Violation`] per matching line, never panicking and never unwrapping.
+pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
+    let path_str = path.to_string_lossy().to_string();
+
+    if SECRET_SCAN_SKIP_PATHS
+        .iter()
+        .any(|fragment| path_str.contains(fragment))
+    {
+        return Vec::new();
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if SECRET_SCAN_SKIP_EXTENSIONS.contains(&ext.as_str()) {
+        return Vec::new();
+    }
+
+    let Some(regex) = secret_pattern() else {
+        return Vec::new();
+    };
+
+    let mut violations = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        if regex.is_match(line) {
+            violations.push(Violation {
+                rule_id: "SEC-SECRETS".to_string(),
+                rule_name: "Segredos Hardcoded".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: line_idx + 1,
+                snippet: mask_secret_snippet(line),
+                message: "Plaintext credential detected outside the SOPS/Age vault. Files in this scope are Syncthing-mirrored and/or internet-exposed.".to_string(),
+                suggestion: Some(
+                    "Move the value to the central store (/mnt/NVME_PCI/secrets/secrets.env), re-encrypt to mnemocine/secrets.enc.env and revoke the exposed credential."
+                        .to_string(),
+                ),
+            });
+        }
+    }
+
+    violations
+}
+
+/// Compiles the canonical secret regex once (keeps the sub-millisecond target).
+fn secret_pattern() -> Option<&'static regex::Regex> {
+    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(
+                r#"(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{48}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)|(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s*[:=]\s*["']?[A-Za-z0-9_\-]{16,}"#,
+            )
+            .ok()
+        })
+        .as_ref()
+}
+
+/// Redacts the matched value so the report never re-leaks the credential it just found.
+fn mask_secret_snippet(line: &str) -> String {
+    let trimmed = line.trim();
+    let head: String = trimmed.chars().take(24).collect();
+    if trimmed.chars().count() > 24 {
+        format!("{}…[REDACTED]", head)
+    } else {
+        format!("{head}[REDACTED]")
+    }
+}
 
 #[allow(dead_code)]
 pub struct GuardianReport {

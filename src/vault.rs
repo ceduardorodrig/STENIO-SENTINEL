@@ -145,6 +145,10 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                 }
             }
         }
+
+        // Validação 3b: Segredos em claro (SEC-SECRETS) em notas e configs do vault.
+        // O vault é espelhado por Syncthing para celulares e abriga o cofre cifrado.
+        violations.extend(crate::guardian::scan_content_for_secrets(&path, &content));
     }
 
     // Validação 4: Nomenclatura Estrita de Pastas em projects/ (AAMMDD-nome-contratante)

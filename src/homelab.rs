@@ -138,6 +138,13 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
                 }
             }
         }
+
+        // Validação D: Segredos em claro (SEC-SECRETS) — documentação e configs.
+        // O vault é espelhado por Syncthing para celulares e abriga o cofre cifrado:
+        // uma credencial colada numa nota vaza para todos os dispositivos.
+        if let Ok(content) = fs::read_to_string(&path) {
+            violations.extend(crate::guardian::scan_content_for_secrets(&path, &content));
+        }
     }
 
     if violations.is_empty() {
