@@ -164,15 +164,23 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                         }
 
                         // Reconhece o padrão mesmo com prefixos de YAML/Compose
-                        // (`- VAR=valor`), chaves JSON/YAML (`VAR: valor`) e
-                        // sufixos (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
-                        // A versão anterior só aceitava a linha começando em
-                        // PASSWORD=/API_KEY=/SECRET=, então um
-                        // `- INITIAL_ADMIN_PASSWORD=segredo` passava batido.
+                        // (`- VAR=valor`), chaves JSON/YAML (`VAR: valor`), tabelas
+                        // Markdown e negrito (`**Password:** valor`) e sufixos
+                        // (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
+                        //
+                        // O `**Password:**` é o caso traiçoeiro: os asteriscos põem
+                        // um `:` ANTES do separador real, então um split cru dividia
+                        // no lugar errado e o "valor" virava `"** (in .env — VAR)"`
+                        // — que disparava o alerta por conter o NOME da variável.
+                        // Limpar markdown primeiro resolve os dois lados.
                         let trimmed_no_prefix = trimmed
                             .trim_start_matches(['-', ' '])
                             .trim_start_matches("export ")
-                            .trim();
+                            .replace("**", "")
+                            .replace("[", "")
+                            .replace("]", "")
+                            .replace("`", " ");
+                        let trimmed_no_prefix = trimmed_no_prefix.trim();
                         let (maybe_key, maybe_value) = trimmed_no_prefix
                             .split_once('=')
                             .or_else(|| trimmed_no_prefix.split_once(':'))
@@ -204,7 +212,43 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                             && !value.eq_ignore_ascii_case("example")
                             && !value.eq_ignore_ascii_case("your_password")
                             && !value.starts_with('<')
-                            && !value.starts_with('%');
+                            && !value.starts_with('%')
+                            // Declaração "em algum outro lugar": não é segredo em claro,
+                            // é a REFERÊNCIA ao cofre. Sem isto, uma linha como
+                            // `- **Password:** in the sops store (VAR)` disparava o
+                            // alerta por conter a palavra "in ... store".
+                            && !value.contains("sops")
+                            && !value.contains("SOPS")
+                            && !value.contains("secrets.env")
+                            && !value.contains("cofre")
+                            && !value.contains("secret manager")
+                            && !value.contains("vault")
+                            // Continuação de frase: valores reais não começam assim.
+                            && !value.starts_with("in ")
+                            && !value.starts_with("no ")
+                            && !value.starts_with("em ")
+                            && !value.starts_with("(in ")
+                            && !value.starts_with("(no ")
+                            && !value.starts_with("(em ")
+                            // Nome de variável de ambiente em vez de valor: se o
+                            // "valor" é só MAIÚSCULAS/underscore, é o identificador
+                            // da variável (ex.: `PI_HOLE_ADMIN_PASSWORD`), não a
+                            // credencial. Valores reais quase sempre têm minúsculas,
+                            // dígitos ou símbolos.
+                            && !value
+                                .chars()
+                                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+                            // Texto entre parênteses descreve a origem, não o valor.
+                            // Aceita parêntese não fechado na mesma linha (ex.:
+                            // `(in .env — NPM_ADMIN_PASSWORD / SOPS)`), que é uma
+                            // descrição que continua; um valor real não começa assim.
+                            && !value.starts_with('(')
+                            // Caminho de arquivo/config não é credencial.
+                            && !value.ends_with(".env")
+                            && !value.ends_with(".yml")
+                            && !value.ends_with(".yaml")
+                            && !value.ends_with(".toml")
+                            && !value.ends_with(".json");
 
                         let is_leak = (trimmed.starts_with("ghp_")
                             || trimmed.starts_with("github_pat_"))
