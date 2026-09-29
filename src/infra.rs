@@ -230,8 +230,8 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         // Só disparamos WARN para .py soltos fora do archive e fora de projeto próprio.
         if file_name.ends_with(".py") {
             scanned_count += 1;
-            let in_archive = path_str.contains("/scripts/archive/")
-                || path_str.contains("/archive/");
+            let in_archive =
+                path_str.contains("/scripts/archive/") || path_str.contains("/archive/");
             let in_dedicated_project = path_str.contains("/scripts/docx-extractor/")
                 || path_str.contains("/scripts/validador-roteiro/");
 
@@ -308,7 +308,11 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
             for line in cargo_content.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("version = \"") && trimmed.ends_with('"') {
-                    cargo_ver = Some(trimmed.trim_start_matches("version = \"").trim_end_matches('"'));
+                    cargo_ver = Some(
+                        trimmed
+                            .trim_start_matches("version = \"")
+                            .trim_end_matches('"'),
+                    );
                     break;
                 }
             }
