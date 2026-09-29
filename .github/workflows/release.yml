@@ -1,0 +1,72 @@
+name: Release — StenioSentinel
+
+# Publica o binário do motor como release, para que os repositórios consumidores
+# NÃO precisem compilar Rust.
+#
+# POR QUE EXISTE (29/09/2026): cada repo que usava o Stênio tinha que clonar o
+# código do motor e rodar `cargo build --release` — o que quebrava sempre que o
+# caminho do motor mudava (foi o que derrubou o CI do CV: ele ainda compilava
+# `sumaenima-hub/scripts/steniocheck-rs`, purgado em 70d7132). Com o binário
+# publicado, o consumidor só baixa e executa: CI em segundos, uma única fonte de
+# verdade, e a atualização do motor é só uma tag nova aqui.
+#
+# Consumo (ver .github/actions/stenio-check/action.yml):
+#   uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1
+#
+# O repositório é PÚBLICO, então o download do asset não exige token.
+# Disparo: push de tag `v*` (ex.: `git tag -a v3.1.0 -m "..." && git push --follow-tags`).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write # necessário para criar a release e anexar o asset
+
+jobs:
+  release:
+    name: Build & Publish Binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      # O binário é validado ANTES de ser publicado: uma release com motor
+      # defeituoso contaminaria todos os repos consumidores de uma vez.
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Self-Tests (17/17)
+        run: ./target/release/stenio --self-test
+
+      - name: Cryptographic Guardian (anti-tampering)
+        run: ./target/release/stenio --guardian
+
+      # Renomeia para um nome estável: o consumidor depende do NOME do asset,
+      # não da versão, então a action não precisa saber qual tag está pegando.
+      - name: Package Binary
+        run: |
+          mkdir -p dist
+          cp target/release/stenio dist/stenio
+          chmod +x dist/stenio
+          # Checksum para o consumidor verificar a integridade do download.
+          (cd dist && sha256sum stenio > stenio.sha256)
+          ls -la dist/
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/stenio
+            dist/stenio.sha256
+          generate_release_notes: true
+          # `overwrite_files` é o default (true), então re-publicar a mesma tag
+          # substitui o asset em vez de falhar com 422 (comportamento da API de
+          # release assets quando o nome já existe).

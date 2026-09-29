@@ -1,0 +1,162 @@
+name: "StenioSentinel Check"
+description: "Runs the StenioSentinel governance engine against this repository (no Rust compilation needed)."
+
+# POR QUE EXISTE (29/09/2026)
+# ---------------------------
+# Os repositórios consumidores clonavam o código do motor e rodavam
+# `cargo build --release` a cada CI. Isso tinha três problemas:
+#   1. Quebrava sempre que o caminho do motor mudava (o CI do CV apontava para
+#      `sumaenima-hub/scripts/steniocheck-rs`, purgado em 70d7132, e falhava com
+#      "manifest path does not exist").
+#   2. Gastava ~1 min de build por repo por execução.
+#   3. Cada repo podia ficar preso numa versão diferente do motor.
+#
+# Agora o binário é publicado como release pelo próprio repositório do motor
+# (`.github/workflows/release.yml`) e esta action apenas o baixa e executa.
+# Uma única fonte de verdade: atualizar o motor é publicar uma tag nova.
+#
+# ⚠️ O repositório do motor é PÚBLICO, então o download não exige token.
+#
+# USO (mínimo):
+#   - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1
+#     with:
+#       scope: cv
+#
+# USO (com path e modo estrito):
+#   - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1
+#     with:
+#       scope: vault
+#       path: .
+#       strict: "true"
+
+inputs:
+  scope:
+    description: "Audit scope: cv, vault, hub, homelab, all."
+    required: true
+  path:
+    description: "Root path to scan."
+    required: false
+    default: "."
+  strict:
+    description: "Fail the job on warnings as well as errors ('true'/'false')."
+    required: false
+    default: "false"
+  github-format:
+    description: "Emit GitHub annotations (::error/::warning) in addition to the report."
+    required: false
+    default: "true"
+  version:
+    description: "Engine release tag to use. Defaults to the action's own ref (v1, v3.1.0, ...)."
+    required: false
+    default: ""
+
+outputs:
+  report:
+    description: "Raw engine output."
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    # Resolve qual tag de release usar. Se o consumidor fixou uma versão,
+    # respeita; senão usa a tag em que a própria action foi referenciada
+    # (ex.: `@v1` → release `v1`). Assim a action nunca fica dessincronizada
+    # do motor que ela mesma publica.
+    - name: Resolve engine version
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        # GITHUB_ACTION_REF é a ref da action (ex.: 'v1'); vazio se for um SHA.
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        if [ -n "$INPUT_VERSION" ]; then
+          VERSION="$INPUT_VERSION"
+        elif [ -n "$ACTION_REF" ]; then
+          VERSION="$ACTION_REF"
+        else
+          # Referência por SHA (ou path local): não há tag para deduzir.
+          # Cai na release mais recente publicada.
+          VERSION="latest"
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "🛡️ StenioSentinel: usando a versão '$VERSION'"
+
+    - name: Download engine binary
+      id: download
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ steps.resolve.outputs.version }}
+        REPO: ceduardorodrig/STENIO-SENTINEL
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/stenio"
+        BIN="$RUNNER_TEMP/stenio/stenio"
+
+        if [ "$VERSION" = "latest" ]; then
+          URL="https://github.com/$REPO/releases/latest/download/stenio"
+          SUM_URL="https://github.com/$REPO/releases/latest/download/stenio.sha256"
+        else
+          URL="https://github.com/$REPO/releases/download/$VERSION/stenio"
+          SUM_URL="https://github.com/$REPO/releases/download/$VERSION/stenio.sha256"
+        fi
+
+        echo "⬇️  Baixando $URL"
+        # --retry: rede instável no runner não deve derrubar o gate.
+        curl -fsSL --retry 3 --retry-connrefused -o "$BIN" "$URL"
+        chmod +x "$BIN"
+
+        # Verifica a integridade quando o checksum estiver disponível.
+        # O motor executa com privilégios do runner e é baixado pela rede:
+        # conferir o sha256 é barato e protege contra asset corrompido.
+        if curl -fsSL --retry 3 -o "$RUNNER_TEMP/stenio/stenio.sha256" "$SUM_URL" 2>/dev/null; then
+          (cd "$RUNNER_TEMP/stenio" && sha256sum -c stenio.sha256)
+          echo "✅ Checksum verificado"
+        else
+          echo "⚠️  Checksum indisponível para '$VERSION' — seguindo sem verificação"
+        fi
+
+        "$BIN" --version
+
+    - name: Run governance audit
+      id: run
+      shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+        TARGET: ${{ inputs.path }}
+        STRICT: ${{ inputs.strict }}
+        GH_FORMAT: ${{ inputs.github-format }}
+      run: |
+        set -uo pipefail
+        BIN="$RUNNER_TEMP/stenio/stenio"
+
+        ARGS=(--scope "$SCOPE" --path "$TARGET")
+        # O `--github-format` emite ::error/::warning que aparecem como
+        # anotações no PR — o motivo de o CV já usar essa flag.
+        case "$GH_FORMAT" in
+          true|True|1) ARGS+=(--github-format) ;;
+        esac
+        case "$STRICT" in
+          true|True|1) ARGS+=(--strict) ;;
+        esac
+
+        echo "🛡️ stenio ${ARGS[*]}"
+        set +e
+        OUT=$("$BIN" "${ARGS[@]}" 2>&1)
+        CODE=$?
+        set -e
+
+        echo "$OUT"
+
+        # Expõe o relatório cru como output (o job pode reusar em comentário de PR).
+        {
+          echo "report<<STENIO_EOF"
+          echo "$OUT"
+          echo "STENIO_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "$CODE" -ne 0 ]; then
+          echo "::error title=StenioSentinel::Governança reprovou (scope=$SCOPE, exit=$CODE)"
+        fi
+        exit "$CODE"
