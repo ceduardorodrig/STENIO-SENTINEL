@@ -61,7 +61,7 @@ struct Args {
     #[arg(
         short = 's',
         long,
-        help = "Escopo de auditoria: hub, homelab, vault, cv, all [default: all]"
+        help = "Escopo de auditoria: hub, homelab, vault, cv, fork (repo derivado), mirror (repo gerado), all [default: all]"
     )]
     scope: Option<String>,
 
@@ -1162,6 +1162,32 @@ fn main() -> Result<()> {
             "HOMELAB-",
             "INFRA-",
         ];
+        rules.retain(|r| allowed_prefixes.iter().any(|p| r.id.starts_with(p)));
+    }
+
+    // ── Escopo `mirror`: repositório GERADO (espelho de configs) ───────────
+    //
+    // POR QUE EXISTE (29/09/2026): o `MNEMOCINE-CONFIGS` é um espelho automático
+    // do estado dos 5 hosts (4718 arquivos, 38 extensões). Aplicar leis de código
+    // nele dá 29.266 erros de `ARCH-NO-PYTHON` — mas o `.py` não é código do
+    // repositório, é conteúdo DOS HOSTS que o espelho capturou (inclui 72 do Home
+    // Assistant, que nem é nosso). Auditar "Python proibido" num snapshot de host
+    // é erro de categoria.
+    //
+    // O que IMPORTA num espelho, e é o que este escopo mantém:
+    //   SEC-*    segredos — o espelho é PRIVADO e vai para o git, então um
+    //            token em claro aqui é vazamento em versionamento. É o achado
+    //            que o escopo existe para encontrar (provou-se real: achou o
+    //            token OAuth do rclone e as credenciais da API do CrowdSec).
+    //   INFRA-*  sintaxe de compose/systemd espelhados.
+    //
+    // Removido: ARCH-*, RUST-*, GOV-*, FRONT-*, BACKEND-*, TEST-*, DB-*, CV-*,
+    // VAULT-*, HOMELAB-*, DOC-* — nada disso descreve um repositório gerado.
+    if scope_opt.eq_ignore_ascii_case("mirror")
+        || scope_opt.eq_ignore_ascii_case("snapshot")
+        || scope_opt.eq_ignore_ascii_case("generated")
+    {
+        let allowed_prefixes: &[&str] = &["SEC-", "INFRA-", "GOV-LEFTOVER-TEST-ARTIFACTS"];
         rules.retain(|r| allowed_prefixes.iter().any(|p| r.id.starts_with(p)));
     }
 

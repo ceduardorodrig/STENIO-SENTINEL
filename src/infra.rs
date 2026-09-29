@@ -213,6 +213,15 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
                             && !value.eq_ignore_ascii_case("your_password")
                             && !value.starts_with('<')
                             && !value.starts_with('%')
+                            // Template de configuração não é segredo: o valor é
+                            // preenchido em runtime. As definições de indexador do
+                            // Prowlarr usam Go template (`{{ .Config.password }}`) e
+                            // são ~195 dos alertas de um espelho de configs — ruído
+                            // puro que esconderia o achado real ao lado.
+                            && !value.contains("{{")
+                            && !value.contains("}}")
+                            && !value.contains("<%")
+                            && !value.contains("${{")
                             // Declaração "em algum outro lugar": não é segredo em claro,
                             // é a REFERÊNCIA ao cofre. Sem isto, uma linha como
                             // `- **Password:** in the sops store (VAR)` disparava o
