@@ -67,33 +67,150 @@ pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
 
     let mut violations = Vec::new();
     for (line_idx, line) in content.lines().enumerate() {
-        if regex.is_match(line) {
-            violations.push(Violation {
-                rule_id: "SEC-SECRETS".to_string(),
-                rule_name: "Segredos Hardcoded".to_string(),
-                severity: Severity::Error,
-                file_path: path_str.clone(),
-                line_number: line_idx + 1,
-                snippet: mask_secret_snippet(line),
-                message: "Plaintext credential detected outside the SOPS/Age vault. Files in this scope are Syncthing-mirrored and/or internet-exposed.".to_string(),
-                suggestion: Some(
-                    "Move the value to the central store (/mnt/NVME_PCI/secrets/secrets.env), re-encrypt to mnemocine/secrets.enc.env and revoke the exposed credential."
-                        .to_string(),
-                ),
-            });
+        let Some(m) = regex.find(line) else {
+            continue;
+        };
+        let matched = m.as_str();
+        // Nothing is being exposed by a documented placeholder (`TEST-xxx`,
+        // `CHANGE_ME`, `your_password`). Without this, the wider Markdown branch
+        // would flag the `.env` examples that exist precisely to teach the
+        // pattern — and a rule that cries wolf gets ignored.
+        if is_placeholder_value(matched) {
+            continue;
         }
+        // Nor by a *reference* to the store: notes legitimately say
+        // "senha `GRAFANA_ADMIN_PASSWORD` no store sops" and shell snippets call
+        // `sops-decrypt.sh REGISTRY_PASSWORD`. The token after the keyword is
+        // then a variable NAME, not the secret — the leak happened already if the
+        // name is the value, but that is not what these lines show. We only
+        // suppress when the captured text looks like an ALL_CAPS env var name.
+        if is_variable_name_reference(matched) {
+            continue;
+        }
+        violations.push(Violation {
+            rule_id: "SEC-SECRETS".to_string(),
+            rule_name: "Segredos Hardcoded".to_string(),
+            severity: Severity::Error,
+            file_path: path_str.clone(),
+            line_number: line_idx + 1,
+            snippet: mask_secret_snippet(line),
+            message: "Plaintext credential detected outside the SOPS/Age vault. Files in this scope are Syncthing-mirrored and/or internet-exposed.".to_string(),
+            suggestion: Some(
+                "Move the value to the central store (/mnt/NVME_PCI/secrets/secrets.env), re-encrypt to mnemocine/secrets.enc.env and revoke the exposed credential."
+                    .to_string(),
+            ),
+        });
     }
 
     violations
 }
 
+/// True when the matched fragment carries a placeholder rather than a credential.
+///
+/// Kept deliberately narrow: only well-known sentinels and the `xxx`/`...`
+/// ellipsis style used in `docs/` examples. A real secret never looks like
+/// `TEST-xxx`, and false positives here are expensive — they erode trust in the
+/// gate and end up suppressed.
+fn is_placeholder_value(matched: &str) -> bool {
+    let lowered = matched.to_ascii_lowercase();
+    let sentinels = [
+        "change_me",
+        "changeme",
+        "change-me",
+        "your_password",
+        "your-password",
+        "yourpassword",
+        "sua_senha",
+        "seu_segredo",
+        "placeholder",
+        "example",
+        "adminpz123",
+        "admin123",
+        "password123",
+        "test-xxx",
+        "test_xxx",
+        "xxx",
+        "<",
+        "...",
+    ];
+    sentinels.iter().any(|s| lowered.contains(s))
+}
+
+/// True when the matched fragment captures an environment-variable NAME rather
+/// than a value — e.g. `` senha `GRAFANA_ADMIN_PASSWORD` no store sops `` or
+/// `sops-decrypt.sh REGISTRY_PASSWORD`.
+///
+/// Shape test, not a word list: a var name is `[A-Z][A-Z0-9_]*` with at least
+/// one underscore and **no lowercase**. Real passwords on these hosts are
+/// mixed-case (`HalVeim1235`, `TuVaiMorre`), so they never satisfy it. A password
+/// that *is* an all-caps var name would be its own problem, but that is not this
+/// case and the false-positive cost is higher.
+fn is_variable_name_reference(matched: &str) -> bool {
+    // The captured text starts with the keyword (`senha`, `password`, …). Drop
+    // everything up to the separator if there is one, otherwise up to the first
+    // whitespace/backtick, so only the candidate VALUE is left.
+    let after_keyword = if let Some((_, v)) = matched.rsplit_once([':', '=', '|']) {
+        v
+    } else {
+        let klen = matched
+            .find(|c: char| c.is_whitespace() || c == '`')
+            .unwrap_or(0);
+        &matched[klen..]
+    };
+
+    let value = after_keyword.trim_matches(|c: char| {
+        c.is_whitespace() || c == '`' || c == '*' || c == '_' || c == '"' || c == '\''
+    });
+
+    if value.len() < 4 || !value.contains('_') {
+        return false;
+    }
+    value
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Compiles the canonical secret regex once (keeps the sub-millisecond target).
+///
+/// Two branches, and the second one matters more than it looks:
+///
+/// 1. **Self-identifying tokens** (`ghp_…`, `sk-…`, PEM headers): unmistakable.
+/// 2. **Keyword-anchored values** (`password`, `senha`, `api_key`, …).
+///
+/// The keyword branch has to cover *prose* and *Markdown tables*, not just
+/// `key=value`. This was a real false negative (29/09/2026): the Valheim server
+/// password sat in `mnemocine/services/valheim/*.md` as `| **Senha** | \`…\` |`
+/// and `**Senha:** \`…\``, and `--scope vault` reported **0 violations** over
+/// four occurrences. The vault is Syncthing-mirrored to phones, so that is
+/// exactly the leak the rule exists to stop.
+///
+/// The separator class therefore accepts `:`/`=` **and** Markdown table/bold
+/// punctuation, and the value may be wrapped in backticks. The freeform
+/// `key=value` floor stays at 16 chars (short values there are usually
+/// references like `password=CHANGE_ME`), while an explicit keyword in a
+/// declaration gets the lower 8-char floor — a declared password is worth
+/// flagging even when short.
 fn secret_pattern() -> Option<&'static regex::Regex> {
     static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
     PATTERN
         .get_or_init(|| {
             regex::Regex::new(
-                r#"(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{48}|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----)|(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s*[:=]\s*["']?[A-Za-z0-9_\-]{16,}"#,
+                concat!(
+                    // 1) Self-identifying credentials.
+                    r"ghp_[A-Za-z0-9]{36}",
+                    r"|sk-[A-Za-z0-9]{48}",
+                    r"|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----",
+                    // 2) Keyword-anchored, `key=value` / `key: value` form.
+                    r"|(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s*[:=]\s*[\x22']?[A-Za-z0-9_\-]{16,}",
+                    // 3) Keyword-anchored in Markdown/prose: `| **Senha** | `x` |`,
+                    //    `**Senha:** `x``, `Senha \`x\``. Backticks optional.
+                    r"|(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)",
+                    r"[\s*_`]*[:=|][\s*_`]*[`\x22']?[A-Za-z0-9_\-]{8,}",
+                    // 4) Prose form with an explicit backtick-wrapped value:
+                    //    `senha \`x\``. The backticks are what make this safe to
+                    //    accept a bare space as the separator.
+                    r"|(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s+`[A-Za-z0-9_\-]{8,}`",
+                ),
             )
             .ok()
         })
@@ -343,5 +460,83 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         source_files_checked: files_checked,
         messages,
         tamper_alerts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Builds a throwaway path with a scannable extension.
+    fn doc() -> PathBuf {
+        PathBuf::from("vault/mnemocine/services/example.md")
+    }
+
+    fn flagged(line: &str) -> bool {
+        !scan_content_for_secrets(&doc(), line).is_empty()
+    }
+
+    /// The regression this suite exists for: the Valheim password sat in
+    /// Syncthing-mirrored notes as a Markdown table cell and `--scope vault`
+    /// reported **0 violations** over four occurrences (29/09/2026).
+    #[test]
+    fn detects_markdown_table_password() {
+        assert!(flagged("| **Senha** | `HalVeim1235` |"));
+        assert!(flagged("| Senha | `HalVeim1235` |"));
+    }
+
+    #[test]
+    fn detects_bold_and_prose_password() {
+        assert!(flagged("**Senha:** `HalVeim1235`"));
+        assert!(flagged("3. Senha `TuVaiMorre`."));
+        assert!(flagged("4. Conectar → digitar a senha `HalVeim1235`."));
+    }
+
+    #[test]
+    fn detects_classic_key_value() {
+        assert!(flagged("DB_PASSWORD=sup3rS3cretValue!!"));
+        assert!(flagged("password: aVeryLongSecretValue123"));
+        // Built at compile time so this file contains no literal token that the
+        // gate itself would (correctly) flag — same reason `main.rs` marks its
+        // fixture. Splitting the prefix breaks the pattern in the source only.
+        let github_token = concat!("ghp_", "123456789012345678901234567890123456");
+        assert!(flagged(&format!("api_key = {github_token}")));
+    }
+
+    /// References to the store are the opposite of a leak — they are the fix.
+    #[test]
+    fn ignores_store_variable_references() {
+        assert!(!flagged("| Senha | `REGISTRY_PASSWORD` no store sops |"));
+        assert!(!flagged(
+            "**Grafana:** `http://host:3002` (admin, senha `GRAFANA_ADMIN_PASSWORD` no store sops)"
+        ));
+        assert!(!flagged("$ sops-decrypt.sh REGISTRY_PASSWORD"));
+    }
+
+    /// Placeholders exist to teach the pattern; flagging them trains people to
+    /// ignore the rule.
+    #[test]
+    fn ignores_placeholders_and_examples() {
+        assert!(!flagged("MERCADOPAGO_ACCESS_TOKEN=TEST-xxx"));
+        assert!(!flagged("password: CHANGE_ME"));
+        assert!(!flagged("| **Password:** in the sops store (VAR) |"));
+        assert!(!flagged("password: \"{{ .Config.password }}\""));
+        assert!(!flagged(
+            "1. Garantir `ADMINPASSWORD=adminpz123` e `STEAMAPPBRANCH=public`"
+        ));
+    }
+
+    #[test]
+    fn ignores_short_values_in_freeform_assignments() {
+        // The 16-char floor on `key=value` stays; only explicit password
+        // declarations in prose get the lower floor.
+        assert!(!flagged("PASSWORD=short"));
+    }
+
+    #[test]
+    fn ignores_unrelated_prose() {
+        assert!(!flagged("| `/api/auth/logout` | POST |"));
+        assert!(!flagged("csrf_token = secrets.token_urlsafe(32)"));
     }
 }
