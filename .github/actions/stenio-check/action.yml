@@ -46,7 +46,7 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Engine release tag to use. Defaults to the action's own ref (v1, v3.1.0, ...)."
+    description: "Engine release tag to pin (ex.: v3.2.0). Defaults to the latest published release."
     required: false
     default: ""
 
@@ -58,29 +58,22 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # Resolve qual tag de release usar. Se o consumidor fixou uma versão,
-    # respeita; senão usa a tag em que a própria action foi referenciada
-    # (ex.: `@v1` → release `v1`). Assim a action nunca fica dessincronizada
-    # do motor que ela mesma publica.
+    # A tag da action e a tag da RELEASE são coisas diferentes:
+    #   - a action é consumida como `@v1` (trilha major, estável);
+    #   - a release do binário é tagueada por versão (`v3.2.0`).
+    # Deduzir a versão do binário a partir do ref da action dava 404, porque
+    # `releases/download/v1/stenio` não existe. O padrão seguro é usar sempre a
+    # release mais recente publicada; consumidores que precisam fixar uma versão
+    # passam `with: version: v3.2.0`.
     - name: Resolve engine version
       id: resolve
       shell: bash
       env:
         INPUT_VERSION: ${{ inputs.version }}
-        # GITHUB_ACTION_REF é a ref da action (ex.: 'v1'); vazio se for um SHA.
-        ACTION_REF: ${{ github.action_ref }}
       run: |
-        if [ -n "$INPUT_VERSION" ]; then
-          VERSION="$INPUT_VERSION"
-        elif [ -n "$ACTION_REF" ]; then
-          VERSION="$ACTION_REF"
-        else
-          # Referência por SHA (ou path local): não há tag para deduzir.
-          # Cai na release mais recente publicada.
-          VERSION="latest"
-        fi
+        VERSION="${INPUT_VERSION:-latest}"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        echo "🛡️ StenioSentinel: usando a versão '$VERSION'"
+        echo "🛡️ StenioSentinel: usando a release '$VERSION'"
 
     - name: Download engine binary
       id: download
