@@ -13,9 +13,9 @@ use crate::rule::Severity;
 /// so documentation and config formats must be scanned too. Binary and lock formats
 /// are excluded to avoid false positives and noise.
 const SECRET_SCAN_SKIP_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "pdf", "zip", "gz", "xz", "zst", "bz2", "7z",
-    "so", "dylib", "dll", "exe", "bin", "o", "a", "rlib", "rmeta", "woff", "woff2", "ttf", "otf",
-    "mp3", "mp4", "wav", "ogg", "webm", "lock",
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "pdf", "zip", "gz", "xz", "zst", "bz2",
+    "7z", "so", "dylib", "dll", "exe", "bin", "o", "a", "rlib", "rmeta", "woff", "woff2", "ttf",
+    "otf", "mp3", "mp4", "wav", "ogg", "webm", "lock",
 ];
 
 /// Path fragments never scanned for secrets (caches, mirrors, third-party trees).

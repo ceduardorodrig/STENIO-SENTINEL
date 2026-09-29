@@ -33,11 +33,20 @@ fn mask_snippet(line: &str) -> String {
 fn is_documentation_example(line: &str, value: &str) -> bool {
     // Prose markers around the assignment (bullets in guides, "definir X em ...",
     // backticked inline examples).
-    let prose_markers = ["Garantir", "definir", "ex.:", "exemplo", "Exemplo", "por exemplo"];
+    let prose_markers = [
+        "Garantir",
+        "definir",
+        "ex.:",
+        "exemplo",
+        "Exemplo",
+        "por exemplo",
+    ];
     if prose_markers.iter().any(|m| line.contains(m)) {
         return true;
     }
-    if line.trim_start().starts_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+    if line
+        .trim_start()
+        .starts_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
         && line.contains(". ")
     {
         // numbered list item in a guide, e.g. "1. Garantir ..."
@@ -199,7 +208,9 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
 
                         let is_leak = (trimmed.starts_with("ghp_")
                             || trimmed.starts_with("github_pat_"))
-                            || (looks_like_secret_key && value_is_literal && !is_documentation_example(trimmed, value));
+                            || (looks_like_secret_key
+                                && value_is_literal
+                                && !is_documentation_example(trimmed, value));
 
                         if is_leak && !is_sops_encrypted && !is_age_armored {
                             violations.push(Violation {
