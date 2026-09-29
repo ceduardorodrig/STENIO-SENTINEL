@@ -1449,13 +1449,15 @@ fn main() -> Result<()> {
                             let (h, inf) = if is_homelab_active {
                                 (
                                     Some(audit_homelab(&args.path)),
-                                    Some(audit_infrastructure(&args.path)),
+                                    Some(audit_infrastructure(&args.path, true)),
                                 )
                             } else if runs_infra_audit {
                                 // Sem a auditoria de documentação do homelab (não se
                                 // aplica a um fork ou espelho), mas COM a de
                                 // infraestrutura, que traz as regras de segurança.
-                                (None, Some(audit_infrastructure(&args.path)))
+                                // `code_debt: false` — o `.py` aqui é de terceiros
+                                // ou conteúdo capturado dos hosts.
+                                (None, Some(audit_infrastructure(&args.path, false)))
                             } else {
                                 (None, None)
                             };

@@ -81,7 +81,15 @@ fn is_documentation_example(line: &str, value: &str) -> bool {
     value.len() < 12 && !has_symbol && (!has_digit || all_lower_alpha)
 }
 
-pub fn audit_infrastructure(root: &Path) -> InfraReport {
+/// `code_debt` gates the rules that only make sense for code WE own.
+///
+/// `homelab` passes `true`: a loose `.py` in our own tree is debt to migrate.
+/// `fork`/`mirror` pass `false`: a `.py` in a derived repo or in a snapshot of
+/// the hosts is **third-party or captured content**, not our code to migrate —
+/// flagging it is an error of category (the mirror captured 72 Home Assistant
+/// files that we neither wrote nor maintain). Security rules (`SEC-*`) are NOT
+/// gated here; they always run, for every scope.
+pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
     let mut messages = Vec::new();
     let mut violations = Vec::new();
     let mut scanned_count = 0;
@@ -389,7 +397,8 @@ pub fn audit_infrastructure(root: &Path) -> InfraReport {
         // Projetos Rust dedicados (docx-extractor/, validador-roteiro/) têm seu próprio
         // steniocheck.toml, não auditamos aqui.
         // Só disparamos WARN para .py soltos fora do archive e fora de projeto próprio.
-        if file_name.ends_with(".py") {
+        // Só no código NOSSO (`code_debt`): num fork/espelho o `.py` é de terceiros.
+        if code_debt && file_name.ends_with(".py") {
             scanned_count += 1;
             let in_archive =
                 path_str.contains("/scripts/archive/") || path_str.contains("/archive/");
