@@ -31,7 +31,7 @@ description: "Runs the StenioSentinel governance engine against this repository 
 
 inputs:
   scope:
-    description: "Audit scope: cv, vault, hub, homelab, all."
+    description: "Audit scope: cv, vault, hub, homelab, fork (derived repo), mirror (generated repo), all."
     required: true
   path:
     description: "Root path to scan."
