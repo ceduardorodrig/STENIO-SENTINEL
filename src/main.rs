@@ -1103,7 +1103,42 @@ fn main() -> Result<()> {
 
     // Carrega configuração canônica steniocheck.toml
     let steniocheck_cfg = SteniocheckConfig::load_from_dir(&args.path);
-    let rules = get_rules_from_config(&steniocheck_cfg);
+    let mut rules = get_rules_from_config(&steniocheck_cfg);
+
+    // ── Escopo `fork`: repositório DERIVADO (fork de terceiros) ────────────
+    //
+    // POR QUE EXISTE (29/09/2026): um fork recebe as leis AUTORAIS do ecossistema,
+    // mas elas descrevem como o autor constrói o próprio software — não como se
+    // contribui num projeto alheio. O caso real: `macrokey-driver` (fork de um
+    // driver Python) produzia ~305 erros `ARCH-NO-PYTHON`, exigindo reescrever o
+    // upstream. Um gate vermelho que ninguém pode consertar é pior do que não ter
+    // gate: treina todos a ignorar o resultado.
+    //
+    // Este escopo mantém apenas o que protege um repositório derivado:
+    //   SEC-*  (segredos, sudo, SQL, except)  — protegem o autor
+    //   VAULT-* (frontmatter, taxonomia)      — integridade de notas
+    //   DOC-*  (disclaimer, âncoras)          — rastreabilidade de governança
+    //   GOV-LEFTOVER-TEST-ARTIFACTS           — limpeza de artefatos
+    //   HOMELAB-* / INFRA-* quando o alvo for de infraestrutura
+    //
+    // Removidas: ARCH-*, RUST-*, GOV-AGENT-LAWS, FRONT-*, BACKEND-*, TEST-*, DB-*,
+    // PERF-*, CONF-*, AGENT-* — todas pressupõem código autoral do ecossistema.
+    //
+    // Ver `governance/agent-conventions.md` §2b e
+    // `governance/stenio-troubleshooting.md` §3.
+    // O `--scope` é opcional (default `all`); comparamos sem `unwrap` (RUST-NO-UNWRAP).
+    let scope_opt = args.scope.as_deref().unwrap_or("");
+    if scope_opt.eq_ignore_ascii_case("fork") || scope_opt.eq_ignore_ascii_case("derived") {
+        let allowed_prefixes: &[&str] = &[
+            "SEC-",
+            "VAULT-",
+            "DOC-",
+            "GOV-LEFTOVER-TEST-ARTIFACTS",
+            "HOMELAB-",
+            "INFRA-",
+        ];
+        rules.retain(|r| allowed_prefixes.iter().any(|p| r.id.starts_with(p)));
+    }
 
     // ── Modo Quality Gate Pré-Entrega (--gate) ─────────────────────────────
     if args.gate {
