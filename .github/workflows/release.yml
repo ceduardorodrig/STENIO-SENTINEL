@@ -29,8 +29,15 @@ jobs:
     name: Build & Publish Binary
     runs-on: ubuntu-latest
     steps:
+      # `fetch-depth: 0` é OBRIGATÓRIO para o step "Move major tag": com o
+      # default (`fetch-depth: 1`) o runner não enxerga as tags existentes, e o
+      # `git tag -f` moveria a trilha para um commit arbitrário do shallow clone
+      # — foi o bug de 30/09/2026, que levou a `v1` para um commit de 29/09 16:56
+      # em vez de para a release recém-publicada.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -104,9 +111,20 @@ jobs:
           set -euo pipefail
           MAJOR_TAG="v${GITHUB_REF_NAME#v}"   # v3.8.2 -> v3
           MAJOR_TAG="${MAJOR_TAG%%.*}"        # v3
-          echo "🛡️ Movendo a trilha flutuante '$MAJOR_TAG' para $GITHUB_REF_NAME"
+          # A trilha aponta para o commit DA TAG DA RELEASE, nunca para `HEAD`
+          # do checkout: num evento de tag o checkout pode estar detached num
+          # commit diferente, e uma trilha móvel apontando para o lugar errado
+          # é pior do que uma trilha desatualizada (serve versão arbitrária).
+          TARGET="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          echo "🛡️ Movendo a trilha flutuante '$MAJOR_TAG' → $GITHUB_REF_NAME ($TARGET)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f -a "$MAJOR_TAG" -m "Major track: aponta para $GITHUB_REF_NAME"
+          git tag -f -a "$MAJOR_TAG" "$TARGET" -m "Major track: aponta para $GITHUB_REF_NAME"
           git push -f origin "refs/tags/$MAJOR_TAG"
-          echo "✅ $MAJOR_TAG → $GITHUB_REF_NAME ($(git rev-parse --short HEAD))"
+          # Verificação: falha alto se a trilha não ficou no commit esperado.
+          MOVED="$(git rev-parse "${MAJOR_TAG}^{commit}")"
+          if [ "$MOVED" != "$TARGET" ]; then
+            echo "❌ $MAJOR_TAG ficou em $MOVED, esperado $TARGET" >&2
+            exit 1
+          fi
+          echo "✅ $MAJOR_TAG → $GITHUB_REF_NAME ($MOVED)"
