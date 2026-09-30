@@ -85,7 +85,7 @@ jobs:
           # release assets quando o nome já existe).
 
       # ── Trilha major flutuante (`v1`) ────────────────────────────────────
-      # Mantém a tag major apontando para a release recém-publicada. Sem este
+      # Mantém a tag `v1` apontando para a release recém-publicada. Sem este
       # step a tag ficava congelada no commit em que foi criada: em 29/09/2026
       # ela estava 8 commits atrás da `main`, e o `action.yml` servido aos
       # consumidores era o antigo.
@@ -94,37 +94,46 @@ jobs:
       #   "keeping major (v1) and minor (v1.1) tags current to the latest
       #    appropriate commit" — docs/en/actions/how-tos/.../release-and-maintain-actions
       #
-      # POR QUE SÓ A MAJOR (e não também a minor): os 9 consumidores usam `@v1`.
-      # Uma tag `v1.3` seria garantia que ninguém pediu — complexidade sem uso.
-      # Adicionar a minor depois é aditivo, não quebra nada.
+      # ⚠️ A TRILHA DA ACTION NÃO É DERIVADA DA TAG DO BINÁRIO.
+      # A tag `v1` é a **major da action** — o contrato de interface que os
+      # consumidores fixam (`uses: …/action@v1`) — e NÃO a major do binário
+      # (hoje `v3.8.3`). São espaços de versão independentes: a action está no
+      # `v1` desde sempre e só muda se a INTERFACE quebrar; o binário sobe de
+      # major por conta própria.
+      #
+      # A primeira versão deste step derivou a major da tag do binário
+      # (`v3.8.3` → `v3`) e criou uma trilha `v3` órfã que ninguém consome
+      # (bug de 30/09/2026). Por isso o valor é uma CONSTANTE explícita abaixo.
       #
       # POR QUE `git` PURO (e não uma action de terceiros): mover a tag é
       # `git tag -f` + push. Uma dependência externa aqui seria mais superfície
       # de ataque no ponto que publica o binário executado por todos os CIs.
       #
-      # ⚠️ Isto é um force-push de tag. A tag `v1` é uma TRILHA MÓVEL por
-      # definição — quem consome `@v1` quer receber a versão nova. Quem precisa
-      # de imutabilidade usa `@v3.8.1` (`with: version: v3.8.1`).
-      - name: Move major tag (v1) to this release
+      # ⚠️ Isto é um force-push de tag. A trilha é MÓVEL por definição — quem
+      # consome `@v1` quer receber a versão nova. Quem precisa de imutabilidade
+      # usa `@v1` + `with: version: v3.8.3`.
+      - name: Move major tag (action track) to this release
         shell: bash
+        env:
+          # Contrato de interface da action — ver comentário acima.
+          ACTION_MAJOR_TAG: "v1"
         run: |
           set -euo pipefail
-          MAJOR_TAG="v${GITHUB_REF_NAME#v}"   # v3.8.2 -> v3
-          MAJOR_TAG="${MAJOR_TAG%%.*}"        # v3
+          echo "🛡️ Movendo a trilha da action '$ACTION_MAJOR_TAG' → $GITHUB_REF_NAME"
           # A trilha aponta para o commit DA TAG DA RELEASE, nunca para `HEAD`
           # do checkout: num evento de tag o checkout pode estar detached num
           # commit diferente, e uma trilha móvel apontando para o lugar errado
           # é pior do que uma trilha desatualizada (serve versão arbitrária).
           TARGET="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
-          echo "🛡️ Movendo a trilha flutuante '$MAJOR_TAG' → $GITHUB_REF_NAME ($TARGET)"
+          echo "   alvo: $GITHUB_REF_NAME ($TARGET)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f -a "$MAJOR_TAG" "$TARGET" -m "Major track: aponta para $GITHUB_REF_NAME"
-          git push -f origin "refs/tags/$MAJOR_TAG"
+          git tag -f -a "$ACTION_MAJOR_TAG" "$TARGET" -m "Action track: aponta para $GITHUB_REF_NAME"
+          git push -f origin "refs/tags/$ACTION_MAJOR_TAG"
           # Verificação: falha alto se a trilha não ficou no commit esperado.
-          MOVED="$(git rev-parse "${MAJOR_TAG}^{commit}")"
+          MOVED="$(git rev-parse "${ACTION_MAJOR_TAG}^{commit}")"
           if [ "$MOVED" != "$TARGET" ]; then
-            echo "❌ $MAJOR_TAG ficou em $MOVED, esperado $TARGET" >&2
+            echo "❌ $ACTION_MAJOR_TAG ficou em $MOVED, esperado $TARGET" >&2
             exit 1
           fi
-          echo "✅ $MAJOR_TAG → $GITHUB_REF_NAME ($MOVED)"
+          echo "✅ $ACTION_MAJOR_TAG → $GITHUB_REF_NAME ($MOVED)"
