@@ -67,6 +67,46 @@ jobs:
             dist/stenio
             dist/stenio.sha256
           generate_release_notes: true
+          # `make_latest` explícito: sem isto, a resolução de "latest" fica
+          # dependente do default da API e da ordem de publicação — foi assim
+          # que duas releases `v3.8.0` (uma draft, uma publicada) apareceram em
+          # 29/09/2026. A action baixa o binário de `releases/latest`, então
+          # este campo NÃO é cosmético.
+          make_latest: true
           # `overwrite_files` é o default (true), então re-publicar a mesma tag
           # substitui o asset em vez de falhar com 422 (comportamento da API de
           # release assets quando o nome já existe).
+
+      # ── Trilha major flutuante (`v1`) ────────────────────────────────────
+      # Mantém a tag major apontando para a release recém-publicada. Sem este
+      # step a tag ficava congelada no commit em que foi criada: em 29/09/2026
+      # ela estava 8 commits atrás da `main`, e o `action.yml` servido aos
+      # consumidores era o antigo.
+      #
+      # É a prática oficial do GitHub para actions:
+      #   "keeping major (v1) and minor (v1.1) tags current to the latest
+      #    appropriate commit" — docs/en/actions/how-tos/.../release-and-maintain-actions
+      #
+      # POR QUE SÓ A MAJOR (e não também a minor): os 9 consumidores usam `@v1`.
+      # Uma tag `v1.3` seria garantia que ninguém pediu — complexidade sem uso.
+      # Adicionar a minor depois é aditivo, não quebra nada.
+      #
+      # POR QUE `git` PURO (e não uma action de terceiros): mover a tag é
+      # `git tag -f` + push. Uma dependência externa aqui seria mais superfície
+      # de ataque no ponto que publica o binário executado por todos os CIs.
+      #
+      # ⚠️ Isto é um force-push de tag. A tag `v1` é uma TRILHA MÓVEL por
+      # definição — quem consome `@v1` quer receber a versão nova. Quem precisa
+      # de imutabilidade usa `@v3.8.1` (`with: version: v3.8.1`).
+      - name: Move major tag (v1) to this release
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAJOR_TAG="v${GITHUB_REF_NAME#v}"   # v3.8.2 -> v3
+          MAJOR_TAG="${MAJOR_TAG%%.*}"        # v3
+          echo "🛡️ Movendo a trilha flutuante '$MAJOR_TAG' para $GITHUB_REF_NAME"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f -a "$MAJOR_TAG" -m "Major track: aponta para $GITHUB_REF_NAME"
+          git push -f origin "refs/tags/$MAJOR_TAG"
+          echo "✅ $MAJOR_TAG → $GITHUB_REF_NAME ($(git rev-parse --short HEAD))"
