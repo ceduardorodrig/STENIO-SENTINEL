@@ -155,6 +155,23 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     // ou as credenciais devem ser injetadas via .env/SOPS.
     // 'pkexec' é apenas mecanismo gráfico opcional do KDE no psicopompo; em scripts de servidor
     // ou tarefas repetidas deve ser evitado para não cansar o operador com diálogos de senha.
+    //
+    // ⚠️ A COBERTURA É AMPLA DE PROPÓSITO — NÃO ESTREITAR (revisado 30/09/2026).
+    // O padrão `\bsudo\s+` cobre QUALQUER comando. Esta não é uma regra que
+    // "acusa erro": é um PONTO DE REVISÃO. O risco não está no comando específico,
+    // está no padrão de privilégio (escopo, necessidade, senha interativa).
+    //
+    // Histórico: em 16/09/2026 (commit ca05d47) o regex foi ampliado de uma lista
+    // de 6 comandos para `\bsudo\s+`. A lista curta era uma LISTA BRANCA FURADA —
+    // qualquer comando fora dela escapava silenciosamente. Reverter para lista
+    // curta reabre o furo, e é por isso que a assinatura está PINADA no
+    // `guardian.rs` (anti-tampering) com a nota "não pode ser revertido".
+    //
+    // Consequência ACEITA e sem atalho: `sudo` legítimo também é sinalizado, e a
+    // regra é **inviolável** — `SEC-*` não aceita `stenio-ignore` (ver
+    // `baseline.rs`: `is_inviolable`). Não há como silenciar caso a caso sem
+    // quebrar a governança; o aviso é permanente por desenho.
+    // Ver `--explain SEC-SUDO`.
     rules.push(Rule::new(
         "SEC-SUDO",
         "sec",
