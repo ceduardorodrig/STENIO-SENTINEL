@@ -19,6 +19,7 @@
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
 - 🔍 [Built-in Rule Catalog & Scopes](#-built-in-rule-catalog--scopes)
+- 🗺️ [Roadmap (v4.0.0 Migration)](ROADMAP.md)
 - 📜 [License](#-license)
 - 📬 [Author & Community](#-author--community)
 
