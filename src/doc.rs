@@ -422,7 +422,9 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
             let has_modern_title = content.contains("Human-in-the-Loop Agentic Engineering & Deterministic Governance");
             let has_legacy_vibe = content.contains("**Yes... This is a Vibe Coded project**")
                 || content.contains("Yes... This is a Vibe Coded project")
-                || content.contains("Vibe Coded with StenioSentinel");
+                || content.contains("Vibe Coded with StenioSentinel")
+                || content.contains("vibe-coded")
+                || content.contains("badge/vibe-coded");
             let has_gov = content.contains("StenioSentinel");
             let has_author =
                 content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
@@ -432,8 +434,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
             if !is_valid {
                 let (reason, suggestion) = if has_legacy_vibe {
                     (
-                        "Disclaimer no README contém formato legado ('Vibe Coded project').",
-                        "Atualize o cabeçalho para '### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance' e utilize o novo bloco canônico.",
+                        "README contém badge ou menção legada a 'vibe-coded' incompatível com a governança atual.",
+                        "Substitua o badge legado por '[![Governance](https://img.shields.io/badge/governance-StenioSentinel-brightgreen)](https://github.com/ceduardorodrig/STENIO-SENTINEL)' e garanta o rodapé 'Human-in-the-Loop Agentic Engineering & Deterministic Governance'.",
                     )
                 } else if !has_modern_title {
                     (
@@ -450,7 +452,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 violations.push(Violation {
                     rule_id: "DOC-VIBE-DISCLAIMER".to_string(),
                     rule_name: "Disclaimer Padronizado de Governança Ausente ou Obsoleto".to_string(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     file_path: path_display,
                     line_number: content.lines().count().max(1),
                     snippet: "Human-in-the-Loop Agentic Engineering & Deterministic Governance".to_string(),

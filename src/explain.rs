@@ -17,9 +17,9 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "DOC-VIBE-DISCLAIMER",
         name: "Disclaimer Padronizado de Governança StênioSentinel Ausente ou Inconsistente",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "doc",
-        summary: "Exige o disclaimer padronizado de governança humana-IA ('Human-in-the-Loop Agentic Engineering & Deterministic Governance') em repositórios públicos.",
+        summary: "Exige o disclaimer padronizado de governança humana-IA ('Human-in-the-Loop Agentic Engineering & Deterministic Governance') e proíbe badges legados de vibe-coding em repositórios públicos.",
         rationale: "Garante transparência sobre a governança de engenharia agêntica e autoria em projetos open-source e públicos sob liderança de Carlos Eduardo Rodrigues, destacando o StênioSentinel como guardião determinístico de integridade.",
         bad_example: "> 🔮 **Yes... This is a Vibe Coded project**\n# Ou README sem qualquer menção de governança.",
         good_example: "<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",

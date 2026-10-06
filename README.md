@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v3.8.5) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel (v3.8.6) — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -144,7 +144,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v3.8.5 — Universal AI Governance & Static Sentinel
+StenioSentinel v3.8.6 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 
@@ -174,7 +174,7 @@ Options:
 | `RUST-NO-UNWRAP` | Rust | **ERROR** | Strictly forbids `.unwrap()` and `.expect()` in production code. |
 | `ARCH-NO-PYTHON` | Arch | **ERROR** | Enforces 100% native Rust backend sovereignty (ADR-036). |
 | `ARCH-DRY-DUPLICATION` | Code | **ERROR** | Blocks identical multi-line logic blocks duplicated across files. |
-| `DOC-VIBE-DISCLAIMER` | Docs | **WARN** | Enforces the standardized human-AI governance disclaimer in public READMEs. |
+| `DOC-VIBE-DISCLAIMER` | Docs | **ERROR** | Enforces the standardized human-AI governance disclaimer and blocks legacy vibe-coded badges in READMEs. |
 | `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text API keys, GitHub tokens, and private keys. |
 | `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted environment files (`.enc.env`). |
 | `GOV-AGENT-LAWS` | Gov | **ERROR** | Validates agent constitution and governance rules in `AGENTS.md`. |
