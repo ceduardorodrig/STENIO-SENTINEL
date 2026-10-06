@@ -541,15 +541,15 @@ struct ProfileEntry {
     options: String,
 }
 
+fn load_toml_value(path: &str) -> Option<toml::Value> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&raw).ok()
+}
+
 fn load_games() -> Vec<GameEntry> {
     let path = "/home/edu/.config/steam-launch-options/games.toml";
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let parsed: toml::Value = match toml::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    let Some(parsed) = load_toml_value(path) else {
+        return Vec::new();
     };
     let mut out = Vec::new();
     if let Some(arr) = parsed.get("games").and_then(|v| v.as_array()) {
@@ -568,13 +568,8 @@ fn load_games() -> Vec<GameEntry> {
 
 fn load_profiles() -> Vec<ProfileEntry> {
     let path = "/home/edu/.config/steam-launch-options/profiles.toml";
-    let raw = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let parsed: toml::Value = match toml::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    let Some(parsed) = load_toml_value(path) else {
+        return Vec::new();
     };
     let mut out = Vec::new();
     if let Some(arr) = parsed.get("profiles").and_then(|v| v.as_array()) {

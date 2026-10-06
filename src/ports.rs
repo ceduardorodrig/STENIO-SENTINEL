@@ -272,6 +272,136 @@ fn parse_addr(addr: &str) -> (String, u16) {
     }
 }
 
+fn print_port_table_row(
+    indent: &str,
+    port_proto: impl std::fmt::Display,
+    ip_bind: impl std::fmt::Display,
+    service_proc: impl std::fmt::Display,
+    verdict: impl std::fmt::Display,
+    doc_desc: impl std::fmt::Display,
+) {
+    println!(
+        "{indent}{:<10} [{:<15}] {:<22} | {} | {}",
+        port_proto, ip_bind, service_proc, verdict, doc_desc
+    );
+}
+
+fn render_active_socket(
+    indent: &str,
+    sock: &ActiveSocket,
+    node_name: &str,
+    catalog_map: &HashMap<u16, Vec<&PortEntry>>,
+    alerts_count: &mut usize,
+) {
+    let proc_label = sock.process.as_deref().unwrap_or("sistema / docker").cyan();
+    let entries_for_port = catalog_map.get(&sock.port);
+    let node_entry = entries_for_port.and_then(|v| v.iter().find(|e| e.host == node_name));
+
+    if let Some(entry) = node_entry {
+        let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
+        let is_unauthorized = if node_name == "psicopompo" {
+            let should_be_restricted = entry.bind.contains("127.0.0.1")
+                || entry.bind.contains("tailscale0")
+                || entry.bind.contains("100.");
+            let is_lan_authorized = entry.bind.contains("LAN")
+                || entry.bind.contains("Swarm Ingress")
+                || entry.port == 7946;
+            is_wide_open && should_be_restricted && !is_lan_authorized
+        } else {
+            let is_wan_allowed = (node_name == "ybyra" && (sock.port == 80 || sock.port == 443))
+                || entry.bind.contains("LAN")
+                || entry.bind.contains("Swarm Ingress")
+                || sock.port == 7946;
+            is_wide_open && !is_wan_allowed
+        };
+
+        if is_unauthorized {
+            *alerts_count += 1;
+            print_port_table_row(
+                indent,
+                format!("{}/{}", sock.port, sock.proto).yellow().bold(),
+                sock.ip.red().bold(),
+                entry.service.white().bold(),
+                "⚠️ BIND 0.0.0.0 NÃO AUTORIZADO".red().bold(),
+                entry.doc_link.dimmed(),
+            );
+        } else {
+            print_port_table_row(
+                indent,
+                format!("{}/{}", sock.port, sock.proto).green().bold(),
+                sock.ip.dimmed(),
+                entry.service.white().bold(),
+                "CONFORME".green().bold(),
+                entry.doc_link.dimmed(),
+            );
+        }
+    } else if sock.ip.starts_with("127.0.0.") || sock.ip == "::1" {
+        print_port_table_row(
+            indent,
+            format!("{}/{}", sock.port, sock.proto).dimmed(),
+            sock.ip.dimmed(),
+            proc_label,
+            "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
+            "Não exposto à rede externa".dimmed(),
+        );
+    } else if node_name == "psicopompo"
+        && (sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863)
+    {
+        print_port_table_row(
+            indent,
+            format!("{}/{}", sock.port, sock.proto).blue(),
+            sock.ip.dimmed(),
+            proc_label,
+            "CLIENTE / DESKTOP EFÊMERO".blue(),
+            "Uso de aplicação local".dimmed(),
+        );
+    } else if node_name != "psicopompo" && (sock.port > 30000 || sock.port == 22) {
+        let label = if sock.port == 22 {
+            "SSH DAEMON"
+        } else {
+            "CLIENTE / DESKTOP EFÊMERO"
+        };
+        print_port_table_row(
+            indent,
+            format!("{}/{}", sock.port, sock.proto).blue(),
+            sock.ip.dimmed(),
+            proc_label,
+            label.blue(),
+            "Acesso de gestão / aplicação".dimmed(),
+        );
+    } else {
+        *alerts_count += 1;
+        print_port_table_row(
+            indent,
+            format!("{}/{}", sock.port, sock.proto).red().bold(),
+            sock.ip.yellow().bold(),
+            proc_label,
+            "PORTA ÓRFÃ NÃO CATALOGADA".red().bold(),
+            "Cadastrar em mnemocine/network/ports.md".yellow(),
+        );
+    }
+}
+
+fn render_offline_ports<T>(
+    indent: &str,
+    catalog: &[PortEntry],
+    host_name: &str,
+    active_ports: &HashMap<u16, T>,
+) {
+    for entry in catalog {
+        if entry.host == host_name && !active_ports.contains_key(&entry.port) {
+            print_port_table_row(
+                indent,
+                format!("{}/{}", entry.port, entry.proto).dimmed(),
+                entry.bind.dimmed(),
+                entry.service.dimmed(),
+                "EM REPOUSO / OFFLINE".dimmed(),
+                entry.doc_link.dimmed(),
+            );
+        }
+    }
+}
+
 /// Executa a auditoria completa do Porteiro das Portas (Attack Surface Management)
 pub async fn run_ports_audit(root: &Path) -> Result<()> {
     crate::baseline::print_banner(
@@ -302,90 +432,11 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         }
         active_ports_found.insert(sock.port, sock);
 
-        let proc_label = sock.process.as_deref().unwrap_or("sistema / docker").cyan();
-
-        let entries_for_port = catalog_map.get(&sock.port);
-        let psicopompo_entry =
-            entries_for_port.and_then(|v| v.iter().find(|e| e.host == "psicopompo"));
-
-        if let Some(entry) = psicopompo_entry {
-            // Verificar se o bind é seguro
-            let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
-            let should_be_restricted = entry.bind.contains("127.0.0.1")
-                || entry.bind.contains("tailscale0")
-                || entry.bind.contains("100.");
-            let is_lan_authorized = entry.bind.contains("LAN")
-                || entry.bind.contains("Swarm Ingress")
-                || entry.port == 7946;
-
-            if is_wide_open && should_be_restricted && !is_lan_authorized {
-                // Alerta de exposição
-                alerts_count += 1;
-                println!(
-                    "   {:<10} [{:<15}] {:<22} | {} | {}",
-                    format!("{}/{}", sock.port, sock.proto).yellow().bold(),
-                    sock.ip.red().bold(),
-                    entry.service.white().bold(),
-                    "⚠️ BIND 0.0.0.0 NÃO AUTORIZADO".red().bold(),
-                    entry.doc_link.dimmed()
-                );
-            } else {
-                println!(
-                    "   {:<10} [{:<15}] {:<22} | {} | {}",
-                    format!("{}/{}", sock.port, sock.proto).green().bold(),
-                    sock.ip.dimmed(),
-                    entry.service.white().bold(),
-                    "CONFORME".green().bold(),
-                    entry.doc_link.dimmed()
-                );
-            }
-        } else if sock.ip.starts_with("127.0.0.") || sock.ip == "::1" {
-            // Localhost / Dev temporário
-            println!(
-                "   {:<10} [{:<15}] {:<22} | {} | {}",
-                format!("{}/{}", sock.port, sock.proto).dimmed(),
-                sock.ip.dimmed(),
-                proc_label,
-                "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
-                "Não exposto à rede externa".dimmed()
-            );
-        } else if sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863
-        {
-            // Cliente desktop / efêmero
-            println!(
-                "   {:<10} [{:<15}] {:<22} | {} | {}",
-                format!("{}/{}", sock.port, sock.proto).blue(),
-                sock.ip.dimmed(),
-                proc_label,
-                "CLIENTE / DESKTOP EFÊMERO".blue(),
-                "Uso de aplicação local".dimmed()
-            );
-        } else {
-            alerts_count += 1;
-            println!(
-                "   {:<10} [{:<15}] {:<22} | {} | {}",
-                format!("{}/{}", sock.port, sock.proto).red().bold(),
-                sock.ip.yellow().bold(),
-                proc_label,
-                "PORTA ÓRFÃ NÃO CATALOGADA".red().bold(),
-                "Cadastrar em mnemocine/network/ports.md".yellow()
-            );
-        }
+        render_active_socket("   ", sock, "psicopompo", &catalog_map, &mut alerts_count);
     }
 
     // Listar portas catalogadas que estão em repouso (offline)
-    for entry in &catalog {
-        if entry.host == "psicopompo" && !active_ports_found.contains_key(&entry.port) {
-            println!(
-                "   {:<10} [{:<15}] {:<22} | {} | {}",
-                format!("{}/{}", entry.port, entry.proto).dimmed(),
-                entry.bind.dimmed(),
-                entry.service.dimmed(),
-                "EM REPOUSO / OFFLINE".dimmed(),
-                entry.doc_link.dimmed()
-            );
-        }
-    }
+    render_offline_ports("   ", &catalog, "psicopompo", &active_ports_found);
 
     println!();
 
@@ -424,95 +475,23 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                     ssh_success = true;
                     let mut node_active_ports = HashMap::new();
 
-                    for sock in sockets {
+                    for sock in &sockets {
                         if node_active_ports.contains_key(&sock.port) {
                             continue;
                         }
                         node_active_ports.insert(sock.port, sock.clone());
 
-                        let proc_label =
-                            sock.process.as_deref().unwrap_or("sistema / docker").cyan();
-
-                        let entries_for_port = catalog_map.get(&sock.port);
-                        let node_entry =
-                            entries_for_port.and_then(|v| v.iter().find(|e| e.host == node_name));
-
-                        if let Some(entry) = node_entry {
-                            let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
-                            let is_wan_allowed = (node_name == "ybyra"
-                                && (sock.port == 80 || sock.port == 443))
-                                || entry.bind.contains("LAN")
-                                || entry.bind.contains("Swarm Ingress")
-                                || sock.port == 7946;
-
-                            if is_wide_open && !is_wan_allowed {
-                                alerts_count += 1;
-                                println!(
-                                    "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                    format!("{}/{}", sock.port, sock.proto).yellow().bold(),
-                                    sock.ip.red().bold(),
-                                    entry.service.white().bold(),
-                                    "⚠️ BIND 0.0.0.0 NÃO AUTORIZADO".red().bold(),
-                                    entry.doc_link.dimmed()
-                                );
-                            } else {
-                                println!(
-                                    "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                    format!("{}/{}", sock.port, sock.proto).green().bold(),
-                                    sock.ip.dimmed(),
-                                    entry.service.white().bold(),
-                                    "CONFORME".green().bold(),
-                                    entry.doc_link.dimmed()
-                                );
-                            }
-                        } else if sock.ip.starts_with("127.0.0.") || sock.ip == "::1" {
-                            println!(
-                                "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                format!("{}/{}", sock.port, sock.proto).dimmed(),
-                                sock.ip.dimmed(),
-                                proc_label,
-                                "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
-                                "Não exposto à rede externa".dimmed()
-                            );
-                        } else if sock.port > 30000 || sock.port == 22 {
-                            println!(
-                                "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                format!("{}/{}", sock.port, sock.proto).blue(),
-                                sock.ip.dimmed(),
-                                proc_label,
-                                if sock.port == 22 {
-                                    "SSH DAEMON".blue()
-                                } else {
-                                    "CLIENTE / DESKTOP EFÊMERO".blue()
-                                },
-                                "Acesso de gestão / aplicação".dimmed()
-                            );
-                        } else {
-                            alerts_count += 1;
-                            println!(
-                                "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                format!("{}/{}", sock.port, sock.proto).red().bold(),
-                                sock.ip.yellow().bold(),
-                                proc_label,
-                                "PORTA ÓRFÃ NÃO CATALOGADA".red().bold(),
-                                "Cadastrar em mnemocine/network/ports.md".yellow()
-                            );
-                        }
+                        render_active_socket(
+                            "      ",
+                            sock,
+                            node_name,
+                            &catalog_map,
+                            &mut alerts_count,
+                        );
                     }
 
                     // Reportar portas catalogadas em repouso no nó remoto
-                    for entry in &catalog {
-                        if entry.host == node_name && !node_active_ports.contains_key(&entry.port) {
-                            println!(
-                                "      {:<10} [{:<15}] {:<22} | {} | {}",
-                                format!("{}/{}", entry.port, entry.proto).dimmed(),
-                                entry.bind.dimmed(),
-                                entry.service.dimmed(),
-                                "EM REPOUSO / OFFLINE".dimmed(),
-                                entry.doc_link.dimmed()
-                            );
-                        }
-                    }
+                    render_offline_ports("      ", &catalog, node_name, &node_active_ports);
                 }
             }
             crate::remote::RemoteOutcome::AuthRequired { ref auth_url, .. } => {

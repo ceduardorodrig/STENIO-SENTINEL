@@ -306,44 +306,57 @@ fn most_recent_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
 }
 
 fn check_disk_health(path: &str, label: &str) {
-    // Exceção documentada: statvfs nativo requer dep nix (não incluso). Pendente ADR-xxx.
-    let output = Command::new("df").args(["-Pk", path]).output();
+    use std::ffi::CString;
+    use std::mem::MaybeUninit;
 
-    if let Ok(out) = output {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 6 {
-                    let total_kb: f64 = parts[1].parse().unwrap_or(0.0);
-                    let avail_kb: f64 = parts[3].parse().unwrap_or(0.0);
-                    let pct_str = parts[4].trim_end_matches('%');
-                    let pct: f64 = pct_str.parse().unwrap_or(0.0);
+    let c_path = match CString::new(path) {
+        Ok(c) => c,
+        Err(_) => {
+            println!(
+                "   {:<30} [{}] - {}",
+                label.bold(),
+                path.cyan(),
+                "CAMINHO INVÁLIDO".red()
+            );
+            return;
+        }
+    };
 
-                    let total_gb = total_kb / (1024.0 * 1024.0);
-                    let free_gb = avail_kb / (1024.0 * 1024.0);
+    let mut stat = MaybeUninit::<libc::statvfs>::uninit();
+    let res = unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) };
 
-                    let status = if pct > 90.0 {
-                        format!("CRÍTICO ({}% usado)", pct).red().bold()
-                    } else if pct > 75.0 {
-                        format!("ALERTA ({}% usado)", pct).yellow().bold()
-                    } else {
-                        format!("SAUDÁVEL ({}% usado)", pct).green().bold()
-                    };
+    if res == 0 {
+        let stat = unsafe { stat.assume_init() };
+        let block_size = stat.f_frsize as f64;
+        let total_bytes = stat.f_blocks as f64 * block_size;
+        let free_bytes = stat.f_bavail as f64 * block_size;
 
-                    println!(
-                        "   {:<30} [{}] - {:.1} GB livres de {:.1} GB ({})",
-                        label.bold(),
-                        path.cyan(),
-                        free_gb,
-                        total_gb,
-                        status
-                    );
-                    return;
-                }
-            }
+        if total_bytes > 0.0 {
+            let used_bytes = total_bytes - free_bytes;
+            let pct = (used_bytes / total_bytes) * 100.0;
+            let total_gb = total_bytes / (1024.0 * 1024.0 * 1024.0);
+            let free_gb = free_bytes / (1024.0 * 1024.0 * 1024.0);
+
+            let status = if pct > 90.0 {
+                format!("CRÍTICO ({:.0}% usado)", pct).red().bold()
+            } else if pct > 75.0 {
+                format!("ALERTA ({:.0}% usado)", pct).yellow().bold()
+            } else {
+                format!("SAUDÁVEL ({:.0}% usado)", pct).green().bold()
+            };
+
+            println!(
+                "   {:<30} [{}] - {:.1} GB livres de {:.1} GB ({})",
+                label.bold(),
+                path.cyan(),
+                free_gb,
+                total_gb,
+                status
+            );
+            return;
         }
     }
+
     println!(
         "   {:<30} [{}] - {}",
         label.bold(),

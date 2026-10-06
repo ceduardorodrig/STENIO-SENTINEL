@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v3.1.0) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel (v3.8.5) — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -143,7 +143,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v3.1.0 — Universal AI Governance & Static Sentinel
+StenioSentinel v3.8.5 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 

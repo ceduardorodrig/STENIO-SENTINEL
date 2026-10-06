@@ -763,13 +763,14 @@ dependencies = [
 
 [[package]]
 name = "stenio-sentinel"
-version = "3.8.4"
+version = "3.8.5"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "colored",
  "ignore",
+ "libc",
  "notify",
  "rayon",
  "regex",

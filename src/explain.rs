@@ -380,7 +380,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "ARCH-DRY-DUPLICATION",
         name: "Princípio DRY (Don't Repeat Yourself) Obrigatório",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "arch",
         summary: "Detecta e proíbe blocos idênticos de código duplicados entre arquivos ou funções.",
         rationale: "Modelos de IA menores frequentemente copiam e colam trechos inteiros de lógica (filtros, paginação, mapeamento de dados, layout de cards) em múltiplos arquivos. Isso infla a base de código, gera inconsistências visuais e cria débito técnico massivo. Toda lógica comum deve ser abstraída.",

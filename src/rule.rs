@@ -429,7 +429,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     rules.push(Rule::new(
         "ARCH-DRY-DUPLICATION",
         "arch",
-        Severity::Warning,
+        Severity::Error,
         "Duplicação de Código (Princípio DRY)",
         "Proíbe blocos de código substantivos duplicados (>6 linhas idênticas). Extraia a lógica em funções compartilhadas ou hooks.",
         r"(?m)^.*stenio-dry-marker.*$",

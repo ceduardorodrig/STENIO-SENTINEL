@@ -258,7 +258,7 @@ pub fn detect_dry_duplication(
                 violations.push(Violation {
                     rule_id: "ARCH-DRY-DUPLICATION".to_string(),
                     rule_name: "Duplicação de Código (Princípio DRY)".to_string(),
-                    severity: Severity::Warning,
+                    severity: Severity::Error,
                     file_path: file1_str,
                     line_number: start_line1,
                     snippet: format!("{}\n...", snippet),

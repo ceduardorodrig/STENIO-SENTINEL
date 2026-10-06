@@ -1,6 +1,6 @@
 [package]
 name = "stenio-sentinel"
-version = "3.8.4"
+version = "3.8.5"
 edition = "2024"
 description = "Sub-millisecond static governance engine, anti-bypass quality gate, and architectural integrity sentinel for AI coding agents written in Rust 2024."
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,7 @@ toml = "0.8"
 serde_yaml = "0.9"
 tokio = { version = "1.38", features = ["rt-multi-thread", "net", "time", "macros"] }
 notify = "6.1"
+libc = "0.2"
 
 [profile.release]
 opt-level = 3
