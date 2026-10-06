@@ -377,20 +377,34 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         check_targets.push(cv_readme);
     }
 
-    // Alvo 3: Repositórios gerenciados em ~/homelab/
-    let homelab_dir = PathBuf::from("/home/edu/homelab");
-    if homelab_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&homelab_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                let dir_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                // Ignora forks externos
-                if dir_name == "macrokey-driver" || !p.join(".git").exists() {
-                    continue;
-                }
-                let repo_readme = p.join("README.md");
-                if repo_readme.is_file() && !check_targets.contains(&repo_readme) {
-                    check_targets.push(repo_readme);
+    // Alvo 3: Repositórios gerenciados em /mnt/NVME_PCI/homelab e ~/homelab/
+    for base_dir in &[
+        PathBuf::from("/mnt/NVME_PCI/homelab"),
+        PathBuf::from("/home/edu/homelab"),
+    ] {
+        if base_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(base_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if !p.join(".git").exists() {
+                        // Também verificar subdiretórios de 1 nível (ex: sumaenimahub/sumaenima-hub)
+                        if let Ok(subentries) = fs::read_dir(&p) {
+                            for sub in subentries.flatten() {
+                                let sub_p = sub.path();
+                                if sub_p.join(".git").exists() {
+                                    let sub_readme = sub_p.join("README.md");
+                                    if sub_readme.is_file() && !check_targets.contains(&sub_readme) {
+                                        check_targets.push(sub_readme);
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    let repo_readme = p.join("README.md");
+                    if repo_readme.is_file() && !check_targets.contains(&repo_readme) {
+                        check_targets.push(repo_readme);
+                    }
                 }
             }
         }
@@ -405,29 +419,30 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 .to_string_lossy()
                 .to_string();
 
-            let has_valid_title = content.contains("**Yes... This is a Vibe Coded project**")
-                || content.contains("Yes... This is a Vibe Coded project");
-            let has_legacy_phrase = content.contains("Vibe Coded with StenioSentinel");
+            let has_modern_title = content.contains("Human-in-the-Loop Agentic Engineering & Deterministic Governance");
+            let has_legacy_vibe = content.contains("**Yes... This is a Vibe Coded project**")
+                || content.contains("Yes... This is a Vibe Coded project")
+                || content.contains("Vibe Coded with StenioSentinel");
             let has_gov = content.contains("StenioSentinel");
             let has_author =
                 content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
 
-            let is_valid = has_valid_title && !has_legacy_phrase && has_gov && has_author;
+            let is_valid = has_modern_title && !has_legacy_vibe && has_gov && has_author;
 
             if !is_valid {
-                let (reason, suggestion) = if has_legacy_phrase {
+                let (reason, suggestion) = if has_legacy_vibe {
                     (
-                        "Disclaimer no README contém formato legado ('Vibe Coded with StenioSentinel').",
-                        "Atualize o cabeçalho para '**Yes... This is a Vibe Coded project**' e utilize o emoji 🤖 para o StenioSentinel.",
+                        "Disclaimer no README contém formato legado ('Vibe Coded project').",
+                        "Atualize o cabeçalho para '### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance' e utilize o novo bloco canônico.",
                     )
-                } else if !has_valid_title {
+                } else if !has_modern_title {
                     (
-                        "Disclaimer '**Yes... This is a Vibe Coded project**' não encontrado no README.",
+                        "Disclaimer 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' não encontrado no README.",
                         "Adicione o bloco padronizado com o disclaimer de governança do Stênio no rodapé do README.md.",
                     )
                 } else {
                     (
-                        "Disclaimer incompleto (menção ao autor ou à governança do Stênio ausente).",
+                        "Disclaimer incompleto (menção ao autor Carlos Eduardo Rodrigues ou ao StenioSentinel ausente).",
                         "Garanta que o bloco de governança contenha as referências completas ao StenioSentinel e ao autor.",
                     )
                 };
@@ -438,10 +453,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     severity: Severity::Warning,
                     file_path: path_display,
                     line_number: content.lines().count().max(1),
-                    snippet: "Yes... This is a Vibe Coded project".to_string(),
+                    snippet: "Human-in-the-Loop Agentic Engineering & Deterministic Governance".to_string(),
                     message: format!("README '{}': {}", readme_path.display(), reason),
                     suggestion: Some(format!(
-                        "{}\nFormato obrigatório:\n<div align=\"center\">\n\n> **Yes... This is a Vibe Coded project**\n>\n> Governed by 🤖 **StenioSentinel** (our Rust-based AI Governance Sentinel) with **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)).\n\n</div>",
+                        "{}\nFormato obrigatório:\n<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",
                         suggestion
                     )),
                 });
