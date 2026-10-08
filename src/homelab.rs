@@ -149,15 +149,15 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
 
     if violations.is_empty() {
         messages.push(format!(
-            "✅ {} notas e arquivos de infraestrutura em mnemocine/ 100% em conformidade.",
+            "✅ {} notes and infrastructure configs in mnemocine/ 100% compliant.",
             scanned_count
         ));
-        messages.push("✅ Taxonomia de tags e frontmatter YAML íntegros.".to_string());
+        messages.push("✅ Tag taxonomy and YAML frontmatter intact.".to_string());
         messages
-            .push("✅ Nenhuma montagem NFS hard detectada (resiliência Tailscale OK).".to_string());
+            .push("✅ No hard NFS mounts detected (Tailscale resilience OK).".to_string());
     } else {
         messages.push(format!(
-            "⚠️ {} arquivo(s) com desvios em mnemocine/.",
+            "⚠️ {} file(s) with deviations in mnemocine/.",
             violations.len()
         ));
     }

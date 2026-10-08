@@ -73,17 +73,17 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
                     if has_conventions && has_rust_tools && has_homelab_or_mei {
                         messages.push(
-                            "✅ AGENTS.md universal íntegro e alinhado ao padrão de governança"
+                            "✅ Universal AGENTS.md intact and aligned with governance conventions"
                                 .to_string(),
                         );
                         messages.push(
-                            "✅ Regras de ferramentas Rust e privilégios de sistema preservadas"
+                            "✅ Rust tools and system privilege rules preserved"
                                 .to_string(),
                         );
                         laws_count = 14;
                     } else {
                         let err =
-                            "❌ AGENTS.md universal com convenções ou regras essenciais ausentes"
+                            "❌ Universal AGENTS.md missing essential conventions or rules"
                                 .to_string();
                         messages.push(err.clone());
                         errors.push(err);
@@ -109,12 +109,12 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
                     if laws_count >= 5 {
                         messages.push(format!(
-                            "✅ AGENTS.md satélite íntegro com {} regras específicas preservadas",
+                            "✅ Satellite AGENTS.md intact with {} specific rules preserved",
                             laws_count
                         ));
                     } else {
                         let err = format!(
-                            "❌ AGENTS.md satélite contém apenas {} regras (esperado >= 5).",
+                            "❌ Satellite AGENTS.md contains only {} rules (expected >= 5).",
                             laws_count
                         );
                         messages.push(err.clone());
@@ -133,12 +133,12 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
                     if laws_count >= 13 {
                         messages.push(format!(
-                            "✅ AGENTS.md íntegro com {} Leis Absolutas preservadas",
+                            "✅ AGENTS.md intact with {} Absolute Laws preserved",
                             laws_count
                         ));
                     } else {
                         let err = format!(
-                            "❌ AGENTS.md contém apenas {} leis (esperado >= 13). Omissão de leis absolutas!",
+                            "❌ AGENTS.md contains only {} laws (expected >= 13). Omission of absolute laws!",
                             laws_count
                         );
                         messages.push(err.clone());
@@ -147,25 +147,25 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
                     // Validação de cláusulas vitais (bilíngue PT/EN)
                     if content.contains("REGRA DE OURO") || content.contains("GOLDEN RULE") {
-                        messages.push("✅ Cláusula da Regra de Ouro presente".to_string());
+                        messages.push("✅ Golden Rule clause present".to_string());
                     } else {
-                        let err = "❌ Cláusula 'REGRA DE OURO' / 'GOLDEN RULE' ausente no AGENTS.md".to_string();
+                        let err = "❌ Golden Rule clause ('GOLDEN RULE' / 'REGRA DE OURO') missing from AGENTS.md".to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
 
                     if content.contains("HERANÇA DE CONTEXTO") || content.contains("CONTEXT INHERITANCE") {
-                        messages.push("✅ Cláusula de Herança de Contexto presente".to_string());
+                        messages.push("✅ Context Inheritance clause present".to_string());
                     } else {
                         let err =
-                            "❌ Cláusula 'HERANÇA DE CONTEXTO' / 'CONTEXT INHERITANCE' ausente no AGENTS.md".to_string();
+                            "❌ Context Inheritance clause ('CONTEXT INHERITANCE' / 'HERANÇA DE CONTEXTO') missing from AGENTS.md".to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
                 }
             }
             Err(e) => {
-                let err = format!("❌ Falha ao ler AGENTS.md: {}", e);
+                let err = format!("❌ Failed to read AGENTS.md: {}", e);
                 messages.push(err.clone());
                 errors.push(err);
             }

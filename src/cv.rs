@@ -155,14 +155,14 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
 
     if violations.is_empty() {
         messages.push(format!(
-            "✅ {} currículos bilíngues auditados com 100% de paridade PT↔EN.",
+            "✅ {} bilingual CVs audited with 100% PT↔EN parity.",
             scanned_count
         ));
         messages
-            .push("✅ Narrativa 'O Fio da Meada' / 'The Thread' íntegra no README.".to_string());
+            .push("✅ 'The Thread' / 'O Fio da Meada' narrative intact in README.".to_string());
     } else {
         messages.push(format!(
-            "ℹ️ {} desvio(s) encontrados na base de currículos.",
+            "ℹ️ {} deviation(s) found across curriculum vitae documents.",
             violations.len()
         ));
     }

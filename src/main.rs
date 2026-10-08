@@ -61,108 +61,108 @@ struct Args {
     #[arg(
         short = 's',
         long,
-        help = "Escopo de auditoria: hub, homelab, vault, cv, fork (repo derivado), mirror (repo gerado), all [default: all]"
+        help = "Audit scope: hub, homelab, vault, cv, fork (derived repo), mirror (generated repo), all [default: all]"
     )]
     scope: Option<String>,
 
     #[arg(
         short,
         long,
-        help = "Filtrar regras por tag (ex: sec, arch, frontend, infra, gov, gpu, doc, db, custom)"
+        help = "Filter rules by tag (e.g. sec, arch, frontend, infra, gov, gpu, doc, db, custom)"
     )]
     tag: Option<String>,
 
     #[arg(
         short,
         long,
-        help = "Modo rápido: escaneia apenas arquivos modificados no Git"
+        help = "Fast mode: scan only Git-modified files"
     )]
     fast: bool,
 
-    #[arg(long, help = "Caminho raiz do escaneamento", default_value = ".")]
+    #[arg(long, help = "Root path for scanning", default_value = ".")]
     path: PathBuf,
 
-    #[arg(long, help = "Emitir saída em formato JSON")]
+    #[arg(long, help = "Emit output in JSON format")]
     json: bool,
 
-    #[arg(long, help = "Formatar erros para anotações do GitHub Actions")]
+    #[arg(long, help = "Format errors as GitHub Actions annotations")]
     github_format: bool,
 
-    #[arg(long, help = "Falhar imediatamente com exit code 1 se houver erros")]
+    #[arg(long, help = "Fail immediately with exit code 1 if errors are found")]
     strict: bool,
 
     #[arg(
         long,
-        help = "Aprender nova regra dinamicamente e persistir em steniocheck.toml (JSON)"
+        help = "Dynamically learn new rule and persist in steniocheck.toml (JSON)"
     )]
     learn: Option<String>,
 
-    #[arg(long, help = "Listar todas as regras e autômatos ativos")]
+    #[arg(long, help = "List all active rules and automata")]
     list: bool,
 
     #[arg(
         long,
-        help = "Executar apenas uma regra específica (ex: --only FRONT-HEX)"
+        help = "Execute only a specific rule (e.g. --only FRONT-HEX)"
     )]
     only: Option<String>,
 
     #[arg(
         long,
-        help = "Executar bateria de auto-testes sintéticos das regras do motor"
+        help = "Run synthetic self-test suite of engine rules"
     )]
     self_test: bool,
 
     #[arg(
         long,
-        help = "Executar raio-X completo de infraestrutura, disco, RAM, GPU e serviços"
+        help = "Run full health diagnostics on infrastructure, disk, RAM, GPU and services"
     )]
     health: bool,
 
     #[arg(
         long,
-        help = "Executar raio-X de Gaming Health (sessão-aware: VRAM dmemcg, scanout Hyprland, stack de jogos, kernel, shader cache)"
+        help = "Run Gaming Health diagnostics (session-aware: VRAM dmemcg, Hyprland scanout, game stack, kernel, shader cache)"
     )]
     gaming: bool,
 
     #[arg(
         long,
-        help = "Audita a malha Tailscale de todos os nós do Homelab via Tokio"
+        help = "Audit Tailscale mesh connectivity across Homelab nodes via Tokio"
     )]
     mesh: bool,
 
     #[arg(
         long,
-        help = "Audita a superfície de ataque e portas abertas locais e remotas cruzando com o catálogo canônico"
+        help = "Audit local and remote attack surface and open ports against canonical catalog"
     )]
     ports: bool,
 
     #[arg(
         long,
-        help = "Audita ferramentas de operação em /usr/local/bin contra o que o repositório versiona (fonte da verdade)"
+        help = "Audit operational tools in /usr/local/bin against repository versioned state (source of truth)"
     )]
     tools: bool,
 
     #[arg(
         long,
-        help = "Gera automaticamente tipos TypeScript a partir dos structs Rust"
+        help = "Automatically generate TypeScript types from Rust structs"
     )]
     typegen: bool,
 
     #[arg(
         long,
-        help = "Gera contexto canônico de alta densidade para LLMs em Markdown"
+        help = "Generate high-density canonical context for LLMs in Markdown"
     )]
     context: bool,
 
     #[arg(
         long,
-        help = "Aplica correções automáticas (auto-fix) em violações passíveis de reparo"
+        help = "Apply automatic repairs (auto-fix) on repairable violations"
     )]
     fix: bool,
 
     #[arg(
         long,
-        help = "Audita a integridade criptográfica e mecanismos anti-tampering do próprio Stênio"
+        help = "Audit cryptographic integrity and anti-tampering mechanisms of Stenio itself"
     )]
     guardian: bool,
 
@@ -170,32 +170,32 @@ struct Args {
         long,
         num_args = 0..=1,
         default_missing_value = "",
-        help = "Scan cirúrgico apenas nos arquivos alterados no Git (ex: --diff, --diff HEAD~1, --diff - para stdin)"
+        help = "Surgical scan only on Git-modified files (e.g. --diff, --diff HEAD~1, --diff - for stdin)"
     )]
     diff: Option<String>,
 
     #[arg(
         long,
-        help = "Gerenciar git hook pre-commit: 'install' para instalar no repositório, ou 'check' para executar validação"
+        help = "Manage Git pre-commit hook: 'install' to install in repository, or 'check' to execute validation"
     )]
     pre_commit: Option<String>,
 
     #[arg(
         long,
-        help = "Saída ultra-compacta de uma linha por violação (otimizada para agentes de IA e LLMs)"
+        help = "Ultra-compact single-line output per violation (optimized for AI agents and LLMs)"
     )]
     compact: bool,
 
     #[arg(
         long,
-        help = "Modo Daemon Watchdog: monitora o sistema de arquivos via inotify e audita instantaneamente (<5ms) qualquer arquivo salvo"
+        help = "Watchdog Daemon mode: monitor filesystem via inotify and audit saved files instantly (<5ms)"
     )]
     watch: bool,
 
     #[arg(
         long,
         alias = "mcp-server",
-        help = "Modo Servidor MCP: executa como servidor Model Context Protocol (stdio/JSON-RPC 2.0) para OpenCode, Claude Code, Antigravity, Cursor"
+        help = "MCP Server mode: run as Model Context Protocol server (stdio/JSON-RPC 2.0) for OpenCode, Claude Code, Antigravity, Cursor"
     )]
     mcp: bool,
 
@@ -203,19 +203,19 @@ struct Args {
         long,
         num_args = 0..=1,
         default_missing_value = "all",
-        help = "Exibe documentação técnica detalhada, exemplos incorretos/corretos e remediação de regras (ex: --explain SEC-SUDO, --explain RUST-NO-UNWRAP)"
+        help = "Display detailed technical documentation, bad/good examples, and remediation for rules (e.g. --explain SEC-SUDO, --explain RUST-NO-UNWRAP)"
     )]
     explain: Option<String>,
 
     #[arg(
         long,
-        help = "Quality Gate Pré-Entrega: auditoria de tolerância zero que bloqueia modelos de IA preguiçosos se houver qualquer erro"
+        help = "Pre-Delivery Quality Gate: zero-tolerance audit that blocks AI agents if any error is found"
     )]
     gate: bool,
 
     #[arg(
         long,
-        help = "Audita duplicação de código usando o Princípio DRY Absoluto com Rolling Block Hash (<15ms)"
+        help = "Audit code duplication using Absolute DRY Principle with Rolling Block Hash (<15ms)"
     )]
     dry: bool,
 
@@ -223,13 +223,13 @@ struct Args {
         long,
         num_args = 0..=1,
         default_missing_value = "safe",
-        help = "Zeladoria e Higiene Inteligente: limpa caches, arquivos temporários (*.tmp, *.bak), árvores de build Rust (target/) e lixo Docker (imagens dangling, containers parados). Modos: 'safe' (padrão), 'targets', 'temp', 'docker', 'all'"
+        help = "Intelligent Janitor & Housekeeping: cleans caches, temp files (*.tmp, *.bak), Rust build trees (target/) and Docker clutter (dangling images, stopped containers). Modes: 'safe' (default), 'targets', 'temp', 'docker', 'all'"
     )]
     clean: Option<String>,
 
     #[arg(
         long,
-        help = "Simula a limpeza (--clean) exibindo o que seria removido e o espaço recuperável sem alterar o disco"
+        help = "Simulate cleanup (--clean) displaying what would be removed and reclaimable space without modifying disk"
     )]
     dry_run: bool,
 
@@ -237,7 +237,7 @@ struct Args {
         long,
         num_args = 0..=1,
         default_missing_value = "front",
-        help = "Deploy automatizado do ecossistema Sumænimá (ex: --deploy front, --deploy sync)"
+        help = "Automated deployment for Sumænimá ecosystem (e.g. --deploy front, --deploy sync)"
     )]
     deploy: Option<String>,
 }
@@ -257,14 +257,14 @@ fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
             let hook_file = hooks_dir.join("pre-commit");
             let hook_script = r#"#!/usr/bin/env bash
 # StenioSentinel Universal Pre-Commit Hook (v3.1)
-# Auto-instalado pelo StenioSentinel
+# Auto-installed by StenioSentinel
 set -euo pipefail
 
 if command -v stenio >/dev/null 2>&1; then
-    echo "🛡️  [StenioSentinel] Auditando arquivos em staging..."
+    echo "🛡️  [StenioSentinel] Auditing staged files..."
     exec stenio --diff staged --strict
 else
-    echo "⚠️  [StenioSentinel] Binário 'stenio' não encontrado no PATH. Pulando verificação."
+    echo "⚠️  [StenioSentinel] 'stenio' binary not found in PATH. Skipping verification."
 fi
 "#;
             fs::write(&hook_file, hook_script)?;
@@ -278,7 +278,7 @@ fi
                 }
             }
             println!(
-                "{} Hook pre-commit instalado com sucesso em: {}",
+                "{} Pre-commit hook installed successfully at: {}",
                 "✨".green().bold(),
                 hook_file.display().to_string().cyan().bold()
             );
@@ -290,13 +290,13 @@ fi
         }
     }
     anyhow::bail!(
-        "Nenhum repositório Git (.git) encontrado a partir de {:?}",
+        "No Git repository (.git) found starting from {:?}",
         start_dir
     );
 }
 
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
-    baseline::print_banner("StênioKernel — Bateria de Auto-Testes Sintéticos (Self-Test)");
+    baseline::print_banner("StenioKernel — Synthetic Self-Test Suite");
 
     let mut passed = 0;
     let mut total = 0;
@@ -310,24 +310,24 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
                 let is_m = re.is_match($sample);
                 if is_m == $expected_match {
                     passed += 1;
-                    println!("   ✅ Teste {:<22} [{}] - OK", $name, $pattern_id.cyan());
+                    println!("   ✅ Test {:<24} [{}] - OK", $name, $pattern_id.cyan());
                 } else {
                     println!(
-                        "   ❌ Teste {:<22} [{}] - FALHA (esperado match={})",
+                        "   ❌ Test {:<24} [{}] - FAILED (expected match={})",
                         $name,
                         $pattern_id.red(),
                         $expected_match
                     );
                 }
             } else {
-                println!("   ⚠️ Regra {} não encontrada", $pattern_id.yellow());
+                println!("   ⚠️ Rule {} not found", $pattern_id.yellow());
             }
         };
     }
 
-    check_case!("Python Banido", "ARCH-NO-PYTHON", "print('hello')", true);
+    check_case!("Banned Python", "ARCH-NO-PYTHON", "print('hello')", true);
     check_case!(
-        "Thread Sleep Tokio",
+        "Tokio Thread Sleep",
         "RUST-ASYNC-SLEEP",
         "#[tokio::main] async fn main() { std::thread::sleep(std::time::Duration::from_millis(100)); }", // stenio-ignore: RUST-ASYNC-SLEEP
         true
@@ -359,110 +359,110 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         if ok {
             passed += 1;
             println!(
-                "   ✅ Teste {:<22} [{}] - OK",
-                "Sleep: contexto async",
+                "   ✅ Test {:<24} [{}] - OK",
+                "Sleep: async context",
                 "RUST-ASYNC-SLEEP".cyan()
             );
         } else {
             println!(
-                "   ❌ Teste {:<22} [{}] - FALHA",
-                "Sleep: contexto async",
+                "   ❌ Test {:<24} [{}] - FAILED",
+                "Sleep: async context",
                 "RUST-ASYNC-SLEEP".red()
             );
         }
     }
     check_case!(
-        "Tokio Sleep Válido",
+        "Valid Tokio Sleep",
         "RUST-ASYNC-SLEEP",
         "tokio::time::sleep(Duration::from_millis(100)).await;",
         false
     );
     check_case!(
-        "Segredo Hardcoded",
+        "Hardcoded Secret",
         "SEC-SECRETS",
         "api_key = \"ghp_123456789012345678901234567890123456\"", // stenio-ignore: SEC-SECRETS
         true
     );
     check_case!(
-        "Sudo Desprotegido",
+        "Unprotected Sudo",
         "SEC-SUDO",
         "sudo systemctl restart nginx",
         true
     );
     check_case!(
-        "Sudo curl Desprotegido",
+        "Unprotected Sudo curl",
         "SEC-SUDO",
         "sudo curl https://example.com",
         true
     ); // Novo: captura qualquer comando
     check_case!(
-        "Sudo useradd Desprotegido",
+        "Unprotected Sudo useradd",
         "SEC-SUDO",
         "sudo useradd -m user",
         true
     ); // Novo: era ponto cego
     check_case!(
-        "Pkexec Válido",
+        "Valid Pkexec",
         "SEC-SUDO",
         "pkexec systemctl restart nginx",
         false
     );
     check_case!(
-        "Bare Except Proibido",
+        "Forbidden Bare Except",
         "SEC-EXCEPT",
         "except:\n    pass",
         true
     );
     check_case!(
-        "Except Tipado",
+        "Typed Except",
         "SEC-EXCEPT",
         "except ValueError:\n    pass",
         false
     );
     check_case!(
-        "GNU Tools em Shell",
+        "GNU Tools in Shell",
         "ARCH-RUST-TOOLS",
         "grep -r pattern .",
         true
     ); // Novo: AGENTS.md regra de terminal
     check_case!(
-        "Rust Tools Válido",
+        "Valid Rust Tools",
         "ARCH-RUST-TOOLS",
         "rg 'pattern' .",
         false
     ); // Novo: rg não dispara
     check_case!(
-        "Curl em Rust Proibido",
+        "Forbidden Curl in Rust",
         "ARCH-RUST-CMD-LEGACY",
         r#"Command::new("curl")"#,
         true
     ); // Novo: regra ARCH-RUST-CMD-LEGACY
     check_case!(
-        "XH em Rust OK",
+        "Valid XH in Rust",
         "ARCH-RUST-CMD-LEGACY",
         r#"Command::new("xh")"#,
         false
     ); // Novo: xh não dispara
     check_case!(
-        "Console.log Proibido",
+        "Forbidden Console.log",
         "FRONT-LOGS",
         "  console.log('debug info')",
         true
     ); // Novo: FRONT-LOGS
     check_case!(
-        "Unwrap Proibido",
+        "Forbidden Unwrap",
         "RUST-NO-UNWRAP",
         "let val = opt.unwrap();",
         true
     );
     check_case!(
-        "Expect Proibido",
+        "Forbidden Expect",
         "RUST-NO-UNWRAP",
         r#"let val = opt.expect("erro");"#,
         true
     );
     check_case!(
-        "Match Válido",
+        "Valid Match",
         "RUST-NO-UNWRAP",
         "let val = match opt { Some(v) => v, None => return };",
         false
@@ -481,103 +481,103 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         true
     );
     check_case!(
-        "Código Completo Válido",
+        "Valid Complete Code",
         "AGENT-NO-LAZY-STUB",
         "fn calculate() -> i32 { 42 }",
         false
     );
     check_case!(
-        "Supressão ts-ignore",
+        "ts-ignore Suppression",
         "AGENT-NO-SUPPRESSION-DIRECTIVES",
         "// @ts-ignore\nconst x = 1;",
         true
     );
     check_case!(
-        "Supressão eslint-disable",
+        "eslint-disable Suppression",
         "AGENT-NO-SUPPRESSION-DIRECTIVES",
         "/* eslint-disable */\nconst x = 1;",
         true
     );
     check_case!(
-        "Supressão stenio-ignore all",
+        "stenio-ignore all Suppression",
         "AGENT-NO-SUPPRESSION-DIRECTIVES",
         "// stenio-ignore: all",
         true
     );
     check_case!(
-        "Tampering no-verify",
+        "no-verify Tampering",
         "AGENT-NO-TAMPERING-VERIFIER",
         "git commit -m 'bypass' --no-verify",
         true
     );
     check_case!(
-        "Commit Regular OK",
+        "Regular Commit OK",
         "AGENT-NO-TAMPERING-VERIFIER",
         "git commit -m 'feat: implement'",
         false
     );
     check_case!(
-        "Desativação Strict tsconfig",
+        "tsconfig Strict Disabled",
         "CONF-NO-WEAKEN-STRICT",
         "\"strict\": false,",
         true
     );
     check_case!(
-        "Strict Válido tsconfig",
+        "tsconfig Strict OK",
         "CONF-NO-WEAKEN-STRICT",
         "\"strict\": true,",
         false
     );
     check_case!(
-        "Teste Ignorado Proibido",
+        "Ignored Test Forbidden",
         "TEST-NO-SILENT-SKIP",
         "#[test]\n#[ignore]\nfn test_failure() {}",
         true
     );
     check_case!(
-        "Asserção Comentada",
+        "Commented Assertion",
         "TEST-NO-SILENT-SKIP",
         "// assert_eq!(res, 42);",
         true
     );
     check_case!(
-        "Teste Válido",
+        "Valid Test",
         "TEST-NO-SILENT-SKIP",
         "#[test]\nfn test_valid() { assert_eq!(1, 1); }",
         false
     );
     check_case!(
-        "Catch Vazio Proibido",
+        "Empty Catch Forbidden",
         "CODE-NO-EMPTY-CATCH",
         "try { run(); } catch (e) {}",
         true
     );
     check_case!(
-        "Catch com Log Válido",
+        "Catch with Log OK",
         "CODE-NO-EMPTY-CATCH",
         "try { run(); } catch (e) { log(e); }",
         false
     );
     check_case!(
-        "E/S Bloqueante Proibida",
+        "Blocking I/O Forbidden",
         "BACKEND-BLOCKING-IO",
         r#"std::fs::read_to_string("data.json");"#, // stenio-ignore: BACKEND-BLOCKING-IO
         true
     );
     check_case!(
-        "E/S Assíncrona Tokio OK",
+        "Tokio Async I/O OK",
         "BACKEND-BLOCKING-IO",
         r#"tokio::fs::read_to_string("data.json").await;"#,
         false
     );
     check_case!(
-        "Panic em Servidor Proibido",
+        "Server Panic Forbidden",
         "BACKEND-NO-PANIC",
         r#"panic!("erro crítico");"#, // stenio-ignore: BACKEND-NO-PANIC
         true
     );
     check_case!(
-        "Retorno Result Válido",
+        "Valid Result Return",
         "BACKEND-NO-PANIC",
         "return Err(AppError::NotFound);",
         false
@@ -589,7 +589,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         true
     );
     check_case!(
-        "Zero-Repaint Opacidade OK",
+        "Zero-Repaint Opacity OK",
         "PERF-GPU-ZERO-REPAINT",
         "transition: opacity 0.25s ease;",
         false
@@ -601,7 +601,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         true
     );
     check_case!(
-        "will-change Estático",
+        "Static will-change",
         "PERF-GPU-WILL-CHANGE",
         "will-change: transform;",
         true
@@ -628,13 +628,13 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if v_lh.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
+            "   ✅ Test {:<24} [{}] - OK",
             "Hardcoded Localhost",
             "FRONT-NO-HARDCODED-HOST".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
+            "   ❌ Test {:<24} [{}] - FAILED",
             "Hardcoded Localhost",
             "FRONT-NO-HARDCODED-HOST".red()
         );
@@ -649,14 +649,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if !v_ok.iter().any(|v| v.rule_id == "FRONT-NO-HARDCODED-HOST") {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "Host Relativo Válido",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Valid Relative Host",
             "FRONT-NO-HARDCODED-HOST".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "Host Relativo Válido",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Valid Relative Host",
             "FRONT-NO-HARDCODED-HOST".red()
         );
     }
@@ -671,14 +671,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if v_seo_bad.iter().any(|v| v.rule_id == "SEO-INDEX-METADATA") {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "SEO Meta Desc Ausente",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Missing SEO Meta Desc",
             "SEO-INDEX-METADATA".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "SEO Meta Desc Ausente",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Missing SEO Meta Desc",
             "SEO-INDEX-METADATA".red()
         );
     }
@@ -692,14 +692,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if v_sitemap_bad.iter().any(|v| v.rule_id == "SEO-ROBOTS-SITEMAP") {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "Sitemap XML Inválido",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Invalid Sitemap XML",
             "SEO-ROBOTS-SITEMAP".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "Sitemap XML Inválido",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Invalid Sitemap XML",
             "SEO-ROBOTS-SITEMAP".red()
         );
     }
@@ -713,14 +713,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if v_img_bad.iter().any(|v| v.rule_id == "SEO-IMG-ALT") {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "Img Sem Alt Proibida",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Forbidden Image Missing Alt",
             "SEO-IMG-ALT".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "Img Sem Alt Proibida",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Forbidden Image Missing Alt",
             "SEO-IMG-ALT".red()
         );
     }
@@ -730,14 +730,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if migrations::check_sql_idempotency("CREATE TABLE users (id INT);").is_some() {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "SQL Não-Idempotente",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Non-Idempotent SQL",
             "DB-IDEMPOTENT-MIGRATION".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "SQL Não-Idempotente",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Non-Idempotent SQL",
             "DB-IDEMPOTENT-MIGRATION".red()
         );
     }
@@ -746,14 +746,14 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if migrations::check_sql_idempotency("CREATE TABLE IF NOT EXISTS users (id INT);").is_none() {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
-            "SQL Idempotente Válido",
+            "   ✅ Test {:<24} [{}] - OK",
+            "Valid Idempotent SQL",
             "DB-IDEMPOTENT-MIGRATION".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "SQL Idempotente Válido",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Valid Idempotent SQL",
             "DB-IDEMPOTENT-MIGRATION".red()
         );
     }
@@ -772,7 +772,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
-        "Sync Cmd em Async",
+        "Sync Cmd in Async",
         "RUST-ASYNC-BLOCKING-CMD",
         "let out = std::process::Command::new(\"ls\");",
         true
@@ -784,7 +784,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
-        "Sync Mutex em Async",
+        "Sync Mutex in Async",
         "RUST-NO-SYNC-MUTEX-AWAIT",
         "let m: std::sync::Mutex<i32> = std::sync::Mutex::new(0);",
         true
@@ -796,31 +796,31 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
-        "Arc Clone Não-Idiomático",
+        "Non-Idiomatic Arc Clone",
         "RUST-IDIOMATIC-ARC-CLONE",
         "let state = server_arc.clone();",
         true
     );
     check_case!(
-        "Arc Clone Idiomático OK",
+        "Idiomatic Arc Clone OK",
         "RUST-IDIOMATIC-ARC-CLONE",
         "let state = Arc::clone(&server_arc);",
         false
     );
     check_case!(
-        "Parâmetro &String",
+        "Parameter &String",
         "RUST-IDIOMATIC-SLICES",
         "fn fetch_user(name: &String) -> bool { true }",
         true
     );
     check_case!(
-        "Parâmetro &str OK",
+        "Parameter &str OK",
         "RUST-IDIOMATIC-SLICES",
         "fn fetch_user(name: &str) -> bool { true }",
         false
     );
     check_case!(
-        "Tokio Spawn Órfão",
+        "Orphan Tokio Spawn",
         "RUST-SPAWN-ERROR-HANDLING",
         "    tokio::spawn(async move {",
         true
@@ -870,13 +870,13 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     if !dry_v.is_empty() && dry_v[0].rule_id == "ARCH-DRY-DUPLICATION" {
         passed += 1;
         println!(
-            "   ✅ Teste {:<22} [{}] - OK",
+            "   ✅ Test {:<24} [{}] - OK",
             "DRY Block Duplication",
             "ARCH-DRY-DUPLICATION".cyan()
         );
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
+            "   ❌ Test {:<24} [{}] - FAILED",
             "DRY Block Duplication",
             "ARCH-DRY-DUPLICATION".red()
         );
@@ -894,21 +894,21 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         if v.rule_id == "ARCH-SCOPE-ISOLATION" {
             passed += 1;
             println!(
-                "   ✅ Teste {:<22} [{}] - OK",
-                "Isolamento de Escopo",
+                "   ✅ Test {:<24} [{}] - OK",
+                "Scope Isolation",
                 "ARCH-SCOPE-ISOLATION".cyan()
             );
         } else {
             println!(
-                "   ❌ Teste {:<22} [{}] - FALHA",
-                "Isolamento de Escopo",
+                "   ❌ Test {:<24} [{}] - FAILED",
+                "Scope Isolation",
                 "ARCH-SCOPE-ISOLATION".red()
             );
         }
     } else {
         println!(
-            "   ❌ Teste {:<22} [{}] - FALHA",
-            "Isolamento de Escopo",
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Scope Isolation",
             "ARCH-SCOPE-ISOLATION".red()
         );
     }
@@ -918,7 +918,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         println!(
             "{}",
             format!(
-                "✨ Auto-teste aprovado com sucesso! ({}/{} suítes sintéticas válidas)",
+                "✨ Self-test suite passed successfully! ({}/{} synthetic test suites valid)",
                 passed, total
             )
             .green()
@@ -927,7 +927,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     } else {
         println!(
             "{}",
-            format!("❌ Falha em auto-testes ({}/{} passaram)", passed, total)
+            format!("❌ Self-test failure ({}/{} passed)", passed, total)
                 .red()
                 .bold()
         );
@@ -938,10 +938,10 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 }
 
 fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Result<()> {
-    baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Inspeção Rigorosa Pré-Entrega");
+    baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Rigorous Pre-Delivery Inspection");
     println!(
         "{}",
-        "🛡️  Executando auditoria holística de tolerância zero para liberação de tarefa...\n"
+        "🛡️  Executing holistic zero-tolerance audit for task release...\n"
             .white()
     );
 
@@ -964,14 +964,14 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
                 v.file_path,
                 v.line_number,
                 v.message,
-                v.suggestion.as_deref().unwrap_or("Consulte --explain")
+                v.suggestion.as_deref().unwrap_or("See --explain")
             ));
         }
     }
 
     // 2. Erros de governança (incluindo GOV-LEFTOVER-TEST-ARTIFACTS)
     for err in &gov_result.errors {
-        blocker_errors.push(format!("[GOVERNANÇA] {}", err));
+        blocker_errors.push(format!("[GOVERNANCE] {}", err));
     }
 
     // 3. Documentação corrompida / links quebrados
@@ -1000,27 +1000,27 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
             dv.message,
             dv.suggestion
                 .as_deref()
-                .unwrap_or("Abstraia a lógica duplicada")
+                .unwrap_or("Abstract duplicated logic")
         ));
     }
 
     if blocker_errors.is_empty() {
         baseline::print_banner_green(
-            "🎉 [GATE APROVADO] Parabéns! O código está 100% em conformidade com as regras.",
+            "🎉 [GATE PASSED] Congratulations! Code is 100% compliant with rules.",
         );
         println!(
-            "   • {} arquivos auditados com sucesso.",
+            "   • {} files audited successfully.",
             report.total_files_scanned
         );
-        println!("   • Zero erros impeditivos.");
-        println!("   • Zero stubs ou placeholders detectados.");
-        println!("   • Zero testes neutralizados.");
-        println!("   • Zero duplicações de código (DRY 100%).");
-        println!("   • Zero artefatos residuais de teste.");
+        println!("   • Zero blocking errors.");
+        println!("   • Zero stubs or placeholders detected.");
+        println!("   • Zero silenced tests.");
+        println!("   • Zero code duplication (100% DRY).");
+        println!("   • Zero leftover test artifacts.");
         println!();
         println!(
             "{}",
-            "✨ A tarefa está formalmente LIBERADA para entrega ao usuário com garantia total de qualidade!"
+            "✨ Task is formally APPROVED for delivery to user with full quality assurance!"
                 .green()
                 .bold()
         );
@@ -1029,11 +1029,11 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     }
 
     // Se houver qualquer erro bloqueador
-    baseline::print_banner_red("🛑 [GATE REJEITADO] Entrega Bloqueada pelo StenioSentinel!");
+    baseline::print_banner_red("🛑 [GATE REJECTED] Delivery Blocked by StenioSentinel!");
     println!(
         "{}",
         format!(
-            "O agente de IA NÃO tem permissão para concluir a tarefa. Foram encontradas {} violação(ões) impeditiva(s):\n",
+            "AI agent is NOT allowed to complete the task. Found {} blocking violation(s):\n",
             blocker_errors.len()
         )
         .red()
@@ -1046,18 +1046,18 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     println!();
     println!(
         "{}",
-        "💡 INSTRUÇÕES MANDATÓRIAS PARA O AGENTE DE IA:"
+        "💡 MANDATORY INSTRUCTIONS FOR AI AGENT:"
             .yellow()
             .bold()
     );
-    println!("   1. Você DEVE corrigir cada uma das violações listadas acima antes de finalizar.");
+    println!("   1. You MUST fix every violation listed above before finishing.");
     println!(
-        "   2. Execute 'stenio --explain <RULE_ID>' para visualizar o código correto e a remediação."
+        "   2. Run 'stenio --explain <RULE_ID>' to view compliant code and remediation."
     );
     println!(
-        "   3. É ESTRITAMENTE PROIBIDO contornar erros desativando testes, adicionando stubs ou suprimindo regras."
+        "   3. It is STRICTLY FORBIDDEN to bypass errors by disabling tests, adding stubs, or suppressing rules."
     );
-    println!("   4. Execute 'stenio --gate' novamente até receber [GATE APROVADO].");
+    println!("   4. Re-run 'stenio --gate' until receiving [GATE PASSED].");
     println!();
 
     std::process::exit(1);
@@ -1079,7 +1079,7 @@ fn main() -> Result<()> {
             }
             other => {
                 eprintln!(
-                    "{} Alvo de deploy desconhecido: '{}'. Opções disponíveis: 'front' (compila + sync), 'sync' (sync sem compilar).",
+                    "{} Unknown deploy target: '{}'. Available options: 'front' (build + sync), 'sync' (sync without build).",
                     "⚠️".yellow(),
                     other
                 );
@@ -1096,7 +1096,7 @@ fn main() -> Result<()> {
             println!("{}", explain::format_explanation_cli(exp));
         } else {
             eprintln!(
-                "{} Nenhuma explicação encontrada para a regra '{}'.",
+                "{} No explanation found for rule '{}'.",
                 "⚠️".yellow(),
                 rule_target
             );
@@ -1198,7 +1198,7 @@ fn main() -> Result<()> {
             }
             other => {
                 eprintln!(
-                    "Ação desconhecida para --pre-commit: '{}'. Use 'install' ou 'check'.",
+                    "Unknown action for --pre-commit: '{}'. Use 'install' or 'check'.",
                     other
                 );
                 std::process::exit(1);
@@ -1211,7 +1211,7 @@ fn main() -> Result<()> {
         let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
         let rep = audit_stenio_integrity(&stenio_src);
         baseline::print_banner(
-            "StenioSentinel — Guardian: Autoproteção Criptográfica & Anti-Tampering",
+            "StenioSentinel — Guardian: Cryptographic Self-Defense & Anti-Tampering",
         );
         for m in &rep.messages {
             println!("   {}", m);
@@ -1332,14 +1332,14 @@ fn main() -> Result<()> {
 
     // ── Modo Listagem (--list) ─────────────────────────────────────────────
     if args.list {
-        baseline::print_banner("StênioKernel — Catálogo de Regras Ativas & Autômatos");
+        baseline::print_banner("StenioKernel — Active Rules & Automata Catalog");
         println!(
             "{:<26} {:<10} {:<8} {:<14} {}",
-            "ID DA REGRA".bold(),
+            "RULE ID".bold(),
             "TAG".bold(),
             "SEV".bold(),
-            "EXTENSÕES".bold(),
-            "NOME".bold()
+            "EXTENSIONS".bold(),
+            "NAME".bold()
         );
         println!(
             "{}",
@@ -1363,7 +1363,7 @@ fn main() -> Result<()> {
             );
         }
         println!();
-        println!("Total de regras ativas: {}", rules.len().to_string().bold());
+        println!("Total active rules: {}", rules.len().to_string().bold());
         println!();
         return Ok(());
     }
@@ -1816,7 +1816,7 @@ fn main() -> Result<()> {
     }
 
     let banner_title = format!(
-        "StenioSentinel (Rust Engine v{}) — Sistema Universal de Governança",
+        "StenioSentinel (Rust Engine v{}) — Universal Governance System",
         env!("CARGO_PKG_VERSION")
     );
     let badge = format!("[{:.2?}]", report.duration);
@@ -1826,7 +1826,7 @@ fn main() -> Result<()> {
     if should_audit_gov {
         println!(
             "{}",
-            "── Subsistema de Governança & Leis do Agente ──────────────────".dimmed()
+            "── Governance Subsystem & Agent Laws ──────────────────────────".dimmed()
         );
         for msg in gov_messages {
             println!("   {}", msg);
@@ -1838,7 +1838,7 @@ fn main() -> Result<()> {
     if should_audit_doc {
         println!(
             "{}",
-            "── Subsistema de Rastreabilidade & Documentação ───────────────".dimmed()
+            "── Documentation & Traceability Subsystem ─────────────────────".dimmed()
         );
         for msg in doc_messages {
             println!("   {}", msg);
@@ -1850,7 +1850,7 @@ fn main() -> Result<()> {
     if should_audit_gpu {
         println!(
             "{}",
-            "── Subsistema GPU & Modelos (RTX 5050 / Blackwell) ─────────".dimmed()
+            "── GPU & AI Models Subsystem (RTX 5050 / Blackwell) ───────────".dimmed()
         );
         for msg in gpu_messages {
             println!("   {}", msg);
@@ -1862,7 +1862,7 @@ fn main() -> Result<()> {
     if should_audit_mig {
         println!(
             "{}",
-            "── Subsistema de Banco de Dados & Migrações (SQLx) ────────────".dimmed()
+            "── Database & Migrations Subsystem (SQLx) ─────────────────────".dimmed()
         );
         for msg in mig_messages {
             println!("   {}", msg);
@@ -1874,7 +1874,7 @@ fn main() -> Result<()> {
     if is_homelab_active && !homelab_messages.is_empty() {
         println!(
             "{}",
-            "── Subsistema Homelab Mnemocine (Infraestrutura) ───────────────".dimmed()
+            "── Mnemocine Homelab Subsystem (Infrastructure) ───────────────".dimmed()
         );
         for msg in homelab_messages {
             println!("   {}", msg);
@@ -1886,7 +1886,7 @@ fn main() -> Result<()> {
     if is_vault_active && !vault_messages.is_empty() {
         println!(
             "{}",
-            "── Subsistema Vault Obsidian & Governança Universal ───────────".dimmed()
+            "── Obsidian Vault & Universal Governance Subsystem ────────────".dimmed()
         );
         for msg in vault_messages {
             println!("   {}", msg);
@@ -1898,7 +1898,7 @@ fn main() -> Result<()> {
     if is_cv_active && !cv_messages.is_empty() {
         println!(
             "{}",
-            "── Subsistema Currículo Bilíngue (curriculum-vitae/) ──────────".dimmed()
+            "── Bilingual Curriculum Vitae Subsystem (curriculum-vitae/) ───".dimmed()
         );
         for msg in cv_messages {
             println!("   {}", msg);
@@ -1907,7 +1907,7 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "Arquivos escaneados: {} | Violações encontradas: {}",
+        "Scanned files: {} | Violations found: {}",
         report.total_files_scanned.to_string().bold(),
         report.total_violations.to_string().bold()
     );
@@ -1916,7 +1916,7 @@ fn main() -> Result<()> {
         println!(
             "{}",
             format!(
-                "✨ Auto-fix: {} violação(ões) corrigida(s) automaticamente com sucesso!",
+                "✨ Auto-fix: {} violation(s) automatically repaired!",
                 report.total_fixed
             )
             .green()
@@ -1928,7 +1928,7 @@ fn main() -> Result<()> {
     if report.violations.is_empty() {
         println!(
             "{}",
-            "✨ Nenhuma violação encontrada! Repositório 100% em conformidade com as regras."
+            "✨ Zero violations detected! Repository is 100% compliant with governance rules."
                 .green()
                 .bold()
         );
@@ -1950,11 +1950,11 @@ fn main() -> Result<()> {
             v.message
         );
         println!(
-            "       Local: {}:{}",
+            "       Location: {}:{}",
             v.file_path.dimmed(),
             v.line_number.to_string().bold()
         );
-        println!("       Trecho: \"{}\"", v.snippet.trim().dimmed());
+        println!("       Snippet:  \"{}\"", v.snippet.trim().dimmed());
         if let Some(ref sug) = v.suggestion {
             println!("       💡 {}", sug.green().bold());
         }
@@ -1962,7 +1962,7 @@ fn main() -> Result<()> {
     }
 
     println!(
-        "Resumo: {} erro(s), {} aviso(s)",
+        "Summary: {} error(s), {} warning(s)",
         report.error_count.to_string().red().bold(),
         report.warning_count.to_string().yellow().bold()
     );

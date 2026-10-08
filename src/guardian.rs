@@ -89,7 +89,7 @@ pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
         }
         violations.push(Violation {
             rule_id: "SEC-SECRETS".to_string(),
-            rule_name: "Segredos Hardcoded".to_string(),
+            rule_name: "Hardcoded Secrets".to_string(),
             severity: Severity::Error,
             file_path: path_str.clone(),
             line_number: line_idx + 1,
@@ -253,7 +253,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         hasher.update(&bytes);
         binary_hash = format!("{:x}", hasher.finalize())[..16].to_string();
         messages.push(format!(
-            "🔐 Executável Nativo Íntegro: {} (SHA-256: {})",
+            "🔐 Verified Native Executable: {} (SHA-256: {})",
             exe_path.display(),
             binary_hash
         ));
@@ -415,14 +415,14 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                         if let Some(ref auth) = human_auth {
                             if auth.contains(required) || auth == "AUTHORIZED" || auth == "ALL" {
                                 messages.push(format!(
-                                    "ℹ️ Remoção/modificação de '{}' [{}] autorizada pelo usuário humano via STENIO_HUMAN_AUTHORIZATION.",
+                                    "ℹ️ Modification/removal of '{}' [{}] authorized by human via STENIO_HUMAN_AUTHORIZATION.",
                                     required, module
                                 ));
                                 continue;
                             }
                         }
                         tamper_alerts.push(format!(
-                            "🚨 ALERTA CRÍTICO [{}]: string obrigatória '{}' foi removida ou alterada sem STENIO_HUMAN_AUTHORIZATION!",
+                            "🚨 CRITICAL TAMPER ALERT [{}]: mandatory invariant string '{}' was removed or altered without STENIO_HUMAN_AUTHORIZATION!",
                             module, required
                         ));
                     }
@@ -432,14 +432,14 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 let bypass_count = content.matches("// stenio-ignore-all").count();
                 if bypass_count > 0 {
                     tamper_alerts.push(format!(
-                        "🚨 ALERTA DE SEGURANÇA [{}]: {} ocorrência(s) de bypass global detectada(s)!",
+                        "🚨 SECURITY ALERT [{}]: {} global bypass occurrence(s) detected!",
                         module, bypass_count
                     ));
                 }
             }
         } else {
             tamper_alerts.push(format!(
-                "🚨 ALERTA CRÍTICO: módulo '{}' foi removido do código-fonte do Stênio!",
+                "🚨 CRITICAL ALERT: core module '{}' was deleted from Stenio source tree!",
                 module
             ));
         }
@@ -448,12 +448,12 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
     let is_intact = tamper_alerts.is_empty();
     if is_intact {
         messages.push(format!(
-            "🛡️ Guardian: {} módulos do núcleo do Stênio auditados com Zero Adulteração.",
+            "🛡️ Guardian: {} Stenio core modules audited with Zero Tampering.",
             files_checked
         ));
     } else {
         messages.push(format!(
-            "🚨 Guardian: {} violação(ões) de adulteração/tampering detectadas!",
+            "🚨 Guardian: {} tampering violation(s) detected!",
             tamper_alerts.len()
         ));
     }

@@ -224,12 +224,12 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
 
     if violations.is_empty() {
         messages.push(format!(
-            "✅ {} notas do vault Obsidian auditadas e íntegras.",
+            "✅ {} Obsidian vault notes audited and intact.",
             scanned_count
         ));
     } else {
         messages.push(format!(
-            "ℹ️ {} desvio(s) de taxonomia, metadados ou links detectados no vault.",
+            "ℹ️ {} taxonomy, metadata, or link deviation(s) detected in vault.",
             violations.len()
         ));
     }

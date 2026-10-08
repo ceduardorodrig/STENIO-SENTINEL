@@ -470,10 +470,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     }
 
     if violations.is_empty() && broken_links.is_empty() {
-        messages.push(format!("✅ {} documentos técnicos (serviços, servidores, ADRs e cold storage) auditados e íntegros.", total_docs));
+        messages.push(format!("✅ {} technical documents (services, servers, ADRs and cold storage) audited and intact.", total_docs));
     } else {
         messages.push(format!(
-            "ℹ️ {} desvio(s) de documentação e Docs-as-Code detectados em {} arquivos.",
+            "ℹ️ {} documentation and Docs-as-Code issue(s) detected across {} files.",
             violations.len(),
             total_docs
         ));
