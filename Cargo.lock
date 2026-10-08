@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "stenio-sentinel"
-version = "3.9.0-alpha"
+version = "3.9.0-beta"
 dependencies = [
  "anyhow",
  "chrono",

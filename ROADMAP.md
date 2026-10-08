@@ -56,18 +56,18 @@ To ensure semantic consistency across all subcommands, rules, and reports:
 - [x] Language policy compliance verified (Tier A).
 
 ### Phase 1: Core Rules & Rule Explanations (`v3.9.0-alpha`)
-- [ ] Translate all 52 rule names, summaries, descriptions, and suggestions in `src/rule.rs`.
-- [ ] Translate all rule explanations, examples, and remediation steps in `src/explain.rs`.
-- [ ] Update `src/dry.rs` violation messages.
-- [ ] Synchronize `src/guardian.rs` baseline strings atomically.
-- [ ] **Verification Gate:** `cargo test` + `stenio --self-test` (60/60) + `stenio --guardian`.
+- [x] Translate all 52 rule names, summaries, descriptions, and suggestions in `src/rule.rs`.
+- [x] Translate all rule explanations, examples, and remediation steps in `src/explain.rs`.
+- [x] Update `src/dry.rs` violation messages.
+- [x] Synchronize `src/guardian.rs` baseline strings atomically.
+- [x] **Verification Gate:** `cargo test` + `stenio --self-test` (64/64) + `stenio --guardian`.
 
 ### Phase 2: Quality Gate & Core CLI Output (`v3.9.0-beta`)
-- [ ] Translate terminal banners and verdicts in `src/main.rs` and `src/baseline.rs`:
+- [x] Translate terminal banners and verdicts in `src/main.rs` and `src/baseline.rs`:
   - `[GATE APROVADO]` → `[GATE PASSED: Full Architectural Compliance]`
   - `[GATE REJEITADO]` → `[GATE FAILED: Blocking Errors Detected]`
-- [ ] Translate scan summaries (`Arquivos escaneados` → `Files scanned`).
-- [ ] **Verification Gate:** `cargo test` + `stenio --gate`.
+- [x] Translate scan summaries (`Arquivos escaneados` → `Scanned files`).
+- [x] **Verification Gate:** `cargo test` + `stenio --gate`.
 
 ### Phase 3: Specialized Domain Modules (`v3.9.0-rc`)
 - [ ] Translate `src/ports.rs` (Network ASM output).
