@@ -7,6 +7,7 @@ use std::path::Path;
 pub struct GeneralConfig {
     pub name: Option<String>,
     pub version: Option<String>,
+    pub scope: Option<String>,
     pub min_laws_count: Option<usize>,
     pub agents_md: Option<String>,
 }

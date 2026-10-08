@@ -21,6 +21,13 @@ pub struct Rule {
     pub fix_replacement: Option<String>,
     pub path_includes: Vec<String>,
     pub path_excludes: Vec<String>,
+    /// Optional second regex describing the CONTEXT in which the rule applies
+    /// at full severity (e.g. a Rust file that is actually async).
+    pub requires_pattern: Option<String>,
+    /// Severity to use when `requires_pattern` is set but does NOT match.
+    /// `None` means "do not report at all"; `Some(Warning)` keeps the finding
+    /// visible instead of silently dropping it (no silent gap).
+    pub severity_without_requires: Option<Severity>,
 }
 
 impl Rule {
@@ -47,7 +54,22 @@ impl Rule {
             fix_replacement: None,
             path_includes: Vec::new(),
             path_excludes: Vec::new(),
+            requires_pattern: None,
+            severity_without_requires: None,
         }
+    }
+
+    /// Makes the rule context-dependent: `requires_pattern` must match the file
+    /// for the rule to keep its full severity; otherwise the finding is reported
+    /// with `without` (or skipped when `without` is not provided).
+    ///
+    /// Used by `RUST-ASYNC-SLEEP`: `std::thread::sleep` is an **Error** in a file
+    /// that is actually async, but only a **Warning** in synchronous code — so
+    /// synchronous CLIs have a sanctioned path without `stenio-ignore`.
+    pub fn with_context(mut self, requires_pattern: &str, without: Severity) -> Self {
+        self.requires_pattern = Some(requires_pattern.to_string());
+        self.severity_without_requires = Some(without);
+        self
     }
 
     #[allow(dead_code)]
@@ -79,19 +101,19 @@ impl Rule {
 pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     let mut rules = Vec::new();
 
-    // ── 0. Soberania Rust: Proibição Total de Arquivos Python ──────────────
+    // ── 0. Rust Sovereignty: Total Prohibition of Python Files ─────────────
     rules.push(Rule::new(
         "ARCH-NO-PYTHON",
         "arch",
         Severity::Error,
-        "Arquivo Python Proibido",
-        "O repositório migrou 100% para Rust nativo (ADR-036). Nenhum arquivo .py deve ser criado ou mantido.",
+        "Prohibited Python File",
+        "The repository has migrated 100% to native Rust (ADR-036). No .py files may be created or maintained.",
         r".+",
         &["py"],
-        Some("Remova o arquivo .py e reescreva a funcionalidade em Rust nativo dentro de app/server/src/."),
+        Some("Remove the .py file and rewrite the functionality in native Rust inside app/server/src/."),
     ));
 
-    // ── 1. Banimento Dinâmico de Pacotes Python (de steniocheck.toml) ────────
+    // ── 1. Dynamic Banning of Python Packages (from steniocheck.toml) ───────
     let banned_pkgs = config
         .security
         .as_ref()
@@ -104,18 +126,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
             &format!("SEC-BAN-{}", pkg.to_uppercase()),
             "sec",
             Severity::Error,
-            &format!("Banimento de {}", pkg),
-            &format!("O uso de '{}' é proibido após a migração para Rust.", pkg),
+            &format!("Banned Dependency: {}", pkg),
+            &format!("Use of '{}' is prohibited following the migration to native Rust.", pkg),
             &pattern,
             &["py"],
             Some(&format!(
-                "Elimine a dependência '{}' e utilize a engine Rust em app/server.",
+                "Eliminate the '{}' dependency and use the Rust engine in app/server.",
                 pkg
             )),
         ));
     }
 
-    // ── 2. Banimento Dinâmico de Módulos Legados Descomissionados ───────────
+    // ── 2. Dynamic Banning of Decommissioned Legacy Modules ────────────────
     let banned_mods = config
         .architecture
         .as_ref()
@@ -143,92 +165,90 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "ARCH-BANNED-MODULES",
         "arch",
         Severity::Error,
-        "Import de Módulos Descomissionados",
-        "Não importar módulos de visão, OCR, canvas, datavis ou whisper_pytorch legados.",
+        "Import of Decommissioned Legacy Module",
+        "Do not import legacy vision, OCR, canvas, datavis, or whisper_pytorch modules.",
         &mod_pattern,
         &["py"],
-        Some("Remova o import do módulo legado descomissionado."),
+        Some("Remove import of the decommissioned legacy module."),
     ));
 
-    // ── 3. Uso de Sudo e Privilégios de Sistema (AGENTS.md Regra 10) ────────
-    // Em automações profissionais, o usuário deve possuir regra NOPASSWD no sudoers
-    // ou as credenciais devem ser injetadas via .env/SOPS.
-    // 'pkexec' é apenas mecanismo gráfico opcional do KDE no psicopompo; em scripts de servidor
-    // ou tarefas repetidas deve ser evitado para não cansar o operador com diálogos de senha.
+    // ── 3. Sudo Usage and System Privileges (AGENTS.md Rule 10) ────────────
+    // In professional automations, the machine user must possess a NOPASSWD sudoers rule
+    // or credentials must be injected via .env/SOPS.
+    // 'pkexec' is merely an optional graphical KDE mechanism on psicopompo; in server scripts
+    // or recurring tasks it must be avoided to prevent fatigue from password dialogs.
     //
-    // ⚠️ A COBERTURA É AMPLA DE PROPÓSITO — NÃO ESTREITAR (revisado 30/09/2026).
-    // O padrão `\bsudo\s+` cobre QUALQUER comando. Esta não é uma regra que
-    // "acusa erro": é um PONTO DE REVISÃO. O risco não está no comando específico,
-    // está no padrão de privilégio (escopo, necessidade, senha interativa).
+    // ⚠️ THE COVERAGE IS BROAD BY DESIGN — DO NOT NARROW (reviewed 2026-09-30).
+    // The `\bsudo\s+` pattern matches ANY command. This is NOT a rule that
+    // "accuses an error": it is a MANDATORY REVIEW POINT. The risk is not in the specific
+    // command, but in the privilege pattern (scope, necessity, interactive password).
     //
-    // Histórico: em 16/09/2026 (commit ca05d47) o regex foi ampliado de uma lista
-    // de 6 comandos para `\bsudo\s+`. A lista curta era uma LISTA BRANCA FURADA —
-    // qualquer comando fora dela escapava silenciosamente. Reverter para lista
-    // curta reabre o furo, e é por isso que a assinatura está PINADA no
-    // `guardian.rs` (anti-tampering) com a nota "não pode ser revertido".
+    // History: on 2026-09-16 (commit ca05d47) the regex was expanded from a 6-command list
+    // to `\bsudo\s+`. The short list was a LEAKY WHITELIST — any command outside it
+    // escaped silently. Reverting to a short list reopens the gap, which is why this signature
+    // is PINNED in `guardian.rs` (anti-tampering) with the note "cannot be reverted".
     //
-    // Consequência ACEITA e sem atalho: `sudo` legítimo também é sinalizado, e a
-    // regra é **inviolável** — `SEC-*` não aceita `stenio-ignore` (ver
-    // `baseline.rs`: `is_inviolable`). Não há como silenciar caso a caso sem
-    // quebrar a governança; o aviso é permanente por desenho.
-    // Ver `--explain SEC-SUDO`.
+    // ACCEPTED consequence with no shortcut: legitimate `sudo` is also flagged, and the rule
+    // is **inviolable** — `SEC-*` does not accept `stenio-ignore` (see `baseline.rs`: `is_inviolable`).
+    // There is no way to silence it case-by-case without breaking governance; the notice is permanent by design.
+    // See `--explain SEC-SUDO`.
     rules.push(Rule::new(
         "SEC-SUDO",
         "sec",
         Severity::Warning,
-        "Atenção ao Uso de Sudo em Scripts",
-        "Regra 10 do AGENTS.md: Automações devem utilizar sudoers (NOPASSWD) ou .env/SOPS. Evite senhas interativas ou forçar pkexec em servidores headless.",
+        "Privileged Sudo Execution in Script",
+        "Rule 10 of AGENTS.md: Automations must use sudoers (NOPASSWD) or .env/SOPS. Avoid interactive passwords or forcing pkexec on headless servers.",
         r"(?m)\bsudo\s+",
         &["sh", "bash"],
-        Some("Configure regra NOPASSWD no sudoers para o usuário da máquina ou injete credenciais via .env/SOPS."),
+        Some("Configure a NOPASSWD sudoers rule for the machine user or inject credentials via .env/SOPS."),
     ));
 
-    // ── 4. Scanner Universal de Credenciais & Segredos ──────────────────────
+    // ── 4. Universal Credentials & Secrets Scanner ─────────────────────────
     rules.push(Rule::new(
         "SEC-SECRETS",
         "sec",
         Severity::Error,
-        "Segredos Hardcoded",
-        "Tokens de API ou chaves privadas não devem constar em claro no código.",
+        "Hardcoded Secrets & Credentials",
+        "API tokens or private keys must never appear in plaintext within code.",
         r#"(ghp_[A-Za-z0-9]{36}|-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9]{48})|(?i)(api_key|secret_key)\s*=\s*['"][A-Za-z0-9_\-]{20,}['"]"#,
         &["py", "rs", "ts", "tsx", "js", "sh"],
-        Some("Remova o token em claro e injete via variável de ambiente (.env) ou segredo no cofre do sistema."),
+        Some("Remove the plaintext secret and inject via environment variable (.env) or system secret store."),
     ));
 
-    // ── 5. Segurança SQL ───────────────────────────────────────────────────
+    // ── 5. SQL Security ────────────────────────────────────────────────────
     rules.push(Rule::new(
         "SEC-SQL",
         "sec",
         Severity::Warning,
-        "Interpolação de SQL Insegura",
-        "Use queries parametrizadas em vez de formatar strings diretamente no SQL.",
+        "Insecure SQL Interpolation",
+        "Use parameterized queries instead of directly formatting strings into SQL statements.",
         r#"f["'].*?(SELECT\s+|INSERT\s+INTO\s+|UPDATE\s+\w+\s+SET\s+|DELETE\s+FROM\s+).*?\{"#,
         &["py"],
-        Some("Utilize parâmetros bind ($1, $2) do SQLx / queries preparadas em vez de interpolação de strings."),
+        Some("Use SQLx bind parameters ($1, $2) or prepared statements instead of string interpolation."),
     ));
 
-    // ── 6. Error Handling sem Bare Except ───────────────────────────────────
+    // ── 6. Error Handling without Bare Except ──────────────────────────────
     rules.push(Rule::new(
         "SEC-EXCEPT",
         "sec",
         Severity::Warning,
-        "Bare Except Proibido",
-        "Blocos except devem capturar tipos específicos de Exception (evite 'except:').",
+        "Prohibited Bare Except",
+        "Except blocks must catch specific Exception types (avoid 'except:').",
         r"(?m)^\s*except\s*:",
         &["py"],
-        Some("Especifique a classe de erro (ex: except Exception as err: ou tipo específico)."),
+        Some("Specify the exception class (e.g. 'except Exception as err:' or specific error type)."),
     ));
 
-    // ── 7. Frontend: Zustand Selector Stability (sem loop infinito) ────────
+    // ── 7. Frontend: Zustand Selector Stability (Infinite Loop Prevention) ─
     rules.push(Rule::new(
         "FRONT-ZUSTAND",
         "frontend",
         Severity::Warning,
-        "Zustand Seletor Instável",
-        "Objetos retornados por seletores Zustand causam re-renderizações infinitas sem useShallow.",
+        "Unstable Zustand Selector",
+        "Objects returned by Zustand selectors trigger infinite re-renders without useShallow.",
         r"use[A-Za-z0-9]+Store\s*\(\s*\([^)]*\)\s*=>\s*\{",
         &["ts", "tsx"],
-        Some("Envolva a função do seletor em useShallow(state => ({ ... })) importado de 'zustand/react/shallow'."),
+        Some("Wrap the selector function in useShallow(state => ({ ... })) imported from 'zustand/react/shallow'."),
     ));
 
     // ── 8. Frontend: Pureza de Logs de Produção ────────────────────────────
@@ -236,11 +256,11 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "FRONT-LOGS",
         "frontend",
         Severity::Warning,
-        "Logs Residuais no Frontend",
-        "Remova logs de depuração console.log/console.debug antes de enviar para produção.",
+        "Residual Frontend Debug Logs",
+        "Remove debugging console.log/console.debug before committing to production.",
         r"(?m)^\s*console\.(log|debug)\(",
         &["ts", "tsx"],
-        Some("Remova o console.log/debug ou envolva-o em uma checagem de ambiente de desenvolvimento."),
+        Some("Remove console.log/debug or wrap in a development environment check."),
     ));
 
     // ── 9. Infra: Nginx WebSocket Buffering ────────────────────────────────
@@ -249,396 +269,403 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "infra",
         Severity::Warning,
         "Nginx WebSocket Buffering",
-        "Locations de WebSocket no Nginx devem definir 'proxy_buffering off' para streaming em tempo real.",
+        "Nginx WebSocket proxy locations must specify 'proxy_buffering off' for real-time streaming.",
         r"proxy_pass\s+http://[^;]+;\s*#\s*ws",
         &["conf", "j2"],
-        Some("Adicione 'proxy_buffering off;' e 'proxy_cache off;' na configuração do proxy WebSocket."),
+        Some("Add 'proxy_buffering off;' and 'proxy_cache off;' to the WebSocket proxy configuration."),
     ));
 
-    // ── 10. Arquitetura: Preferência por Ferramentas Rust ──────────────────
+    // ── 10. Architecture: Native Rust CLI Tools Preference ─────────────────
     rules.push(Rule::new(
         "ARCH-RUST-TOOLS",
         "arch",
         Severity::Warning,
-        "Uso de Ferramentas GNU Legadas",
-        "Regra de Terminal do AGENTS.md: Preferir alternativas Rust (eza, bat, rg, fd, dust).",
+        "Legacy GNU CLI Tools Usage",
+        "Terminal preference rule from AGENTS.md: Prefer native Rust alternatives (eza, bat, rg, fd, dust).",
         r"(?m)^\s*(grep\s+-r|find\s+\.\s+-name|du\s+-sh)\b",
         &["sh"],
-        Some("Substitua comandos GNU pelas alternativas Rust: grep -> rg, find -> fd, du -> dust, ls -> eza."),
+        Some("Replace GNU commands with native Rust equivalents: grep -> rg, find -> fd, du -> dust, ls -> eza."),
     ));
 
-    // ── 11. Rust: Proibição de Thread Sleep em Runtime Assíncrono ──────────
-    rules.push(Rule::new(
-        "RUST-ASYNC-SLEEP",
-        "rust",
-        Severity::Error,
-        "std::thread::sleep em Código Assíncrono",
-        "Em código assíncrono Tokio, use tokio::time::sleep para evitar bloquear a thread do runtime.",
-        r"\bstd::thread::sleep\(",
-        &["rs"],
-        Some("Substitua 'std::thread::sleep(dur);' por 'tokio::time::sleep(dur).await;'."),
-    ));
+    // ── 11. Rust: Prohibition of Thread Sleep in Asynchronous Runtime ──────
+    rules.push(
+        Rule::new(
+            "RUST-ASYNC-SLEEP",
+            "rust",
+            Severity::Error,
+            "std::thread::sleep in Asynchronous Code",
+            "In Tokio asynchronous code, use tokio::time::sleep to avoid blocking the runtime worker thread.",
+            r"\bstd::thread::sleep\(",
+            &["rs"],
+            Some("Replace 'std::thread::sleep(dur);' with 'tokio::time::sleep(dur).await;'."),
+        )
+        .with_context(
+            r"(async fn|\.await|#\[tokio::|tokio::|async_std::|smol::|futures::)",
+            Severity::Warning,
+        ),
+    );
 
-    // ── 12. Rust: Logging Estruturado em Servidor Web ──────────────────────
+    // ── 12. Rust: Structured Logging in Web Server ─────────────────────────
     rules.push(Rule::new(
         "RUST-STRUCTURED-LOGGING",
         "rust",
         Severity::Warning,
-        "Uso de println! no Servidor",
-        "Em servidores web Axum, utilize macros do crate tracing (info!, warn!, error!, debug!) em vez de println!.",
+        "Unstructured println! in Server Code",
+        "In Axum web servers, use tracing crate macros (info!, warn!, error!, debug!) instead of raw println!.",
         r"(?m)^\s*(println!|eprintln!)\(",
         &["rs"],
-        Some("Substitua println!/eprintln! por tracing::info!, tracing::warn! ou tracing::error!."),
+        Some("Replace println!/eprintln! with tracing::info!, tracing::warn!, or tracing::error!."),
     ));
 
-    // ── 13. Soberania Rust: Proibição de Chamadas a Ferramentas GNU em Código .rs ──
-    // Garante que o próprio código Rust não invoque binários GNU via Command::new().
-    // O Stênio é o guardião; ele não pode violar as regras que impõe.
+    // ── 13. Rust Sovereignty: Prohibition of GNU Tools in Rust Code ────────
+    // Guarantees that Rust code does not invoke GNU binaries via Command::new().
+    // Stênio is the guardian; it must not violate the rules it enforces.
     rules.push(Rule::new(
         "ARCH-RUST-CMD-LEGACY",
         "arch",
         Severity::Warning,
-        "Ferramenta GNU Legada Invocada em Código Rust",
-        "Command::new() com ferramentas GNU viola AGENTS.md. Use equivalentes Rust: xh (curl), walkdir (find), regex (grep), statvfs/nix (df).",
+        "Legacy GNU Tool Invoked in Rust Source",
+        "Command::new() invoking GNU tools violates AGENTS.md. Use Rust native alternatives: xh (curl), walkdir (find), regex (grep), statvfs/nix (df).",
         r#"Command::new\("(df|curl|find|grep|ls|cat|sed|du|awk|ps|top)"\)"#,
         &["rs"],
-        Some("Substitua pela alternativa Rust nativa: curl→xh, df→/proc/statvfs ou nix crate, find→walkdir, grep→regex."),
+        Some("Replace with native Rust equivalent: curl -> xh, df -> statvfs/nix, find -> walkdir, grep -> regex."),
     ));
 
-    // ── 14. Soberania Rust: Proibição de unwrap()/expect() em Produção ─────
+    // ── 14. Rust Sovereignty: Prohibition of unwrap()/expect() in Production
     rules.push(Rule::new(
         "RUST-NO-UNWRAP",
         "rust",
         Severity::Error,
-        "Uso de unwrap() ou expect() em Código de Produção",
-        "Tanto .unwrap() quanto .expect() causam panics em runtime. Trocar unwrap por expect é proibido. Trate erros com '?', match, ou métodos com fallback (.unwrap_or_default).",
+        "Use of unwrap() or expect() in Production Code",
+        "Both .unwrap() and .expect() cause unconditional runtime panics. Swapping unwrap for expect is strictly blocked. Handle errors with '?', match, or safe fallbacks (.unwrap_or_default).",
         r"\.(unwrap|expect)\(",
         &["rs"],
-        Some("Substitua .unwrap()/.expect() por '?' (operador try), pattern matching com 'match'/'if let', ou métodos seguros como .unwrap_or_default() / .ok_or(...)."),
+        Some("Replace .unwrap()/.expect() with '?' (try operator), pattern matching ('match'/'if let'), or safe fallbacks (.unwrap_or_default() / .ok_or(...))."),
     ));
 
-    // ── 14.1 Soberania Rust: Invocação Canônica de Comandos Remotos ────────
+    // ── 14.1 Rust Sovereignty: Canonical Remote Command Invocation ─────────
     rules.push(Rule::new(
         "RUST-CANONICAL-REMOTE",
         "rust",
         Severity::Error,
-        "Comando Remoto Raw Proibido (Use crate::remote)",
-        "Invocação direta de 'Command::new(\"ssh\")' ou 'Command::new(\"rsync\")' é proibida. Utilize o driver canônico unificado 'crate::remote::run_ssh' ou 'crate::remote::run_rsync' para garantir isolamento de timeouts, flags de BatchMode e detecção de Tailscale SSH.",
+        "Raw Remote Command Prohibited (Use crate::remote)",
+        "Direct invocation of 'Command::new(\"ssh\")' or 'Command::new(\"rsync\")' is prohibited. Use canonical unified driver 'crate::remote::run_ssh' or 'crate::remote::run_rsync' to guarantee timeouts, BatchMode flags, and Tailscale SSH support.",
         r#"Command::new\(["'](ssh|rsync)["']\)"#,
         &["rs"],
-        Some("Substitua a chamada raw de Command::new(\"ssh\"/\"rsync\") pelo driver unificado 'crate::remote::run_ssh' ou 'crate::remote::run_rsync'."),
+        Some("Replace raw Command::new(\"ssh\"/\"rsync\") with unified driver 'crate::remote::run_ssh' or 'crate::remote::run_rsync'."),
     ));
 
-    // ── 15. Anti-Preguiça: Proibição de Stubs e Placeholders de IA ─────────
+    // ── 15. Anti-Laziness: Prohibition of AI Stubs and Placeholders ────────
     rules.push(Rule::new(
         "AGENT-NO-LAZY-STUB",
         "gov",
         Severity::Error,
-        "Placeholder ou Stub Preguiçoso de IA",
-        "Modelos de IA não devem deixar código incompleto com stubs, 'todo!()', 'unimplemented!()' ou '// rest of code'.",
+        "Lazy AI Stub or Placeholder",
+        "AI models must not deliver incomplete code with stubs, 'todo!()', 'unimplemented!()', or '// rest of code'.",
         r#"(?i)(//\s*(\.\.\.|rest of (the )?code|existing code|code remains|TODO:?\s*implement|add logic here)|\b(todo!|unimplemented!)\(|\bthrow new Error\(["'](Not implemented|TODO)["']\))"#,
         &["rs", "ts", "tsx", "js", "py", "sh"],
-        Some("Implemente o código completo da funcionalidade. É expressamente proibido usar stubs, 'todo!()' ou placeholders em entregas."),
+        Some("Implement complete functional code. Using stubs, 'todo!()', or placeholders in deliverables is strictly forbidden."),
     ));
 
-    // ── 15.1 Anti-Bypass: Proibição de Diretivas de Supressão e Ignorância ─
+    // ── 15.1 Anti-Bypass: Prohibition of Suppression and Ignore Directives ─
     rules.push(Rule::new(
         "AGENT-NO-SUPPRESSION-DIRECTIVES",
         "gov",
         Severity::Error,
-        "Diretiva de Supressão ou Bypass Proibida",
-        "Proíbe o uso de @ts-ignore, @ts-nocheck, eslint-disable, type: ignore ou stenio-ignore inline para mascarar erros.",
+        "Prohibited Suppression or Bypass Directive",
+        "Prohibits @ts-ignore, @ts-nocheck, eslint-disable, type: ignore, or inline stenio-ignore to mask errors.",
         r#"(?m)(//\s*@ts-(ignore|nocheck)|/\*\s*eslint-disable|#\s*type:\s*ignore|//\s*stenio-ignore:\s*(all|SEC-|AGENT-|ARCH-|RUST-|CONF-|TEST-)|#\s*stenio-ignore:\s*(all|SEC-|AGENT-|ARCH-|RUST-|CONF-|TEST-))"#,
         &["ts", "tsx", "js", "rs", "py", "sh"],
-        Some("Corrija a tipagem ou a conformidade real do código. É proibido mascarar erros com diretivas de supressão."),
+        Some("Fix code typing or actual compliance. Masking errors with suppression directives is strictly forbidden."),
     ));
 
-    // ── 15.2 Anti-Tampering: Proibição de Adulteração de Hooks e Verificadores ─
+    // ── 15.2 Anti-Tampering: Prohibition of Hook or Verifier Tampering ─────
     rules.push(Rule::new(
         "AGENT-NO-TAMPERING-VERIFIER",
         "gov",
         Severity::Error,
-        "Tentativa de Adulteração de Verificador ou Hook",
-        "Proíbe desativar pre-commit hooks, comentar chamadas ao stenio ou adulterar configurações de auditoria.",
+        "Verification Hook Tampering Attempt",
+        "Prohibits disabling pre-commit hooks, commenting out stenio invocations, or tampering with audit configs.",
         r#"(?m)(stenio\s+.*--no-verify|git\s+commit\s+.*--no-verify|\.git/hooks/.*exit\s+0|rm\s+-f\s+\.git/hooks)"#,
         &["sh", "bash", "ts", "tsx", "js", "rs"],
-        Some("Nunca ignore nem desative hooks de validação (--no-verify). O Stênio é o árbitro canônico de entrega."),
+        Some("Never bypass or disable validation hooks (--no-verify). StênioSentinel is the canonical delivery gatekeeper."),
     ));
 
     // ── 15.3 Integridade de Build: Proibição de Enfraquecimento de Modo Estrito ─
+    // ── 15.3 Build Integrity: Prohibition of Weakening Compiler Strict Mode ───
     rules.push(Rule::new(
         "CONF-NO-WEAKEN-STRICT",
         "gov",
         Severity::Error,
-        "Enfraquecimento de Modo Estrito no Compilador",
-        "Proíbe desativar o modo estrito ('\"strict\": false') em tsconfig.json ou desabilitar verificações de segurança.",
+        "Compiler Strict Mode Weakening",
+        "Prohibits disabling strict mode ('\"strict\": false') in tsconfig.json or disabling compiler safety checks.",
         r#""strict"\s*:\s*false|"noImplicitAny"\s*:\s*false"#,
         &["json"],
-        Some("Mantenha '\"strict\": true' no compilador TypeScript para garantir segurança de tipos."),
+        Some("Keep '\"strict\": true' in the TypeScript compiler configuration to guarantee type safety."),
     ));
 
-    // ── 16. Integridade de Testes: Proibição de Desativação Silenciosa de Testes ──
+    // ── 16. Test Integrity: Prohibition of Silently Skipping Tests ─────────
     rules.push(Rule::new(
         "TEST-NO-SILENT-SKIP",
         "test",
         Severity::Error,
-        "Teste Desativado ou Asserção Comentada",
-        "Proíbe o uso de #[ignore], test.skip ou asserções comentadas para mascarar falhas em testes.",
+        "Disabled Test or Commented Assertion",
+        "Prohibits #[ignore], test.skip, or commenting out assertions to bypass test failures.",
         r#"(?m)(^\s*#\[ignore\]|^\s*//\s*(assert!|assert_eq!|assert_ne!|expect\()|\b(it|test|describe)\.skip\(|\b(xit|xtest)\(|@pytest\.mark\.skip)"#,
         &["rs", "ts", "tsx", "js", "py"],
-        Some("Não desative testes nem comente asserções para fazer os testes passarem. Identifique e corrija a causa raiz no código."),
+        Some("Do not disable tests or comment assertions to force passes. Identify and resolve root causes in code."),
     ));
 
-    // ── 17. Confiabilidade: Proibição de Tratamento de Erro Vazio (Catch Vazio) ──
+    // ── 17. Reliability: Prohibition of Empty Catch Blocks ─────────────────
     rules.push(Rule::new(
         "CODE-NO-EMPTY-CATCH",
         "gov",
         Severity::Warning,
-        "Tratamento de Erro Silenciado (Catch Vazio)",
-        "Blocos catch/except vazios engolem erros silenciosamente sem registrar log.",
+        "Silenced Error Handling (Empty Catch)",
+        "Empty catch or except blocks silently swallow errors without logging or diagnostics.",
         r#"(?m)(catch\s*(\([^\)]*\))?\s*\{\s*\}|^\s*except(\s+\w+)?:\s*pass\s*$)"#,
         &["ts", "tsx", "js", "py"],
-        Some("Registre o erro nos logs (tracing, logger, console.error) ou propague a falha com '?'. Nunca engula erros."),
+        Some("Log the error (tracing, logger, console.error) or propagate via '?'. Never swallow errors silently."),
     ));
 
-    // ── 18. Backend: Proibição de Operações de E/S Síncronas em Tokio ──────
+    // ── 18. Backend: Prohibition of Blocking I/O in Tokio ──────────────────
     rules.push(Rule::new(
         "BACKEND-BLOCKING-IO",
         "rust",
         Severity::Error,
-        "E/S Bloqueante (std::fs) em Runtime Assíncrono",
-        "O uso de std::fs em handlers assíncronos bloqueia as threads do pool Tokio. Utilize tokio::fs.",
+        "Blocking I/O (std::fs) in Async Runtime",
+        "Using std::fs inside asynchronous handlers blocks Tokio worker threads. Use tokio::fs.",
         r"\bstd::fs::(read|write|read_to_string|remove_file|copy|rename|create_dir)\(",
         &["rs"],
-        Some("Substitua 'std::fs::*' por 'tokio::fs::*' com '.await' ou 'tokio::task::spawn_blocking'."),
+        Some("Replace 'std::fs::*' with 'tokio::fs::*' using '.await' or wrap inside 'tokio::task::spawn_blocking'."),
     ));
 
-    // ── 19. Backend: Proibição de Panics e Asserts em Servidor Web ─────────
+    // ── 19. Backend: Prohibition of Panics and Asserts in Web Server ───────
     rules.push(Rule::new(
         "BACKEND-NO-PANIC",
         "rust",
         Severity::Warning,
-        "Panic ou Assert em Código de Servidor",
-        "Chamadas a panic!() ou assert!() derrubam o processo do servidor web. Trate erros graciosamente retornando Result.",
+        "Panic or Assert in Web Server Code",
+        "Direct calls to panic!() or assert!() crash web server worker threads. Handle errors gracefully returning Result.",
         r"(?m)^\s*(panic!|assert!|assert_eq!|assert_ne!)\(",
         &["rs"],
-        Some("Retorne um erro HTTP estruturado (ex: Err(AppError::BadRequest(...))) em vez de causar panic no servidor."),
+        Some("Return a structured HTTP error (e.g. Err(AppError::BadRequest(...))) instead of crashing the server process."),
     ));
 
-    // ── 20. Arquitetura: Princípio DRY (Don't Repeat Yourself) Obrigatório ─
+    // ── 20. Architecture: Mandatory DRY (Don't Repeat Yourself) Principle ──
     rules.push(Rule::new(
         "ARCH-DRY-DUPLICATION",
         "arch",
         Severity::Error,
-        "Duplicação de Código (Princípio DRY)",
-        "Proíbe blocos de código substantivos duplicados (>6 linhas idênticas). Extraia a lógica em funções compartilhadas ou hooks.",
+        "Code Duplication (DRY Principle)",
+        "Prohibits duplicated substantive code blocks (>6 identical lines). Extract logic into shared functions or hooks.",
         r"(?m)^.*stenio-dry-marker.*$",
         &["rs", "ts", "tsx", "py", "js"],
-        Some("Extraia a lógica duplicada para um hook customizado ('features/<dominio>/hooks/'), componente atômico ou função utilitária."),
+        Some("Extract duplicated logic into a custom hook ('features/<domain>/hooks/'), atomic component, or shared utility function."),
     ));
 
-    // ── 20.1 Arquitetura: Isolamento de Escopo Monorepo (Anti-Gaming) ───────
+    // ── 20.1 Architecture: Monorepo Scope Isolation (Anti-Gaming) ──────────
     rules.push(Rule::new(
         "ARCH-SCOPE-ISOLATION",
         "arch",
         Severity::Error,
-        "Violação de Isolamento de Escopo Monorepo",
-        "Proíbe misturar alterações no código da aplicação (Sumaenima) com alterações no motor do Stênio no mesmo commit.",
+        "Monorepo Scope Isolation Violation",
+        "Prohibits mixing application product changes (Sumaenima) with StênioSentinel engine internals in the same commit.",
         r"(?m)^.*stenio-scope-marker.*$",
         &["rs", "ts", "tsx", "py", "js"],
-        Some("Isole as responsabilidades: faça as alterações de produto em sumaenimahub/ e as melhorias do sentinela em governance/stenio em tarefas e commits separados."),
+        Some("Isolate responsibilities: develop product features in sumaenimahub/ and governance sentinel engine changes in governance/stenio in separate tasks and commits."),
     ));
 
-    // ── 21. Frontend & GPU: Zero-Repaint em Animações e Hovers 3D ──────────
+    // ── 21. Frontend & GPU: Zero-Repaint in 3D Animations & Hovers ─────────
     rules.push(Rule::new(
         "PERF-GPU-ZERO-REPAINT",
         "frontend",
         Severity::Warning,
-        "Transição de Paint em Container 3D/Hover",
-        "Transições em 'box-shadow', 'backdrop-filter' ou 'background-color' forçam repaint de GPU a cada frame.",
+        "Paint Transition in 3D Container / Hover",
+        "Transitions on 'box-shadow', 'backdrop-filter', or 'background-color' force expensive GPU repaints every frame.",
         r"(?m)(transition:.*(box-shadow|backdrop-filter)|magic-card-tilt-container.*transition-(colors|all))",
         &["css", "tsx"],
-        Some("Anime a opacidade (0 -> 1) de um pseudo-elemento ::after isolado no Compositor da GPU em vez de transicionar sombra ou fundo."),
+        Some("Animate opacity (0 -> 1) on an isolated ::after pseudo-element on the GPU Compositor instead of transitioning shadows or filters."),
     ));
 
-    // ── 22. Frontend & GPU: Proibição de Layout Thrashing em Eventos ────────
+    // ── 22. Frontend & GPU: Prohibition of Layout Thrashing in Events ──────
     rules.push(Rule::new(
         "PERF-NO-LAYOUT-THRASH",
         "frontend",
         Severity::Warning,
-        "Layout Thrashing em Event Handlers",
-        "Leituras síncronas de geometria (getBoundingClientRect / offset*) em handlers de mouse disparam reflow forçado a 1000Hz.",
+        "Layout Thrashing in Event Handlers",
+        "Synchronous geometry queries (getBoundingClientRect / offset*) in mouse handlers trigger forced synchronous reflows at 1000Hz.",
         r"\.getBoundingClientRect\(\)",
         &["ts", "tsx"],
-        Some("Faça cache do rect em um useRef no onMouseEnter ou bufferize coordenadas e processe no tick do requestAnimationFrame."),
+        Some("Cache client rects in a useRef on onMouseEnter or buffer coordinates and process on requestAnimationFrame ticks."),
     ));
 
-    // ── 23. Frontend & GPU: Contenção de Grade Arandu (.card-cell) ─────────
+    // ── 23. Frontend & GPU: Arandu Card Grid Containment (.card-cell) ──────
     rules.push(Rule::new(
         "PERF-GPU-CONTAINMENT",
         "frontend",
         Severity::Warning,
-        "Grade de Cards sem Contenção CSS",
-        "Grades densas de cards com hover/tilt 3D exigem contenção CSS (.card-cell) para não invalidar o layout de cards vizinhos.",
+        "Card Grid Missing CSS Containment",
+        "Dense card grids with 3D tilt/hover require CSS containment (.card-cell) to prevent layout invalidation of sibling cards.",
         r"<MagicCard",
         &["tsx"],
-        Some("Envolva cada MagicCard em um container <div className=\"card-cell\"><MagicCard ... /></div>."),
+        Some("Wrap each MagicCard in a container: <div className=\"card-cell\"><MagicCard ... /></div>."),
     ));
 
-    // ── 24. Frontend & GPU: will-change Restrito a Estados Interativos ──────
+    // ── 24. Frontend & GPU: will-change Restricted to Interactive States ───
     rules.push(Rule::new(
         "PERF-GPU-WILL-CHANGE",
         "frontend",
         Severity::Warning,
-        "will-change Estático em Repouso",
-        "'will-change' aplicado estaticamente consome texturas de GPU em repouso. Mantenha restrito a seletores :hover.",
+        "Static will-change at Rest",
+        "Static 'will-change' consumes persistent GPU textures at rest. Restrict strictly to :hover / interaction selectors.",
         r"will-change:\s*(transform|opacity)",
         &["css"],
-        Some("Aplique 'will-change: transform' estritamente sob seletores de interação (:hover, .is-hovered) e remova em repouso."),
+        Some("Apply 'will-change: transform' strictly under interactive selectors (:hover, .is-hovered) and release at rest."),
     ));
 
-    // ── 25. Frontend: Desacoplamento de Chamadas de Rede em Páginas ─────────
+    // ── 25. Frontend: Decoupling Network Calls from Pages ──────────────────
     rules.push(Rule::new(
         "FRONT-MODULAR-HOOKS",
         "frontend",
         Severity::Warning,
-        "Chamada de Rede Direta na Camada de Página",
-        "Páginas são orquestradores puros (<400 linhas). Chamadas de API diretas violam o desacoplamento arquitetural.",
+        "Direct Network Invocation in Page Layer",
+        "Pages are pure layout orchestrators (<400 lines). Direct API or WebSocket calls violate architectural decoupling.",
         r"(fetch\(|axios\.|new WebSocket\()",
         &["tsx"],
-        Some("Extraia a chamada de API e a lógica de mutação para um Custom Hook em 'src/features/<dominio>/hooks/'."),
+        Some("Extract API calls and mutation logic into a Custom Hook in 'src/features/<domain>/hooks/'."),
     ));
 
-    // ── 26. Frontend: Proibição de Erros Silenciados sem Feedback Visual ───
+    // ── 26. Frontend: Prohibition of Silenced Errors without Visual Feedback
     rules.push(Rule::new(
         "FRONT-FEEDBACK-ON-ERROR",
         "frontend",
         Severity::Warning,
-        "Erro em UI sem Feedback Visual",
-        "Blocos catch que apenas emitem console.error deixam o usuário sem resposta visual se a ação falhar.",
+        "UI Error without Visual Feedback",
+        "Catch blocks that only log to console leave users without visual feedback when an action fails.",
         r"console\.(error|warn)\(",
         &["tsx", "ts"],
-        Some("Adicione notificação com toast.error('Mensagem') ou atualize o estado de erro do componente."),
+        Some("Add notification via toast.error('Message') or update component error state for visual feedback."),
     ));
 
-    // ── 27. Frontend: Proibição de URLs Hardcoded de Localhost ─────────────
+    // ── 27. Frontend: Prohibition of Hardcoded Localhost URLs ─────────────
     rules.push(Rule::new(
         "FRONT-NO-HARDCODED-HOST",
         "frontend",
         Severity::Error,
-        "URL de Localhost Hardcoded no Frontend",
-        "URLs absolutas de localhost quebram em produção atrás do proxy Nginx.",
+        "Hardcoded Localhost URL in Frontend",
+        "Absolute localhost URLs break in production behind reverse proxies.",
         r"(?m)^.*stenio-frontend-marker.*$",
         &["tsx", "ts", "js"],
-        Some("Utilize caminho relativo (/api/...) ou carregue a URL via 'import.meta.env.VITE_API_URL'."),
+        Some("Use relative paths (/api/...) or load URL via 'import.meta.env.VITE_API_URL'."),
     ));
 
-    // ── 28. Banco de Dados: Idempotência Mandatória em Migrações SQL ───────
+    // ── 28. Database: Mandatory Idempotency in SQL Migrations ──────────────
     rules.push(Rule::new(
         "DB-IDEMPOTENT-MIGRATION",
         "db",
         Severity::Error,
-        "Migração SQL Não-Idempotente",
-        "Comandos DDL em migrations/ devem usar IF NOT EXISTS ou IF EXISTS para permitir re-execução segura.",
+        "Non-Idempotent SQL Migration",
+        "DDL statements in migrations/ must use IF NOT EXISTS or IF EXISTS for safe re-execution.",
         r"(?m)^.*stenio-migration-marker.*$",
         &["sql"],
-        Some("Adicione 'IF NOT EXISTS' em CREATE ou 'IF EXISTS' em DROP para garantir idempotência."),
+        Some("Add 'IF NOT EXISTS' to CREATE or 'IF EXISTS' to DROP to guarantee idempotency."),
     ));
 
-    // ── 29. Infraestrutura: Conformidade com Topologia Canônica da Malha ───
+    // ── 29. Infrastructure: Mesh Canonical Topology Compliance ────────────
     rules.push(Rule::new(
         "INFRA-TOPOLOGY-COMPLIANCE",
         "infra",
         Severity::Error,
-        "Alvo de Deploy Fora da Topologia Ativa",
-        "Scripts de deploy e stacks do Hub só podem apontar para nós ativos da topologia (kavure, ybyra, psicopompo).",
+        "Deploy Target Outside Active Topology",
+        "Deployment scripts and stacks may only target active topology nodes (kavure, ybyra, psicopompo).",
         r"(?m)^.*stenio-topology-marker.*$",
         &["sh", "ini", "yml", "yaml"],
-        Some("Aponte o serviço para os nós canônicos da topologia (kavure para backend/docker, ybyra para borda frontend)."),
+        Some("Target canonical topology nodes (kavure for backend/docker, ybyra for edge/frontend)."),
     ));
 
-    // ── 30. Rust: Proibição de Canais Assíncronos sem Limite (Unbounded MPSC) ─
+    // ── 30. Rust: Prohibition of Unbounded Asynchronous Channels ───────────
     rules.push(Rule::new(
         "RUST-NO-UNBOUNDED-CHANNEL",
         "rust",
         Severity::Error,
-        "Canal Assíncrono sem Limite (Unbounded MPSC)",
-        "Canais 'unbounded_channel()' não aplicam backpressure e causam exaustão de memória (OOM). Use canais com capacidade finita 'channel(N)'.",
+        "Unbounded Asynchronous Channel (Unbounded MPSC)",
+        "Unbounded channels 'unbounded_channel()' apply no backpressure and risk Out-Of-Memory (OOM) crashes. Use bounded channels 'channel(N)'.",
         r"\b(tokio::sync::mpsc::|mpsc::)unbounded_channel\(",
         &["rs"],
-        Some("Substitua 'mpsc::unbounded_channel()' por 'mpsc::channel(buffer_size)' definindo uma capacidade explícita de backpressure."),
+        Some("Replace 'mpsc::unbounded_channel()' with 'mpsc::channel(buffer_size)' defining explicit backpressure capacity."),
     ));
 
-    // ── 31. Rust: Proibição de Process Command Síncrono em Runtime Tokio ───
+    // ── 31. Rust: Prohibition of Synchronous Process Command in Tokio ──────
     rules.push(Rule::new(
         "RUST-ASYNC-BLOCKING-CMD",
         "rust",
         Severity::Error,
-        "Comando de Processo Síncrono em Runtime Assíncrono",
-        "std::process::Command::new() bloqueia a thread de execução do Tokio. Em código assíncrono, use tokio::process::Command.",
+        "Synchronous Process Command in Async Runtime",
+        "std::process::Command::new() blocks Tokio runtime threads. In async code, use tokio::process::Command.",
         r"\bstd::process::Command::new\(",
         &["rs"],
-        Some("Substitua 'std::process::Command::new' por 'tokio::process::Command::new' e use '.await', ou envolva em 'tokio::task::spawn_blocking'."),
+        Some("Replace 'std::process::Command::new' with 'tokio::process::Command::new' and use '.await', or wrap in 'tokio::task::spawn_blocking'."),
     ));
 
-    // ── 32. Rust: Proibição de std::sync::Mutex Retido em Contexto Tokio ──
+    // ── 32. Rust: Prohibition of Synchronous Mutex Held Across Await ───────
     rules.push(Rule::new(
         "RUST-NO-SYNC-MUTEX-AWAIT",
         "rust",
         Severity::Warning,
-        "Uso de std::sync::Mutex em Contexto Assíncrono",
-        "Reter um lock de std::sync::Mutex através de pontos .await causa deadlocks e viola Send. Use tokio::sync::Mutex ou solte o guard antes do await.",
+        "Synchronous Mutex Held Across Await Point",
+        "Holding a std::sync::Mutex lock across .await points causes deadlocks and violates Send. Use tokio::sync::Mutex or drop guard before await.",
         r"\bstd::sync::Mutex\b",
         &["rs"],
-        Some("Substitua 'std::sync::Mutex' por 'tokio::sync::Mutex', ou garanta que o guard síncrono seja descartado com drop(guard) antes de qualquer .await."),
+        Some("Replace 'std::sync::Mutex' with 'tokio::sync::Mutex', or ensure synchronous guard is dropped via drop(guard) before any .await."),
     ));
 
-    // ── 33. Rust: Convenção Idiomática de Arc::clone(&ptr) ─────────────────
+    // ── 33. Rust: Idiomatic Arc::clone(&ptr) Convention ────────────────────
     rules.push(Rule::new(
         "RUST-IDIOMATIC-ARC-CLONE",
         "rust",
         Severity::Warning,
-        "Clonagem Não-Idiomática de Arc",
-        "Convenção RFC 258 / Clippy: prefira 'Arc::clone(&ptr)' a 'ptr.clone()' para explicitar que se trata de duplicação de ponteiro atômico, não deep copy.",
+        "Non-Idiomatic Arc Cloning",
+        "RFC 258 / Clippy convention: prefer 'Arc::clone(&ptr)' over 'ptr.clone()' to make atomic pointer duplication explicit.",
         r"\b[A-Za-z0-9_]+_arc\.clone\(\)|\b(arc_|shared_)[A-Za-z0-9_]*\.clone\(\)",
         &["rs"],
-        Some("Substitua 'ptr.clone()' por 'Arc::clone(&ptr)' para manter o código Rust idiomático e claro."),
+        Some("Replace 'ptr.clone()' with 'Arc::clone(&ptr)' to maintain idiomatic, explicit Rust code."),
     ));
 
-    // ── 34. Rust: Preferência por Slices (&str / &[T]) em Parâmetros ───────
+    // ── 34. Rust: Preference for Slices (&str / &[T]) in Parameters ────────
     rules.push(Rule::new(
         "RUST-IDIOMATIC-SLICES",
         "rust",
         Severity::Warning,
-        "Assinatura Não-Idiomática com &String ou &Vec<T>",
-        "Assinaturas de funções não devem receber referências a coleções concretas (&String ou &Vec<T>). Use fatias (slices) '&str' e '&[T]'.",
+        "Non-Idiomatic Signature with &String or &Vec<T>",
+        "Function signatures should not take references to concrete collections (&String or &Vec<T>). Use slices '&str' and '&[T]'.",
         r"\bfn\s+[a-z0-9_]+\s*(?:<[^>]+>)?\s*\([^)]*:\s*&(?:mut\s+)?(String\b|Vec<)",
         &["rs"],
-        Some("Substitua o parâmetro '&String' por '&str' e '&Vec<T>' por '&[T]' para permitir que qualquer fatia ou literal seja passado sem alocações."),
+        Some("Replace parameter '&String' with '&str' and '&Vec<T>' with '&[T]' to avoid allocations and accept any slice or literal."),
     ));
 
-    // ── 35. Rust: Tratamento Obrigatório de Erros em tokio::spawn ──────────
+    // ── 35. Rust: Mandatory Error Handling in tokio::spawn ─────────────────
     rules.push(Rule::new(
         "RUST-SPAWN-ERROR-HANDLING",
         "rust",
         Severity::Warning,
-        "tokio::spawn Órfão sem Rastreamento de Erro ou Tracing",
-        "Tarefas assíncronas disparadas via 'tokio::spawn' sem tratamento de JoinHandle ou instrumentação tracing engolem panics e erros silenciosamente.",
+        "Orphan tokio::spawn without Error Handling or Tracing",
+        "Async tasks spawned via 'tokio::spawn' without JoinHandle handling or tracing instrumentation silently swallow panics and errors.",
         r"(?m)^\s*tokio::spawn\s*\(\s*async\s+move\s*\{",
         &["rs"],
-        Some("Armazene o JoinHandle (let handle = tokio::spawn(...)) ou instrumente a task com '.instrument(tracing::info_span!(...))' para observabilidade em caso de panic."),
+        Some("Retain JoinHandle (let handle = tokio::spawn(...)) or instrument task with '.instrument(tracing::info_span!(...))' for observability on panic."),
     ));
 
-    // ── 29.1 Governança: Nomenclatura de Diretórios em Kebab-Case ───────────
+    // ── 36. Governance: Lowercase Kebab-Case Directory Naming ──────────────
     rules.push(Rule::new(
         "GOV-NAMING-KEBAB-CASE",
         "gov",
         Severity::Warning,
-        "Nomenclatura de Pastas Fora do Padrão Kebab-Case",
-        "Pastas no workspace e homelab devem seguir o padrão em minúsculas com hífen (lowercase, kebab-case) definido em agent-conventions.md.",
+        "Directory Naming Violates Kebab-Case",
+        "Workspace and homelab directories must follow lowercase kebab-case naming standard defined in agent-conventions.md.",
         r"(?m)^.*stenio-naming-marker.*$",
         &["*"],
-        Some("Renomeie a pasta para minúsculas usando kebab-case (ex: sumaenima-hub, stirps-petri)."),
+        Some("Rename directory to lowercase kebab-case (e.g. sumaenima-hub, stirps-petri)."),
     ));
 
     // ── 30. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
@@ -662,6 +689,10 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
                 fix_replacement: cr.fix_replacement.clone(),
                 path_includes: cr.path_include.clone().unwrap_or_default(),
                 path_excludes: cr.path_exclude.clone().unwrap_or_default(),
+                // Regras aprendidas (`--learn`) NÃO expõem o contexto: os campos
+                // são engine-only, para ninguém criar regra com contexto artificial.
+                requires_pattern: None,
+                severity_without_requires: None,
             };
             rules.push(rule);
         }

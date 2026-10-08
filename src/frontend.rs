@@ -1,4 +1,4 @@
-use crate::baseline::Whitelist;
+use crate::baseline::{is_common_ignored_path, Whitelist};
 use crate::engine::Violation;
 use crate::rule::Severity;
 use std::path::Path;
@@ -460,6 +460,203 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                     message: "URL absoluta de localhost encontrada no frontend. Em produção atrás do Nginx, isso quebra imediatamente por CORS ou conexão recusada.".to_string(),
                     suggestion: Some("Utilize caminho relativo (/api/...) ou carregue a URL via 'import.meta.env.VITE_API_URL'.".to_string()),
                 });
+            }
+        }
+    }
+
+    // ── 18. SEO-INDEX-METADATA: Strict Document Head SEO Compliance ──────────
+    if file_name == "index.html"
+        && !is_common_ignored_path(&path_str)
+        && (path_str.contains("frontend") || path_str.contains("web") || path_str.contains("/app/"))
+    {
+        // 18.1 Required <title> tag
+        if !content.contains("<title>") || !content.contains("</title>") {
+            if !whitelist.is_ignored(&path_str, "SEO-INDEX-METADATA", "<title>") {
+                violations.push(Violation {
+                    rule_id: "SEO-INDEX-METADATA".to_string(),
+                    rule_name: "Missing Page Title Tag".to_string(),
+                    severity: Severity::Error,
+                    file_path: path_str.clone(),
+                    line_number: 1,
+                    snippet: "<title> tag missing".to_string(),
+                    message: "The document is missing an essential <title> tag. Search engines require a descriptive document title to index and rank the page.".to_string(),
+                    suggestion: Some("Add a descriptive <title>Your Brand — Page Summary</title> inside <head>.".to_string()),
+                });
+            }
+        }
+
+        // 18.2 Required meta description
+        let has_meta_description = content.contains("name=\"description\"")
+            || content.contains("name='description'");
+        if !has_meta_description {
+            if !whitelist.is_ignored(&path_str, "SEO-INDEX-METADATA", "meta description") {
+                violations.push(Violation {
+                    rule_id: "SEO-INDEX-METADATA".to_string(),
+                    rule_name: "Missing Meta Description Tag".to_string(),
+                    severity: Severity::Error,
+                    file_path: path_str.clone(),
+                    line_number: 1,
+                    snippet: "meta name=\"description\" missing".to_string(),
+                    message: "The document is missing a <meta name=\"description\"> tag. Search engines rely on this snippet to present page summaries in search results.".to_string(),
+                    suggestion: Some("Add <meta name=\"description\" content=\"...\"> (120-160 characters) inside <head>.".to_string()),
+                });
+            }
+        }
+
+        // 18.3 Canonical URL tag
+        let has_canonical = content.contains("rel=\"canonical\"")
+            || content.contains("rel='canonical'");
+        if !has_canonical && !whitelist.is_ignored(&path_str, "SEO-INDEX-METADATA", "canonical") {
+            violations.push(Violation {
+                rule_id: "SEO-INDEX-METADATA".to_string(),
+                rule_name: "Missing Canonical Link Tag".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "link rel=\"canonical\" missing".to_string(),
+                message: "Missing <link rel=\"canonical\" href=\"...\"> in <head>. Without a canonical tag, search engines may split ranking authority across URL variations.".to_string(),
+                suggestion: Some("Add <link rel=\"canonical\" href=\"https://...\"> pointing to the official primary domain URL.".to_string()),
+            });
+        }
+
+        // 18.4 Social Graph Open Graph & Twitter Cards
+        let has_og_title = content.contains("property=\"og:title\"")
+            || content.contains("property='og:title'");
+        let has_og_desc = content.contains("property=\"og:description\"")
+            || content.contains("property='og:description'");
+        let has_og_image = content.contains("property=\"og:image\"")
+            || content.contains("property='og:image'");
+        let has_twitter_card = content.contains("name=\"twitter:card\"")
+            || content.contains("name='twitter:card'");
+
+        if (!has_og_title || !has_og_desc || !has_og_image || !has_twitter_card)
+            && !whitelist.is_ignored(&path_str, "SEO-SOCIAL-GRAPH", "social graph")
+        {
+            violations.push(Violation {
+                rule_id: "SEO-SOCIAL-GRAPH".to_string(),
+                rule_name: "Missing Social Graph & Twitter Card Tags".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "Incomplete Open Graph / Twitter Card tags".to_string(),
+                message: "Missing essential Social Graph tags (og:title, og:description, og:image or twitter:card). Shared links in WhatsApp, LinkedIn, and X will render without rich card previews.".to_string(),
+                suggestion: Some("Declare og:title, og:description, og:image (1200x630) and twitter:card meta tags inside <head>.".to_string()),
+            });
+        }
+
+        // 18.5 Google Search Multi-Resolution Favicon Spec
+        let has_48px_favicon = content.contains("sizes=\"48x48\"")
+            || content.contains("favicon.ico")
+            || content.contains("sizes='48x48'");
+        if !has_48px_favicon && !whitelist.is_ignored(&path_str, "SEO-FAVICON-SPEC", "favicon") {
+            violations.push(Violation {
+                rule_id: "SEO-FAVICON-SPEC".to_string(),
+                rule_name: "Missing Multi-Resolution / 48px Favicon Specification".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "Missing 48x48 favicon or favicon.ico link".to_string(),
+                message: "Google Search guidelines mandate that favicons must be multiples of 48px square (e.g. 48x48) or a valid multi-layer .ico to be rendered in search snippets.".to_string(),
+                suggestion: Some("Add <link rel=\"icon\" type=\"image/png\" sizes=\"48x48\" href=\"/favicon-48x48.png\"> and link to /favicon.ico in <head>.".to_string()),
+            });
+        }
+
+        // 18.6 Schema.org JSON-LD Structured Data
+        let has_json_ld = content.contains("application/ld+json") && content.contains("schema.org");
+        if !has_json_ld && !whitelist.is_ignored(&path_str, "SEO-SCHEMA-JSONLD", "json-ld") {
+            violations.push(Violation {
+                rule_id: "SEO-SCHEMA-JSONLD".to_string(),
+                rule_name: "Missing Schema.org JSON-LD Structured Data".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "application/ld+json missing".to_string(),
+                message: "Missing Schema.org JSON-LD structured data in index.html. Rich snippets and entity Knowledge Graph ingestion require structured machine-readable metadata.".to_string(),
+                suggestion: Some("Add a <script type=\"application/ld+json\"> block defining Organization or WebSite metadata.".to_string()),
+            });
+        }
+    }
+
+    // ── 19. SEO-ROBOTS-SITEMAP: Compliance for Web Crawling Assets ───────────
+    if file_name == "robots.txt" && !is_common_ignored_path(&path_str) {
+        let has_user_agent = content.contains("User-agent:") || content.contains("User-Agent:");
+        let has_sitemap_directive = content.contains("Sitemap:") || content.contains("sitemap:");
+        if (!has_user_agent || !has_sitemap_directive)
+            && !whitelist.is_ignored(&path_str, "SEO-ROBOTS-SITEMAP", "robots.txt")
+        {
+            violations.push(Violation {
+                rule_id: "SEO-ROBOTS-SITEMAP".to_string(),
+                rule_name: "Incomplete robots.txt Configuration".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "robots.txt missing User-agent or Sitemap directive".to_string(),
+                message: "The robots.txt file must declare 'User-agent: *' and a 'Sitemap: https://...' directive pointing to the canonical XML sitemap.".to_string(),
+                suggestion: Some("Ensure 'User-agent: *' and 'Sitemap: https://<domain>/sitemap.xml' are present.".to_string()),
+            });
+        }
+    }
+
+    if file_name == "sitemap.xml" && !is_common_ignored_path(&path_str) {
+        let has_urlset = content.contains("<urlset") && content.contains("</urlset>");
+        let has_loc = content.contains("<loc>") && content.contains("</loc>");
+        if (!has_urlset || !has_loc)
+            && !whitelist.is_ignored(&path_str, "SEO-ROBOTS-SITEMAP", "sitemap.xml")
+        {
+            violations.push(Violation {
+                rule_id: "SEO-ROBOTS-SITEMAP".to_string(),
+                rule_name: "Malformed sitemap.xml Structure".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: "sitemap.xml missing urlset or loc tags".to_string(),
+                message: "The sitemap.xml file must be valid XML containing <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"> and at least one <loc> entry.".to_string(),
+                suggestion: Some("Structure sitemap.xml according to the sitemaps.org 0.9 schema standard.".to_string()),
+            });
+        }
+    }
+
+    // ── 20. SEO-IMG-ALT: Mandatory Image Alt Attribute for Search & A11y ────
+    if (path_str.ends_with(".tsx") || path_str.ends_with(".jsx") || path_str.ends_with(".html"))
+        && !is_common_ignored_path(&path_str)
+        && !path_str.contains("/test")
+        && !path_str.contains(".test.")
+        && !path_str.contains(".spec.")
+    {
+        for (line_idx, line) in content.lines().enumerate() {
+            if line.contains("<img") {
+                // If img is multi-line, check adjacent lines up to closure '>'
+                let mut full_tag = line.to_string();
+                if !line.contains('>') {
+                    let subsequent_lines: Vec<&str> = content.lines().skip(line_idx + 1).take(5).collect();
+                    for sub in subsequent_lines {
+                        full_tag.push(' ');
+                        full_tag.push_str(sub);
+                        if sub.contains('>') {
+                            break;
+                        }
+                    }
+                }
+
+                let tag_has_alt = full_tag.contains("alt=") || full_tag.contains("alt =");
+                let tag_is_aria_hidden = full_tag.contains("aria-hidden=\"true\"")
+                    || full_tag.contains("aria-hidden='true'")
+                    || full_tag.contains("aria-hidden={true}");
+
+                if (!tag_has_alt && !tag_is_aria_hidden)
+                    && !whitelist.is_ignored(&path_str, "SEO-IMG-ALT", line)
+                {
+                    violations.push(Violation {
+                        rule_id: "SEO-IMG-ALT".to_string(),
+                        rule_name: "Image Tag Missing Descriptive Alt Attribute".to_string(),
+                        severity: Severity::Error,
+                        file_path: path_str.clone(),
+                        line_number: line_idx + 1,
+                        snippet: line.trim().to_string(),
+                        message: "All <img> tags must declare a descriptive 'alt' attribute for Google Images search indexing and screen reader accessibility.".to_string(),
+                        suggestion: Some("Add alt=\"Descriptive image context\" (or aria-hidden=\"true\" for purely decorative graphics).".to_string()),
+                    });
+                }
             }
         }
     }

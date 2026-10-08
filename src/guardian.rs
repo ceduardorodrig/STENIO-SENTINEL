@@ -327,6 +327,10 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "PERF-GPU-CONTAINMENT",
                 "FRONT-FEEDBACK-ON-ERROR",
                 "FRONT-NO-HARDCODED-HOST",
+                "SEO-INDEX-METADATA",
+                "SEO-ROBOTS-SITEMAP",
+                "SEO-FAVICON-SPEC",
+                "SEO-IMG-ALT",
             ],
         ),
         (

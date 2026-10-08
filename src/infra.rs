@@ -81,6 +81,149 @@ fn is_documentation_example(line: &str, value: &str) -> bool {
     value.len() < 12 && !has_symbol && (!has_digit || all_lower_alpha)
 }
 
+/// Structural checks for a Docker Compose file: YAML syntax, restart policy and
+/// healthcheck presence.
+///
+/// Extracted into its own function so the exact same rules run both on the vault
+/// tree (`audit_infrastructure`) and on the NAS mirror of the hosts' composes
+/// (`audit_compose_dir`) — without duplicating the logic (ARCH-DRY-DUPLICATION).
+fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
+    let mut violations = Vec::new();
+
+    match serde_yaml::from_str::<serde_yaml::Value>(content) {
+        Ok(yaml_val) => {
+            if let Some(services) = yaml_val.get("services").and_then(|s| s.as_mapping()) {
+                for (svc_key, svc_val) in services {
+                    let svc_name = svc_key.as_str().unwrap_or("unknown");
+
+                    // Política de restart
+                    let has_restart = svc_val.get("restart").is_some()
+                        || svc_val
+                            .get("deploy")
+                            .and_then(|d| d.get("restart_policy"))
+                            .is_some();
+                    if !has_restart {
+                        violations.push(Violation {
+                            rule_id: "INFRA-COMPOSE-RESTART".to_string(),
+                            rule_name: "Política de Restart Ausente no Serviço".to_string(),
+                            severity: Severity::Warning,
+                            file_path: path_str.to_string(),
+                            line_number: 1,
+                            snippet: format!("{}:", svc_name),
+                            message: format!("Serviço '{}' não define 'restart: unless-stopped' ou 'restart: always'.", svc_name),
+                            suggestion: Some("Adicione 'restart: unless-stopped' ao serviço no compose.yml.".to_string()),
+                        });
+                    }
+
+                    // Healthcheck (ou exceção explícita para imagens distroless).
+                    // Aceita o label em duas formas: mapa (`labels: {homelab.healthcheck: watchdog}`)
+                    // ou lista (`labels: ["homelab.healthcheck=watchdog"]`).
+                    let has_healthcheck = svc_val.get("healthcheck").is_some();
+                    let has_watchdog_label = svc_val
+                        .get("labels")
+                        .map(|labels| match labels {
+                            serde_yaml::Value::Mapping(m) => m.iter().any(|(k, v)| {
+                                k.as_str() == Some("homelab.healthcheck")
+                                    && v.as_str() == Some("watchdog")
+                            }),
+                            serde_yaml::Value::Sequence(seq) => seq.iter().any(|item| {
+                                item.as_str()
+                                    .map(|s| s.trim() == "homelab.healthcheck=watchdog")
+                                    .unwrap_or(false)
+                            }),
+                            _ => false,
+                        })
+                        .unwrap_or(false);
+                    if !has_healthcheck && !has_watchdog_label {
+                        violations.push(Violation {
+                            rule_id: "INFRA-COMPOSE-HEALTHCHECK".to_string(),
+                            rule_name: "Healthcheck Ausente no Serviço".to_string(),
+                            severity: Severity::Warning,
+                            file_path: path_str.to_string(),
+                            line_number: 1,
+                            snippet: format!("{}:", svc_name),
+                            message: format!(
+                                "Serviço '{}' não define 'healthcheck' (nem a exceção 'homelab.healthcheck: watchdog').",
+                                svc_name
+                            ),
+                            suggestion: Some(
+                                "Adicione 'healthcheck' ao serviço (ver mnemocine/guides/docker-healthchecks.md) ou, para imagem distroless, o label 'homelab.healthcheck: watchdog'.".to_string(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            violations.push(Violation {
+                rule_id: "INFRA-COMPOSE-SYNTAX".to_string(),
+                rule_name: "Erro de Sintaxe em Docker Compose".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.to_string(),
+                line_number: 1,
+                snippet: e.to_string(),
+                message: format!("Sintaxe inválida no arquivo compose: {}", e),
+                suggestion: Some("Corrija a formatação YAML do arquivo compose.yml.".to_string()),
+            });
+        }
+    }
+
+    violations
+}
+
+/// Applies only the Compose structural checks to every compose file under `root`.
+///
+/// Used for the NAS mirror of the hosts' configs (`/mnt/BACKUP/configs-homelab`),
+/// where the compose hygiene rules matter but the `SEC-*` rules do not: the mirror
+/// is captured content, not our authored tree (see `audit_infrastructure` for the
+/// `code_debt` rationale).
+pub fn audit_compose_dir(root: &Path) -> InfraReport {
+    let mut report = InfraReport {
+        total_files_scanned: 0,
+        messages: Vec::new(),
+        violations: Vec::new(),
+    };
+
+    if !root.is_dir() {
+        return report;
+    }
+
+    let mut walker = WalkBuilder::new(root);
+    walker.hidden(false).git_ignore(false);
+
+    for result in walker.build().flatten() {
+        let path = result.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let is_compose = file_name == "compose.yml"
+            || file_name == "compose.yaml"
+            || file_name == "docker-compose.yml"
+            || file_name == "docker-compose.yaml";
+        if !is_compose {
+            continue;
+        }
+        let path_str = path.display().to_string();
+        // `golden/` são cópias do `config-backup` dos MESMOS composes — escanear
+        // as duas gera achado duplicado. Ignoramos a cópia dourada.
+        if path_str.contains("/golden/") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        report.total_files_scanned += 1;
+        report
+            .violations
+            .extend(check_compose_file(&path_str, &content));
+    }
+
+    report
+}
+
 /// `code_debt` gates the rules that only make sense for code WE own.
 ///
 /// `homelab` passes `true`: a loose `.py` in our own tree is debt to migrate.
@@ -299,53 +442,8 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
 
         if is_compose {
             scanned_count += 1;
-            let Ok(content) = fs::read_to_string(&path) else {
-                continue;
-            };
-
-            // Validação de sintaxe YAML
-            match serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                Ok(yaml_val) => {
-                    // Checagens estruturais de compose
-                    if let Some(services) = yaml_val.get("services").and_then(|s| s.as_mapping()) {
-                        for (svc_key, svc_val) in services {
-                            let svc_name = svc_key.as_str().unwrap_or("unknown");
-
-                            // Checagem de política de restart
-                            let has_restart = svc_val.get("restart").is_some()
-                                || svc_val
-                                    .get("deploy")
-                                    .and_then(|d| d.get("restart_policy"))
-                                    .is_some();
-                            if !has_restart {
-                                violations.push(Violation {
-                                    rule_id: "INFRA-COMPOSE-RESTART".to_string(),
-                                    rule_name: "Política de Restart Ausente no Serviço".to_string(),
-                                    severity: Severity::Warning,
-                                    file_path: path_str.clone(),
-                                    line_number: 1,
-                                    snippet: format!("{}:", svc_name),
-                                    message: format!("Serviço '{}' não define 'restart: unless-stopped' ou 'restart: always'.", svc_name),
-                                    suggestion: Some("Adicione 'restart: unless-stopped' ao serviço no compose.yml.".to_string()),
-                                });
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    violations.push(Violation {
-                        rule_id: "INFRA-COMPOSE-SYNTAX".to_string(),
-                        rule_name: "Erro de Sintaxe em Docker Compose".to_string(),
-                        severity: Severity::Error,
-                        file_path: path_str.clone(),
-                        line_number: 1,
-                        snippet: e.to_string(),
-                        message: format!("Sintaxe inválida no arquivo compose: {}", e),
-                        suggestion: Some(
-                            "Corrija a formatação YAML do arquivo compose.yml.".to_string(),
-                        ),
-                    });
-                }
+            if let Ok(content) = fs::read_to_string(&path) {
+                violations.extend(check_compose_file(&path_str, &content));
             }
         }
 

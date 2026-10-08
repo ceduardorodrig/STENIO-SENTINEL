@@ -45,7 +45,7 @@ use engine::{Engine, Violation};
 use gov::audit_governance;
 use gpu::audit_gpu_subsystem;
 use homelab::audit_homelab;
-use infra::audit_infrastructure;
+use infra::{audit_compose_dir, audit_infrastructure};
 use migrations::audit_migrations;
 use rule::{Rule, Severity, get_rules_from_config};
 use vault::audit_vault;
@@ -329,9 +329,48 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Thread Sleep Tokio",
         "RUST-ASYNC-SLEEP",
-        "std::thread::sleep(Duration::from_millis(100));", // stenio-ignore: RUST-ASYNC-SLEEP
+        "#[tokio::main] async fn main() { std::thread::sleep(std::time::Duration::from_millis(100)); }", // stenio-ignore: RUST-ASYNC-SLEEP
         true
     );
+    // RUST-ASYNC-SLEEP é context-dependente: Error em arquivo async, Warning em
+    // síncrono (visível, sem bloquear). A amostra usa `concat!` para não plantar
+    // o literal da regra neste próprio arquivo.
+    if let Some(rule) = rules.iter().find(|r| r.id == "RUST-ASYNC-SLEEP") {
+        total += 1;
+        let probe = concat!("std::thread::", "sleep(x);");
+        let pattern = regex::Regex::new(&rule.pattern)?;
+        let context = rule
+            .requires_pattern
+            .as_ref()
+            .map(|p| regex::Regex::new(p))
+            .transpose()?;
+        let async_ctx = context
+            .as_ref()
+            .map(|r| r.is_match("async fn f() { g().await; }"))
+            .unwrap_or(false);
+        let sync_ctx = context
+            .as_ref()
+            .map(|r| r.is_match("let _ = 1;"))
+            .unwrap_or(true);
+        let ok = pattern.is_match(probe)
+            && async_ctx
+            && !sync_ctx
+            && matches!(rule.severity_without_requires, Some(Severity::Warning));
+        if ok {
+            passed += 1;
+            println!(
+                "   ✅ Teste {:<22} [{}] - OK",
+                "Sleep: contexto async",
+                "RUST-ASYNC-SLEEP".cyan()
+            );
+        } else {
+            println!(
+                "   ❌ Teste {:<22} [{}] - FALHA",
+                "Sleep: contexto async",
+                "RUST-ASYNC-SLEEP".red()
+            );
+        }
+    }
     check_case!(
         "Tokio Sleep Válido",
         "RUST-ASYNC-SLEEP",
@@ -619,6 +658,70 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             "   ❌ Teste {:<22} [{}] - FALHA",
             "Host Relativo Válido",
             "FRONT-NO-HARDCODED-HOST".red()
+        );
+    }
+
+    // ── Testes de Validação Especializada de SEO (SEO-* Rules) ───────────
+    total += 1;
+    let v_seo_bad = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/index.html"),
+        "<!doctype html><html><head><title>Test</title></head></html>",
+        &Whitelist::default(),
+    );
+    if v_seo_bad.iter().any(|v| v.rule_id == "SEO-INDEX-METADATA") {
+        passed += 1;
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "SEO Meta Desc Ausente",
+            "SEO-INDEX-METADATA".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "SEO Meta Desc Ausente",
+            "SEO-INDEX-METADATA".red()
+        );
+    }
+
+    total += 1;
+    let v_sitemap_bad = frontend::audit_frontend_file(
+        &PathBuf::from("public/sitemap.xml"),
+        "not a valid xml sitemap",
+        &Whitelist::default(),
+    );
+    if v_sitemap_bad.iter().any(|v| v.rule_id == "SEO-ROBOTS-SITEMAP") {
+        passed += 1;
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "Sitemap XML Inválido",
+            "SEO-ROBOTS-SITEMAP".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "Sitemap XML Inválido",
+            "SEO-ROBOTS-SITEMAP".red()
+        );
+    }
+
+    total += 1;
+    let v_img_bad = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/Card.tsx"),
+        "<img src=\"/hero.jpg\" />",
+        &Whitelist::default(),
+    );
+    if v_img_bad.iter().any(|v| v.rule_id == "SEO-IMG-ALT") {
+        passed += 1;
+        println!(
+            "   ✅ Teste {:<22} [{}] - OK",
+            "Img Sem Alt Proibida",
+            "SEO-IMG-ALT".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Teste {:<22} [{}] - FALHA",
+            "Img Sem Alt Proibida",
+            "SEO-IMG-ALT".red()
         );
     }
 
@@ -1152,7 +1255,12 @@ fn main() -> Result<()> {
     // Ver `governance/agent-conventions.md` §2b e
     // `governance/stenio-troubleshooting.md` §3.
     // O `--scope` é opcional (default `all`); comparamos sem `unwrap` (RUST-NO-UNWRAP).
-    let scope_opt = args.scope.as_deref().unwrap_or("");
+    let cfg_scope_val = steniocheck_cfg.general.as_ref().and_then(|g| g.scope.as_deref()).unwrap_or("");
+    let scope_opt = if !args.scope.as_deref().unwrap_or("").is_empty() {
+        args.scope.as_deref().unwrap_or("")
+    } else {
+        cfg_scope_val
+    };
     if scope_opt.eq_ignore_ascii_case("fork") || scope_opt.eq_ignore_ascii_case("derived") {
         let allowed_prefixes: &[&str] = &[
             "SEC-",
@@ -1275,6 +1383,8 @@ fn main() -> Result<()> {
     let p_str = p_canon.to_string_lossy();
     let scope = if let Some(s) = args.scope.as_deref() {
         s.to_lowercase()
+    } else if !cfg_scope_val.is_empty() {
+        cfg_scope_val.to_lowercase()
     } else {
         if p_str.contains("sumaenima-hub")
             || p_str.contains("SUMAENIMA-HUB")
@@ -1447,10 +1557,26 @@ fn main() -> Result<()> {
                                 || scope_opt.eq_ignore_ascii_case("mirror");
 
                             let (h, inf) = if is_homelab_active {
-                                (
-                                    Some(audit_homelab(&args.path)),
-                                    Some(audit_infrastructure(&args.path, true)),
-                                )
+                                // O escopo `homelab` audita a árvore do vault **e** o
+                                // espelho dos composes dos hosts (`/mnt/BACKUP/configs-homelab`,
+                                // mantido pelo `config-backup`). Sem o espelho, as regras
+                                // INFRA-COMPOSE-* não veriam nenhum compose real: o vault
+                                // tem 0 composes (os serviços vivem em `/srv/data` nos hosts).
+                                // Só as checagens estruturais de compose rodam no espelho —
+                                // as regras `SEC-*` não se aplicam a conteúdo capturado.
+                                let mut infra = audit_infrastructure(&args.path, true);
+                                // O espelho só entra quando o alvo é o vault real (layout
+                                // `mnemocine/`) — um `--path` apontando para outro diretório
+                                // não deve arrastar o NAS para dentro do resultado.
+                                let mirror = Path::new("/mnt/BACKUP/configs-homelab");
+                                if args.path.join("mnemocine").is_dir() && mirror.is_dir() {
+                                    let mirror_report = audit_compose_dir(mirror);
+                                    infra.total_files_scanned +=
+                                        mirror_report.total_files_scanned;
+                                    infra.violations.extend(mirror_report.violations);
+                                    infra.messages.extend(mirror_report.messages);
+                                }
+                                (Some(audit_homelab(&args.path)), Some(infra))
                             } else if runs_infra_audit {
                                 // Sem a auditoria de documentação do homelab (não se
                                 // aplica a um fork ou espelho), mas COM a de

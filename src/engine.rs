@@ -37,19 +37,26 @@ pub struct ScanReport {
 pub struct Engine {
     rules: Vec<Rule>,
     compiled_regexes: Vec<Regex>,
+    compiled_requires: Vec<Option<Regex>>,
     whitelist: Whitelist,
 }
 
 impl Engine {
     pub fn new(rules: Vec<Rule>, whitelist: Whitelist) -> Result<Self> {
         let mut compiled = Vec::with_capacity(rules.len());
+        let mut compiled_requires = Vec::with_capacity(rules.len());
         for rule in &rules {
             let re = Regex::new(&rule.pattern)?;
             compiled.push(re);
+            compiled_requires.push(match &rule.requires_pattern {
+                Some(p) => Some(Regex::new(p)?),
+                None => None,
+            });
         }
         Ok(Self {
             rules,
             compiled_regexes: compiled,
+            compiled_requires,
             whitelist,
         })
     }
@@ -198,16 +205,10 @@ impl Engine {
             if entry.file_type().map_or(false, |ft| ft.is_file()) {
                 let path = entry.into_path();
                 let path_str = path.to_string_lossy();
-                if path_str.contains("/target/")
-                    || path_str.contains("/node_modules/")
-                    || path_str.contains("/.venv/")
-                    || path_str.contains("/.git/")
+                if crate::baseline::is_common_ignored_path(&path_str)
                     || path_str.contains("/llm_model_cache/")
-                    || path_str.contains("/dist/")
-                    || path_str.contains("/.obsidian/")
                     || path_str.contains("/.smart-env/")
                     || path_str.contains("/fixtures/")
-                    || path_str.contains("/archive/")
                     || path_str.ends_with("/rule.rs")
                     || path_str.ends_with("/frontend.rs")
                     || path_str.ends_with("/explain.rs")
@@ -338,9 +339,9 @@ impl Engine {
         }
         let mut file_violations = Vec::new();
 
-        // 1. Auditoria especializada de Leis de Frontend
-        if (tag_filter.is_none() || tag_filter == Some("frontend"))
-            && only_rule.map_or(true, |r| r.starts_with("FRONT-") || r.starts_with("PERF-"))
+        // 1. Auditoria especializada de Leis de Frontend e SEO
+        if (tag_filter.is_none() || tag_filter == Some("frontend") || tag_filter == Some("seo"))
+            && only_rule.map_or(true, |r| r.starts_with("FRONT-") || r.starts_with("PERF-") || r.starts_with("SEO-"))
         {
             let fv = audit_frontend_file(path, &content, &self.whitelist);
             if let Some(target) = only_rule {
@@ -427,13 +428,30 @@ impl Engine {
 
             let re = &self.compiled_regexes[idx];
 
+            // Contexto opcional: `RUST-ASYNC-SLEEP` é Error apenas em arquivo
+            // realmente assíncrono; em código síncrono fica Warning (visível, sem
+            // bloquear). Sem contexto configurado, a severidade é a da regra.
+            let severity = match (&self.compiled_requires[idx], rule.severity_without_requires) {
+                (Some(req), without) => {
+                    if req.is_match(&content) {
+                        rule.severity
+                    } else {
+                        match without {
+                            Some(s) => s,
+                            None => continue,
+                        }
+                    }
+                }
+                _ => rule.severity,
+            };
+
             if rule.must_match {
                 if !re.is_match(&content) {
                     if !self.whitelist.is_ignored(&path_str, &rule.id, "") {
                         file_violations.push(Violation {
                             rule_id: rule.id.clone(),
                             rule_name: rule.name.clone(),
-                            severity: rule.severity,
+                            severity,
                             file_path: path_str.clone(),
                             line_number: 1,
                             snippet: "".to_string(),
@@ -469,7 +487,7 @@ impl Engine {
                             file_violations.push(Violation {
                                 rule_id: rule.id.clone(),
                                 rule_name: rule.name.clone(),
-                                severity: rule.severity,
+                                severity,
                                 file_path: path_str.clone(),
                                 line_number: line_idx + 1,
                                 snippet: line.trim().to_string(),

@@ -66,7 +66,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                 if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
                     let has_conventions = content.contains("agent-conventions.md");
                     let has_rust_tools = content.contains("Ferramentas Rust")
-                        || content.contains("Preferências de Terminal");
+                        || content.contains("Preferências de Terminal")
+                        || content.contains("Rust Tools")
+                        || content.contains("Terminal Preferences");
                     let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
 
                     if has_conventions && has_rust_tools && has_homelab_or_mei {
@@ -91,7 +93,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     || content.contains("WITH-SMOOTH-MOTION")
                     || ((content.contains("StenioSentinel") || content.contains("StênioKernel"))
                         && !content.contains("Orientação para assistentes")
-                        && !content.contains("LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA)"))
+                        && !content.contains("Guidance for AI Assistants")
+                        && !content.contains("LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA)")
+                        && !content.contains("ABSOLUTE LAWS OF THE AGENT"))
                 {
                     // AGENTS.md de Repositório Satélite / Público especializado
                     for line in content.lines() {
@@ -141,20 +145,20 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                         errors.push(err);
                     }
 
-                    // Validação de cláusulas vitais
-                    if content.contains("REGRA DE OURO") {
+                    // Validação de cláusulas vitais (bilíngue PT/EN)
+                    if content.contains("REGRA DE OURO") || content.contains("GOLDEN RULE") {
                         messages.push("✅ Cláusula da Regra de Ouro presente".to_string());
                     } else {
-                        let err = "❌ Cláusula 'REGRA DE OURO' ausente no AGENTS.md".to_string();
+                        let err = "❌ Cláusula 'REGRA DE OURO' / 'GOLDEN RULE' ausente no AGENTS.md".to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
 
-                    if content.contains("HERANÇA DE CONTEXTO") {
+                    if content.contains("HERANÇA DE CONTEXTO") || content.contains("CONTEXT INHERITANCE") {
                         messages.push("✅ Cláusula de Herança de Contexto presente".to_string());
                     } else {
                         let err =
-                            "❌ Cláusula 'HERANÇA DE CONTEXTO' ausente no AGENTS.md".to_string();
+                            "❌ Cláusula 'HERANÇA DE CONTEXTO' / 'CONTEXT INHERITANCE' ausente no AGENTS.md".to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }

@@ -245,26 +245,26 @@ pub fn detect_dry_duplication(
 
                 let message = if f1 == f2 {
                     format!(
-                        "Duplicação interna de {} linhas substantivas (L{}-L{} é idêntico a L{}-L{}). Viola o Princípio DRY Absoluto.",
+                        "Internal duplication of {} substantive lines (L{}-L{} is identical to L{}-L{}). Violates the Absolute DRY Principle.",
                         ext_len, start_line1, end_line1, start_line2, end_line2
                     )
                 } else {
                     format!(
-                        "Bloco de {} linhas substantivas duplicado com '{}' (L{}-L{}). Viola o Princípio DRY Absoluto.",
+                        "Block of {} substantive lines duplicated with '{}' (L{}-L{}). Violates the Absolute DRY Principle.",
                         ext_len, files[f2].rel_path, start_line2, end_line2
                     )
                 };
 
                 violations.push(Violation {
                     rule_id: "ARCH-DRY-DUPLICATION".to_string(),
-                    rule_name: "Duplicação de Código (Princípio DRY)".to_string(),
+                    rule_name: "Code Duplication (DRY Principle)".to_string(),
                     severity: Severity::Error,
                     file_path: file1_str,
                     line_number: start_line1,
                     snippet: format!("{}\n...", snippet),
                     message,
                     suggestion: Some(
-                        "Extraia a lógica duplicada para um hook customizado ('features/<dominio>/hooks/'), componente atômico ou função utilitária compartilhada."
+                        "Extract duplicate logic into a custom hook ('features/<domain>/hooks/'), atomic component, or shared utility function."
                             .to_string(),
                     ),
                 });
@@ -313,7 +313,7 @@ pub fn print_dry_report(
         "═══ MOTOR DRY (Don't Repeat Yourself) ═══".cyan().bold()
     );
     println!(
-        "Arquivos analisados: {} | Duração: {:?}",
+        "Files analyzed: {} | Duration: {:?}",
         files_count.to_string().yellow().bold(),
         duration
     );
@@ -321,7 +321,7 @@ pub fn print_dry_report(
     if violations.is_empty() {
         println!(
             "{}",
-            "✨ Princípio DRY 100% cumprido: Zero duplicações de blocos encontradas!"
+            "✨ DRY Principle 100% compliant: Zero duplicated code blocks found!"
                 .green()
                 .bold()
         );
@@ -331,7 +331,7 @@ pub fn print_dry_report(
     println!(
         "{}",
         format!(
-            "⚠️ {} ocorrência(s) de blocos de código duplicados detectada(s):",
+            "⚠️ {} duplicated code block occurrence(s) detected:",
             violations.len()
         )
         .yellow()
@@ -347,9 +347,9 @@ pub fn print_dry_report(
         );
         println!("    {}", v.message);
         if let Some(ref sugg) = v.suggestion {
-            println!("    {} {}", "💡 Sugestão:".green(), sugg);
+            println!("    {} {}", "💡 Suggestion:".green(), sugg);
         }
-        println!("    {}", "Snippet do bloco duplicado:".dimmed());
+        println!("    {}", "Duplicated block snippet:".dimmed());
         for s_line in v.snippet.lines() {
             println!("      │ {}", s_line.dimmed());
         }

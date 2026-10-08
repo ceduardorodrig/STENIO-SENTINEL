@@ -58,8 +58,11 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         "cloud",
         "distribuída",
         "distribuido",
+        "distributed",
         "malha",
+        "mesh",
         "host",
+        "server",
     ];
 
     if services_dir.is_dir() {
@@ -87,7 +90,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 let has_server_field = is_subdoc
                     || content.lines().any(|l| {
                         let tl = l.trim().to_lowercase();
-                        (tl.contains("servidor") || tl.contains("host")) && tl.contains(':')
+                        (tl.contains("servidor") || tl.contains("host") || tl.contains("server")) && tl.contains(':')
                     });
 
                 if !has_server_field {
@@ -106,7 +109,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     let mut found_valid = false;
                     for line in content.lines() {
                         let tl = line.trim().to_lowercase();
-                        if (tl.contains("servidor") || tl.contains("host")) && tl.contains(':') {
+                        if (tl.contains("servidor") || tl.contains("host") || tl.contains("server")) && tl.contains(':') {
                             if valid_hosts.iter().any(|&vh| tl.contains(vh)) {
                                 found_valid = true;
                                 break;
