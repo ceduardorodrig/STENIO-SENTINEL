@@ -4,11 +4,11 @@ tags: [meta, agents, governance, rust, engine]
 
 # AGENTS.md — StenioSentinel Engine Governance Rules
 
-This directory contains **StenioSentinel (Rust Engine v3.8.6)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
+This directory contains **StenioSentinel (Rust Engine v4.0.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
 
 When modifying any file in this repository, follow these mandatory governance rules:
 
-**Language Tier:** A (Public OSS) — see [language-policy.md](../language-policy.md). All logs, CLI strings, documentation, and comments MUST be in English. See [ROADMAP.md](ROADMAP.md) for the active migration plan toward full native English (v4.0.0).
+**Language Tier:** A (Public OSS) — see [language-policy.md](../language-policy.md). All logs, CLI strings, documentation, and comments MUST be in English. As of v4.0.0, the engine is 100% native English (see [ROADMAP.md](ROADMAP.md)).
 
 ## 🦀 Rust Sovereignty & Architectural Laws
 

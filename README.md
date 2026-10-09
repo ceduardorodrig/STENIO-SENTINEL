@@ -144,7 +144,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v3.8.6 — Universal AI Governance & Static Sentinel
+StenioSentinel v4.0.0 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 
