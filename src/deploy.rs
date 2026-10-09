@@ -11,13 +11,13 @@ pub struct ParityStatus {
     pub in_sync: bool,
 }
 
-/// Extrai o nome do bundle principal de script (assets/index-*.js) a partir do HTML
+/// Extracts main script bundle name (assets/index-*.js) from HTML
 pub fn extract_script_bundle(html: &str) -> Option<String> {
     let re = Regex::new(r#"assets/index-[A-Za-z0-9_-]+\.js"#).ok()?;
     re.find(html).map(|m| m.as_str().to_string())
 }
 
-/// Localiza o diretório do frontend no workspace
+/// Locates frontend directory in workspace
 pub fn find_frontend_dir(root: &Path) -> Option<PathBuf> {
     let candidates = [
         root.join("sumaenimahub/sumaenima-hub/app/frontend-v2"),
@@ -34,7 +34,7 @@ pub fn find_frontend_dir(root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Audita a paridade entre o bundle local compilado e a borda remota no Ybyra
+/// Audits parity between compiled local bundle and remote edge on Ybyra
 pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
     let fe_dir = find_frontend_dir(root)?;
     let local_index = fe_dir.join("dist/index.html");
@@ -46,7 +46,7 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
     let local_html = std::fs::read_to_string(&local_index).ok()?;
     let local_bundle = extract_script_bundle(&local_html)?;
 
-    // Sondagem ultrarrápida da borda remota via xh (Rust HTTP) com timeout estrito
+    // Ultra-fast probing of remote edge via xh (Rust HTTP) with strict timeout
     let output = Command::new("xh")
         .args([
             "get",
@@ -64,7 +64,7 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
 
     let remote_html = String::from_utf8_lossy(&output.stdout);
     let remote_bundle =
-        extract_script_bundle(&remote_html).unwrap_or_else(|| "desconhecido".to_string());
+        extract_script_bundle(&remote_html).unwrap_or_else(|| "unknown".to_string());
 
     let in_sync = local_bundle == remote_bundle;
 
@@ -75,20 +75,20 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
     })
 }
 
-/// Executa a sincronização atômica do frontend para Ybyra e Kavure
+/// Executes atomic frontend deployment to Ybyra and Kavure
 pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
     crate::baseline::print_banner(
-        "StênioSentinel — Automação de Deploy do Frontend (--deploy front)",
+        "StenioSentinel — Frontend Deployment Automation (--deploy front)",
     );
 
     let fe_dir = find_frontend_dir(root)
-        .context("Diretório do frontend (app/frontend-v2) não encontrado no workspace.")?;
+        .context("Frontend directory (app/frontend-v2) not found in workspace.")?;
     let dist_dir = fe_dir.join("dist");
 
     if build_first || !dist_dir.exists() {
         println!(
             "{}",
-            "[*] Compilando frontend SPA (npm run build)..."
+            "[*] Compiling SPA frontend (npm run build)..."
                 .cyan()
                 .bold()
         );
@@ -97,54 +97,54 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
             .arg("build")
             .current_dir(&fe_dir)
             .status()
-            .context("Falha ao executar 'npm run build' no frontend.")?;
+            .context("Failed to execute 'npm run build' on frontend.")?;
 
         if !status.success() {
             anyhow::bail!(
-                "Compilação do frontend falhou com exit code: {:?}",
+                "Frontend compilation failed with exit code: {:?}",
                 status.code()
             );
         }
-        println!("{}", "  ✅ Build compilado com sucesso!".green());
+        println!("{}", "  ✅ Build compiled successfully!".green());
     }
 
     let dist_str = format!("{}/", dist_dir.display());
 
-    // 1. Sincronização Ybyra (Edge primário)
+    // 1. Edge node Ybyra synchronization (primary edge)
     println!(
         "{}",
-        "[*] Sincronizando assets com nó de borda Ybyra (/var/www/sumaenima)...".cyan()
+        "[*] Synchronizing assets with edge node Ybyra (/var/www/sumaenima)...".cyan()
     );
     let ybyra_outcome = crate::remote::run_rsync(&dist_str, "ybyra:/var/www/sumaenima/", 5);
-    ybyra_outcome.print_status("Sincronização Ybyra");
+    ybyra_outcome.print_status("Ybyra Sync");
 
-    // 2. Sincronização Kavure (Warm standby)
+    // 2. Standby node Kavure synchronization (warm standby)
     println!(
         "{}",
-        "[*] Sincronizando com nó standby Kavure (/var/www/sumaenima)...".cyan()
+        "[*] Synchronizing with standby node Kavure (/var/www/sumaenima)...".cyan()
     );
     let kavure_outcome = crate::remote::run_rsync(&dist_str, "kavure:/var/www/sumaenima/", 5);
-    kavure_outcome.print_status("Sincronização Kavure");
+    kavure_outcome.print_status("Kavure Sync");
 
-    // 3. Recarrega Nginx no Ybyra sem downtime
+    // 3. Reload Nginx on Ybyra with zero downtime
     println!(
         "{}",
-        "[*] Recarregando Nginx no Ybyra (zero downtime)...".cyan()
+        "[*] Reloading Nginx on Ybyra (zero downtime)...".cyan()
     );
     let reload_outcome = crate::remote::run_ssh(
         "ybyra",
         "docker exec $(docker ps -f name=sae-edge_proxy -q | head -1) nginx -s reload",
         5,
     );
-    reload_outcome.print_status("Recarga Nginx no Ybyra");
+    reload_outcome.print_status("Nginx reload on Ybyra");
 
-    // 4. Verificação final de paridade
+    // 4. Final parity verification
     if let Some(parity) = check_static_parity(root) {
         if parity.in_sync {
             println!(
                 "{}",
                 format!(
-                    "  ✨ Paridade confirmada em produção! Bundle ativo: {}",
+                    "  ✨ Production parity confirmed! Active bundle: {}",
                     parity.local_bundle
                 )
                 .green()
@@ -153,7 +153,7 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
         } else {
             println!(
                 "{}",
-                format!("  ⚠️  Aviso: Borda ainda responde '{}', esperado '{}'. Aguarde propagação do cache.", parity.remote_bundle, parity.local_bundle).yellow()
+                format!("  ⚠️  Warning: Edge still serving '{}', expected '{}'. Awaiting cache propagation.", parity.remote_bundle, parity.local_bundle).yellow()
             );
         }
     }
@@ -161,7 +161,7 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
     println!();
     println!(
         "{}",
-        "🚀 Deploy rápido de frontend finalizado com sucesso!"
+        "🚀 Fast frontend deployment finished successfully!"
             .bold()
             .green()
     );

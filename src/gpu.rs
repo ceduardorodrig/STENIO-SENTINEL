@@ -23,29 +23,29 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
         fallback_cache
     };
 
-    // 1. Hardware & Driver Query direta via host nvidia-smi (<5ms)
+    // 1. Hardware & Driver Query directly via host nvidia-smi (<5ms)
     let hardware_info = query_host_gpu();
     if let Some(ref hw) = hardware_info {
-        messages.push(format!("✅ GPU detectada: {}", hw));
+        messages.push(format!("✅ GPU detected: {}", hw));
     } else {
         messages.push(
-            "ℹ️ GPU física não detectada ou ambiente em container sem passthrough".to_string(),
+            "ℹ️ Physical GPU not detected or container environment without passthrough".to_string(),
         );
     }
 
-    // 2. Integridade do modelo GGML Q8_0 do stenio-server
+    // 2. Whisper GGML Q8_0 model integrity for stenio-server
     let whisper_model = cache_dir.join("whisper-ggml/ggml-large-v3-turbo-q8_0.bin");
     let whisper_ggml_ok = if whisper_model.is_file() {
         if let Ok(meta) = fs::metadata(&whisper_model) {
             if meta.len() > 800_000_000 {
                 let mb = meta.len() / (1024 * 1024);
                 messages.push(format!(
-                    "✅ Modelo Whisper GGML Q8_0 íntegro no NVMe ({} MB)",
+                    "✅ Whisper GGML Q8_0 model intact on NVMe ({} MB)",
                     mb
                 ));
                 true
             } else {
-                let err = "❌ Modelo Whisper GGML Q8_0 corrompido ou incompleto".to_string();
+                let err = "❌ Whisper GGML Q8_0 model corrupted or incomplete".to_string();
                 messages.push(err.clone());
                 errors.push(err);
                 false
@@ -55,18 +55,18 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
         }
     } else if cache_dir.is_dir() {
         let err = format!(
-            "❌ Modelo Whisper GGML Q8_0 ausente no cache NVMe ({}/whisper-ggml/)",
+            "❌ Whisper GGML Q8_0 model missing in NVMe cache ({}/whisper-ggml/)",
             cache_dir.display()
         );
         messages.push(err.clone());
         errors.push(err);
         false
     } else {
-        messages.push("ℹ️ Host sem cache NVMe montado (modo CI / container)".to_string());
+        messages.push("ℹ️ Host without mounted NVMe cache (CI / container mode)".to_string());
         true
     };
 
-    // 3. Garantia de Ausência de Bloatware Legado (SAM2, PaddleX, CT2)
+    // 3. Assurance of absence of legacy bloatware (SAM2, PaddleX, CT2)
     let mut bloatware_free = true;
     for dead_model in &[
         "sam2",
@@ -78,7 +78,7 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
         if p.exists() {
             bloatware_free = false;
             let err = format!(
-                "❌ Regressão de bloatware: modelo legado '{}' detectado em disco!",
+                "❌ Bloatware regression: legacy model '{}' detected on disk!",
                 dead_model
             );
             messages.push(err.clone());
@@ -86,10 +86,10 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
         }
     }
     if bloatware_free {
-        messages.push("✅ Cache limpo de pesos legados (Zero bloatware)".to_string());
+        messages.push("✅ Cache clean of legacy weights (Zero bloatware)".to_string());
     }
 
-    // 4. Health check do servidor Rust stenio-server (porta 9090)
+    // 4. Health check of stenio-server Rust server (port 9090)
     let server_url = std::env::var("STENIO_SERVER_URL")
         .or_else(|_| std::env::var("WHISPERD_URL"))
         .unwrap_or_else(|_| "http://127.0.0.1:9090".to_string());
@@ -97,12 +97,12 @@ pub fn audit_gpu_subsystem() -> GpuAuditResult {
     let port_str = server_url.rsplit(':').next().unwrap_or("9090");
     if daemon_online {
         messages.push(format!(
-            "✅ Servidor Rust stenio-server ativo e respondendo na porta {}",
+            "✅ Rust server stenio-server active and listening on port {}",
             port_str
         ));
     } else {
         messages.push(format!(
-            "ℹ️ Servidor Rust stenio-server em repouso (offline no momento em {})",
+            "ℹ️ Rust server stenio-server at rest (currently offline at {})",
             server_url
         ));
     }
@@ -136,7 +136,7 @@ fn query_host_gpu() -> Option<String> {
             let total_mb = parts[2];
             let free_mb = parts[3];
             return Some(format!(
-                "{} (Driver {}) | VRAM: {} MiB livres / {} MiB total",
+                "{} (Driver {}) | VRAM: {} MiB free / {} MiB total",
                 name, driver, free_mb, total_mb
             ));
         }

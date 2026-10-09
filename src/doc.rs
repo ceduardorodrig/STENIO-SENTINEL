@@ -96,13 +96,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 if !has_server_field {
                     violations.push(Violation {
                         rule_id: "DOC-SERVICE-MISSING-HOST".to_string(),
-                        rule_name: "Serviço sem Hospedeiro Vinculado".to_string(),
+                        rule_name: "Service Missing Host Binding".to_string(),
                         severity: Severity::Error,
                         file_path: path_display.clone(),
                         line_number: 1,
                         snippet: file_name.to_string(),
-                        message: format!("A documentação do serviço '{}' não declara em qual servidor/host opera.", file_name),
-                        suggestion: Some("Adicione no topo do documento: '**Servidor:** psicopompo|kavure|kuaray|ybytu|ybyra|malha'.".to_string()),
+                        message: format!("Documentation for service '{}' does not declare which server/host it operates on.", file_name),
+                        suggestion: Some("Add at the top of document: '**Server:** psicopompo|kavure|kuaray|ybytu|ybyra|mesh'.".to_string()),
                     });
                 } else if !is_subdoc {
                     // Validar se o servidor citado é um dos nós válidos
@@ -120,13 +120,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     if !found_valid {
                         violations.push(Violation {
                             rule_id: "DOC-SERVICE-INVALID-HOST".to_string(),
-                            rule_name: "Hospedeiro de Serviço Inválido".to_string(),
+                            rule_name: "Invalid Service Host".to_string(),
                             severity: Severity::Warning,
                             file_path: path_display.clone(),
                             line_number: 1,
                             snippet: file_name.to_string(),
-                            message: format!("O servidor declarado em '{}' não foi reconhecido entre os nós do homelab.", file_name),
-                            suggestion: Some("Utilize um dos hosts canônicos: psicopompo, kavure, kuaray, ybytu, ybyra ou malha.".to_string()),
+                            message: format!("The server declared in '{}' was not recognized among homelab nodes.", file_name),
+                            suggestion: Some("Use one of canonical hosts: psicopompo, kavure, kuaray, ybytu, ybyra or mesh.".to_string()),
                         });
                     }
                 }
@@ -143,13 +143,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 {
                     violations.push(Violation {
                         rule_id: "DOC-SERVICE-UNINDEXED".to_string(),
-                        rule_name: "Documentação de Serviço Não Indexada (Órfã)".to_string(),
+                        rule_name: "Unindexed Service Documentation (Orphan)".to_string(),
                         severity: Severity::Warning,
                         file_path: path_display.clone(),
                         line_number: 1,
                         snippet: file_name.to_string(),
-                        message: format!("O serviço '{}' não está catalogado em mnemocine/README.md, homepage.md nem nos servidores.", file_name),
-                        suggestion: Some("Adicione o link do serviço no catálogo oficial em mnemocine/README.md.".to_string()),
+                        message: format!("Service '{}' is not cataloged in mnemocine/README.md, homepage.md or server manifests.", file_name),
+                        suggestion: Some("Add the service link to the official catalog in mnemocine/README.md.".to_string()),
                     });
                 }
             }
@@ -185,13 +185,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                                             if !target_path.exists() {
                                                 violations.push(Violation {
                                                     rule_id: "DOC-SERVER-BROKEN-SERVICE-REF".to_string(),
-                                                    rule_name: "Referência a Serviço Inexistente no Servidor".to_string(),
+                                                    rule_name: "Non-Existent Service Reference on Server".to_string(),
                                                     severity: Severity::Error,
                                                     file_path: path_display.clone(),
                                                     line_number: idx + 1,
                                                     snippet: line.trim().to_string(),
-                                                    message: format!("Servidor referencia serviço inexistente: '{}'.", link),
-                                                    suggestion: Some("Crie o arquivo de documentação em services/ ou remova a referência.".to_string()),
+                                                    message: format!("Server references non-existent service: '{}'.", link),
+                                                    suggestion: Some("Create the documentation file in services/ or remove the reference.".to_string()),
                                                 });
                                             }
                                         }
@@ -234,30 +234,30 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                         let missing = format!(
                             "{}{}{}",
                             if !has_archive {
-                                "[tarball ausente] "
+                                "[missing tarball] "
                             } else {
                                 ""
                             },
                             if !has_sha256 {
-                                "[.sha256 ausente] "
+                                "[missing .sha256] "
                             } else {
                                 ""
                             },
                             if !has_manifest {
-                                "[MANIFEST.md ausente] "
+                                "[missing MANIFEST.md] "
                             } else {
                                 ""
                             }
                         );
                         violations.push(Violation {
                             rule_id: "DOC-COLD-STORAGE-INCOMPLETE".to_string(),
-                            rule_name: "Projeto em Cold Storage Incompleto".to_string(),
+                            rule_name: "Incomplete Cold Storage Project".to_string(),
                             severity: Severity::Error,
                             file_path: format!("projects/cold-storage/{}", project_name),
                             line_number: 1,
                             snippet: project_name.clone(),
-                            message: format!("Cold storage de '{}' está incompleto: {}", project_name, missing.trim()),
-                            suggestion: Some("Gere o arquivo compactado (.tar.zst), checksum .sha256 e MANIFEST.md.".to_string()),
+                            message: format!("Cold storage for '{}' is incomplete: {}", project_name, missing.trim()),
+                            suggestion: Some("Generate compressed archive (.tar.zst), .sha256 checksum, and MANIFEST.md.".to_string()),
                         });
                     }
                 }
@@ -303,13 +303,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     if !has_status {
                         violations.push(Violation {
                             rule_id: "DOC-ADR-MISSING-STATUS".to_string(),
-                            rule_name: "ADR sem Status Formal".to_string(),
+                            rule_name: "ADR Missing Formal Status".to_string(),
                             severity: Severity::Warning,
                             file_path: path_display.clone(),
                             line_number: 1,
                             snippet: doc_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string(),
-                            message: "Registro de Decisão Arquitetural (ADR) não contém status (Aceito/Proposto/Substituído).".to_string(),
-                            suggestion: Some("Adicione a seção ou campo 'Status: Aceito' no topo do ADR.".to_string()),
+                            message: "Architectural Decision Record (ADR) does not contain formal status (Accepted/Proposed/Superseded).".to_string(),
+                            suggestion: Some("Add section or field 'Status: Accepted' at the top of the ADR.".to_string()),
                         });
                     }
                 }
@@ -338,19 +338,19 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                                     };
                                     if !target_path.exists() {
                                         let err_msg = format!(
-                                            "{}: link para '{}' inexistente",
+                                            "{}: link to '{}' not found",
                                             path_display, link_target
                                         );
                                         broken_links.push(err_msg.clone());
                                         violations.push(Violation {
                                             rule_id: "DOC-BROKEN-LINK".to_string(),
-                                            rule_name: "Link Quebrado na Documentação".to_string(),
+                                            rule_name: "Broken Link in Documentation".to_string(),
                                             severity: Severity::Warning,
                                             file_path: path_display.clone(),
                                             line_number: line_idx + 1,
                                             snippet: line.trim().to_string(),
-                                            message: format!("Link aponta para arquivo inexistente: '{}'", link_target),
-                                            suggestion: Some("Corrija o caminho do link ou crie o documento correspondente.".to_string()),
+                                            message: format!("Link points to non-existent file: '{}'", link_target),
+                                            suggestion: Some("Fix the link path or create the corresponding document.".to_string()),
                                         });
                                     }
                                 }
@@ -437,31 +437,31 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
             if !is_valid {
                 let (reason, suggestion) = if has_legacy_vibe {
                     (
-                        "README contém badge ou menção legada a 'vibe-coded' incompatível com a governança atual.",
-                        "Substitua o badge legado por '[![Governance](https://img.shields.io/badge/governance-StenioSentinel-brightgreen)](https://github.com/ceduardorodrig/STENIO-SENTINEL)' e garanta o rodapé 'Human-in-the-Loop Agentic Engineering & Deterministic Governance'.",
+                        "README contains legacy 'vibe-coded' badge or mention incompatible with current governance.",
+                        "Replace legacy badge with '[![Governance](https://img.shields.io/badge/governance-StenioSentinel-brightgreen)](https://github.com/ceduardorodrig/STENIO-SENTINEL)' and ensure the 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' footer.",
                     )
                 } else if !has_modern_title {
                     (
-                        "Disclaimer 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' não encontrado no README.",
-                        "Adicione o bloco padronizado com o disclaimer de governança do Stênio no rodapé do README.md.",
+                        "Disclaimer 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' not found in README.",
+                        "Add the standardized Stenio governance disclaimer block to the footer of README.md.",
                     )
                 } else {
                     (
-                        "Disclaimer incompleto (menção ao autor Carlos Eduardo Rodrigues ou ao StenioSentinel ausente).",
-                        "Garanta que o bloco de governança contenha as referências completas ao StenioSentinel e ao autor.",
+                        "Incomplete disclaimer (missing author Carlos Eduardo Rodrigues or StenioSentinel reference).",
+                        "Ensure the governance block contains full references to StenioSentinel and the author.",
                     )
                 };
 
                 violations.push(Violation {
                     rule_id: "DOC-VIBE-DISCLAIMER".to_string(),
-                    rule_name: "Disclaimer Padronizado de Governança Ausente ou Obsoleto".to_string(),
+                    rule_name: "Missing or Outdated Standard Governance Disclaimer".to_string(),
                     severity: Severity::Error,
                     file_path: path_display,
                     line_number: content.lines().count().max(1),
                     snippet: "Human-in-the-Loop Agentic Engineering & Deterministic Governance".to_string(),
                     message: format!("README '{}': {}", readme_path.display(), reason),
                     suggestion: Some(format!(
-                        "{}\nFormato obrigatório:\n<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",
+                        "{}\nMandatory format:\n<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",
                         suggestion
                     )),
                 });

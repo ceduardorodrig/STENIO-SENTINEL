@@ -97,7 +97,7 @@ struct TailscaleStatus {
     peers: Option<HashMap<String, TailscalePeer>>,
 }
 
-/// Mapeia o papel canônico do nó e shell padrão a partir do seu hostname e OS
+/// Maps canonical node role and default shell from hostname and OS
 fn resolve_node_role(name: &str, os: &str) -> (String, bool, String, String) {
     let lower = name.to_lowercase();
     if lower.contains("psicopompo") {
@@ -109,42 +109,42 @@ fn resolve_node_role(name: &str, os: &str) -> (String, bool, String, String) {
         )
     } else if lower.contains("ybyra") {
         (
-            "Cloud Borda Primária / Nginx Reverse Proxy / SPA".to_string(),
+            "Cloud Primary Edge / Nginx Reverse Proxy / SPA".to_string(),
             true,
             "Ubuntu 24.04".to_string(),
             "bash".to_string(),
         )
     } else if lower.contains("kuaray") {
         (
-            "Multimídia / Home Assistant / Media Server".to_string(),
+            "Multimedia / Home Assistant / Media Server".to_string(),
             true,
             "Linux Mint 22.3".to_string(),
             "bash".to_string(),
         )
     } else if lower.contains("ybytu") {
         (
-            "Cloud Exit Node / DNS Primário (AdGuard)".to_string(),
+            "Cloud Exit Node / Primary DNS (AdGuard)".to_string(),
             true,
             "Ubuntu 24.04".to_string(),
             "bash".to_string(),
         )
     } else if lower.contains("kavure") {
         (
-            "Serviços Dedicados / Zomboid / Sumænimá Docker".to_string(),
+            "Dedicated Services / Zomboid / Sumænimá Docker".to_string(),
             true,
             "Ubuntu 24.04".to_string(),
             "bash".to_string(),
         )
     } else if lower.contains("miracena") {
         (
-            "Estação de Trabalho / Workspace".to_string(),
+            "Workstation / Workspace".to_string(),
             false,
             "Linux".to_string(),
             "bash".to_string(),
         )
     } else if lower.contains("anansi") {
         (
-            "Dispositivo Móvel (Android)".to_string(),
+            "Mobile Device (Android)".to_string(),
             false,
             "Android".to_string(),
             "sh".to_string(),
@@ -156,7 +156,7 @@ fn resolve_node_role(name: &str, os: &str) -> (String, bool, String, String) {
             os.to_string()
         };
         (
-            "Nó da Tailnet Mnemocine".to_string(),
+            "Mnemocine Tailnet Node".to_string(),
             false,
             detected_os,
             "bash".to_string(),
@@ -164,8 +164,8 @@ fn resolve_node_role(name: &str, os: &str) -> (String, bool, String, String) {
     }
 }
 
-/// Descobre dinamicamente TODOS os nós da Tailnet conectada.
-/// É impossível esquecer um nó: qualquer máquina adicionada na malha é detectada automaticamente.
+/// Dynamically discovers ALL nodes in connected Tailnet.
+/// Impossible to miss a node: any machine added to the mesh is automatically detected.
 pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
     let mut nodes = Vec::new();
 
@@ -176,7 +176,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
     if let Ok(out) = output {
         if out.status.success() {
             if let Ok(status) = serde_json::from_slice::<TailscaleStatus>(&out.stdout) {
-                // 1. Adiciona o nó local (Self)
+                // 1. Adds local node (Self)
                 if let Some(self_node) = status.self_node {
                     let name = self_node
                         .host_name
@@ -187,10 +187,10 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
                         .unwrap_or_else(|| "100.82.51.112".to_string());
                     let raw_os = self_node.os.unwrap_or_else(|| "linux".to_string());
                     let node = DynamicNode::from_tailscale(name, ip, &raw_os);
-                    nodes.push((node, true)); // Local sempre online
+                    nodes.push((node, true)); // Local always online
                 }
 
-                // 2. Adiciona todos os peers da Tailnet dinamicamente
+                // 2. Adds all Tailnet peers dynamically
                 if let Some(peers) = status.peers {
                     for (_, peer) in peers {
                         let name = match peer.host_name {
@@ -214,7 +214,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
         }
     }
 
-    // Fallback de segurança se tailscale CLI não estiver no PATH
+    // Safety fallback if tailscale CLI is not in PATH
     if nodes.is_empty() {
         let fallbacks = [
             (
@@ -228,7 +228,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
             (
                 "ybyra",
                 "100.66.224.34",
-                "Cloud Borda Primária / Nginx Reverse Proxy / SPA",
+                "Cloud Primary Edge / Nginx Reverse Proxy / SPA",
                 true,
                 "Ubuntu 24.04",
                 "bash",
@@ -236,7 +236,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
             (
                 "kuaray",
                 "100.94.209.99",
-                "Multimídia / Home Assistant / Media Server",
+                "Multimedia / Home Assistant / Media Server",
                 true,
                 "Linux Mint 22.3",
                 "bash",
@@ -244,7 +244,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
             (
                 "ybytu",
                 "100.115.253.109",
-                "Cloud Exit Node / DNS Primário (AdGuard)",
+                "Cloud Exit Node / Primary DNS (AdGuard)",
                 true,
                 "Ubuntu 24.04",
                 "bash",
@@ -252,7 +252,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
             (
                 "kavure",
                 "100.124.146.77",
-                "Serviços Dedicados / Zomboid / Sumænimá Docker",
+                "Dedicated Services / Zomboid / Sumænimá Docker",
                 true,
                 "Ubuntu 24.04",
                 "bash",
@@ -274,7 +274,7 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
         }
     }
 
-    // Ordena: Servidores principais primeiro, depois ordem alfabética
+    // Sort: Main servers first, then alphabetical order
     nodes.sort_by(|a, b| {
         b.0.is_server
             .cmp(&a.0.is_server)
@@ -284,12 +284,12 @@ pub fn discover_tailscale_nodes() -> Vec<(DynamicNode, bool)> {
     nodes
 }
 
-/// Dispara teste de reachability TCP em paralelo
+/// Triggers parallel TCP reachability testing
 async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
     let start = Instant::now();
     let addr = format!("{}:{}", node.ip, node.port);
 
-    // Timeout de 1500ms para acomodar links remotos de nuvem frios (como ybytu)
+    // 1500ms timeout to accommodate cold cloud remote links (such as ybytu)
     match timeout(Duration::from_millis(1500), TcpStream::connect(&addr)).await {
         Ok(Ok(_)) => {
             let latency = start.elapsed();
@@ -304,17 +304,17 @@ async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
         Ok(Err(e)) => {
             let latency = start.elapsed();
             if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                // Host respondeu com TCP RST (está online na rede, apenas porta fechada)
+                // Host responded with TCP RST (online on network, port closed)
                 NodeStatus {
                     node,
                     is_online: true,
                     latency: Some(latency),
                     tailscale_online,
-                    error_msg: Some("Porta 22 filtrada (Host ativo)".to_string()),
+                    error_msg: Some("Port 22 filtered (Host active)".to_string()),
                 }
             } else if tailscale_online {
-                // Tailscale daemon confirmou que está online via WireGuard
-                NodeStatus::ts_active(node, tailscale_online, "Ativo no Tailscale")
+                // Tailscale daemon confirmed online via WireGuard
+                NodeStatus::ts_active(node, tailscale_online, "Active on Tailscale")
             } else {
                 NodeStatus::offline(node, tailscale_online, e.to_string())
             }
@@ -324,7 +324,7 @@ async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
                 NodeStatus::ts_active(
                     node,
                     tailscale_online,
-                    "Ativo no Tailscale (Porta com timeout)",
+                    "Active on Tailscale (Port timeout)",
                 )
             } else {
                 NodeStatus::offline(node, tailscale_online, "Timeout (>1500ms)")
@@ -333,7 +333,7 @@ async fn probe_node(node: DynamicNode, tailscale_online: bool) -> NodeStatus {
     }
 }
 
-/// Audita todos os nós descobertos dinamicamente em paralelo usando Tokio
+/// Audits all dynamically discovered nodes in parallel using Tokio
 pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
     let discovered = discover_tailscale_nodes();
 
@@ -353,11 +353,11 @@ pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
     results
 }
 
-/// Imprime o relatório visual da malha Homelab no terminal
+/// Prints visual report of the Homelab mesh in terminal
 pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     let badge = format!("[{:.2?}]", total_duration);
     crate::baseline::print_banner_with_badge(
-        "StenioSentinel — Topologia da Malha Tailscale (Mnemocine Homelab)",
+        "StenioSentinel — Tailscale Mesh Topology (Mnemocine Homelab)",
         &badge,
     );
 
@@ -386,7 +386,7 @@ pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
         );
         if let Some(ref err) = res.error_msg {
             if !res.is_online {
-                println!("                  └── Motivo: {}", err.dimmed());
+                println!("                  └── Reason: {}", err.dimmed());
             }
         }
     }
@@ -395,7 +395,7 @@ pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     println!(
         "{}",
         format!(
-            "✨ Malha Homelab: {} de {} nós ativos e conectados",
+            "✨ Homelab Mesh: {} of {} nodes active and connected",
             online_count,
             results.len()
         )

@@ -70,12 +70,13 @@ To ensure semantic consistency across all subcommands, rules, and reports:
 - [x] **Verification Gate:** `cargo test` + `stenio --gate`.
 
 ### Phase 3: Specialized Domain Modules (`v3.9.0-rc`)
-- [ ] Translate `src/ports.rs` (Network ASM output).
-- [ ] Translate `src/health.rs` (Hardware, GPU, disks, Docker health).
-- [ ] Translate `src/gov.rs` (Governance and test artifact audits).
-- [ ] Translate `src/doc.rs` (Markdown link and structure validation).
-- [ ] Translate `src/clean.rs` (Cache and docker hygiene).
-- [ ] Translate `src/remote.rs` (SSH and Tailscale remote probes).
+- [x] Translate `src/ports.rs` (Network ASM output).
+- [x] Translate `src/health.rs` (Hardware, GPU, disks, Docker health).
+- [x] Translate `src/gov.rs` (Governance and test artifact audits).
+- [x] Translate `src/doc.rs` (Markdown link and structure validation).
+- [x] Translate `src/clean.rs` (Cache and docker hygiene).
+- [x] Translate `src/remote.rs` (SSH and Tailscale remote probes).
+- [x] Translate `src/gaming.rs`, `src/mesh.rs`, `src/deploy.rs`, and `src/gpu.rs`.
 
 ### Phase 4: Final Polish & Major Release (`v4.0.0`)
 - [ ] Translate remaining internal source comments and docstrings.

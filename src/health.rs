@@ -7,66 +7,66 @@ use std::time::{Duration, Instant};
 
 pub fn run_system_health() -> Result<()> {
     crate::baseline::print_banner(
-        "StênioKernel — Raio-X de Infraestrutura & Saúde dos Serviços (--health)",
+        "StenioKernel — Infrastructure Health Snapshot & Services Health (--health)",
     );
 
-    // 1. Armazenamento em Disco
+    // 1. Disk Storage
     println!(
         "{}",
-        "── 💾 Armazenamento em Disco ──────────────────────────────────────────".dimmed()
+        "── 💾 Disk Storage ────────────────────────────────────────────────────".dimmed()
     );
-    check_disk_health("/", "Raiz do Sistema");
+    check_disk_health("/", "System Root");
     check_disk_health("/mnt/NVME_PCI", "NVMe PCI (Workspace & Caches)");
     println!();
 
-    // 2. Memória RAM & Swap
+    // 2. RAM Memory & Swap
     println!(
         "{}",
-        "── 🧠 Memória Física & Recursos do Host ───────────────────────────────".dimmed()
+        "── 🧠 Physical Memory & Host Resources ─────────────────────────────────".dimmed()
     );
     check_memory_health();
     println!();
 
-    // 3. GPU & Aceleração Blackwell
+    // 3. GPU & Blackwell Acceleration
     println!(
         "{}",
-        "── ⚡ Aceleração Gráfica & VRAM ───────────────────────────────────────".dimmed()
+        "── ⚡ Graphics Acceleration & VRAM ─────────────────────────────────────".dimmed()
     );
     check_gpu_health();
     println!();
 
-    // 4. Serviços & Conectividade Local
+    // 4. Services & Local Connectivity
     println!(
         "{}",
-        "── 🔌 Serviços do Hub & Portas de Rede ────────────────────────────────".dimmed()
+        "── 🔌 Hub Services & Network Ports ─────────────────────────────────────".dimmed()
     );
-    check_tcp_service("PostgreSQL", "127.0.0.1", 5432, "Banco Relacional SQLx");
+    check_tcp_service("PostgreSQL", "127.0.0.1", 5432, "Relational Database SQLx");
     check_tcp_service(
         "Valkey / Redis",
         "127.0.0.1",
         6379,
-        "Barramento de Eventos & Cache",
+        "Event Bus & Cache",
     );
     check_http_service(
         "stenio-server",
         "http://127.0.0.1:9090",
-        "Servidor Rust Axum + Whisper",
+        "Rust Server Axum + Whisper",
     );
     check_frontend_parity();
     println!();
 
-    // 5. Cadeia Canônica de Backups do Homelab (/mnt/BACKUP)
+    // 5. Canonical Homelab Backup Chain (/mnt/BACKUP)
     println!(
         "{}",
-        "── 🛡️ Cadeia de Backups & Integridade do NAS (/mnt/BACKUP) ────────────".dimmed()
+        "── 🛡️ Backup Chain & NAS Integrity (/mnt/BACKUP) ───────────────────────".dimmed()
     );
     check_backup_chain();
     println!();
 
-    // 6. Malha Tailscale & Heterogeneidade de Sistemas Operacionais
+    // 6. Tailscale Mesh & OS Heterogeneity
     println!(
         "{}",
-        "── 🌐 Malha Tailscale & Sistemas Operacionais (Mnemocine Homelab) ──────".dimmed()
+        "── 🌐 Tailscale Mesh & Operating Systems (Mnemocine Homelab) ───────────".dimmed()
     );
     if let Ok(rt) = tokio::runtime::Runtime::new() {
         let results = rt.block_on(crate::mesh::audit_tailscale_mesh());
@@ -94,32 +94,32 @@ pub fn run_system_health() -> Result<()> {
         }
         println!();
         println!(
-            "   Status da Malha: {} de {} nós ativos e conectados.",
+            "   Mesh Status: {} of {} nodes active and connected.",
             online_count,
             results.len()
         );
     }
     println!();
 
-    // 7. Infraestrutura Docker & Higiene de Imagens
+    // 7. Docker Infrastructure & Image Hygiene
     println!(
         "{}",
-        "── 🐳 Infraestrutura Docker & Higiene de Imagens ──────────────────────".dimmed()
+        "── 🐳 Docker Infrastructure & Image Hygiene ────────────────────────────".dimmed()
     );
     check_docker_health();
     println!();
 
-    // 8. Porteiro das Portas & Superfície de Ataque
+    // 8. Port Gatekeeper & Attack Surface Management
     println!(
         "{}",
-        "── 🚪 Porteiro das Portas & Superfície de Ataque ──────────────────────".dimmed()
+        "── 🚪 Port Gatekeeper & Attack Surface Management ──────────────────────".dimmed()
     );
     check_ports_health();
     println!();
 
     println!(
         "{}",
-        "✨ Diagnóstico concluído. Infraestrutura pronta para operação."
+        "✨ Diagnostic complete. Infrastructure ready for operation."
             .green()
             .bold()
     );
@@ -134,37 +134,37 @@ fn check_backup_chain() {
         println!(
             "   {:<25} - {}",
             "NAS /mnt/BACKUP".bold(),
-            "Não montado ou inacessível".red().bold()
+            "Not mounted or inaccessible".red().bold()
         );
         return;
     }
 
     let targets = [
-        ("configs-homelab", "Espelho Git + Configs de Todos os Nós"),
+        ("configs-homelab", "Git Mirror + Configs of All Nodes"),
         (
             "zomboid-server-kavure",
-            "Dados de Jogo / Saves / Configs (Kavure)",
+            "Game Data / Saves / Configs (Kavure)",
         ),
         ("sumaenima-server-kavure", "Borg Backups / Sumænimá Hub DB"),
         (
             "agentic-ai-server-psicopompo",
-            "Cópia Noturna do Vault Obsidian",
+            "Nightly Obsidian Vault Snapshot",
         ),
         (
             "monitoring-server-kavure",
-            "Métricas Prometheus & Dashboards Grafana",
+            "Prometheus Metrics & Grafana Dashboards",
         ),
     ];
 
     for (folder, desc) in targets {
         let p = backup_dir.join(folder);
         if p.exists() {
-            // Fonte da verdade de freshness = health file do job (/srv/health),
-            // não o mtime do payload (rsync preserva mtime da fonte → falso "velho").
+            // Source of truth for freshness = job health file (/srv/health),
+            // not payload mtime (rsync preserves source mtime -> false "old").
             let host_dir = p.join("psicopompo");
             let mod_time = find_matching_health_file(folder).or_else(|| most_recent_mtime(&p));
             let mod_time = if mod_time.is_none() {
-                // fallback: subdir do host quando o mirror usa {host}/ (configs-homelab)
+                // fallback: host subdir when mirror uses {host}/ (configs-homelab)
                 if host_dir.exists() {
                     most_recent_mtime(&host_dir)
                 } else {
@@ -177,12 +177,12 @@ fn check_backup_chain() {
                 let elapsed_secs = m.elapsed().map(|d| d.as_secs()).unwrap_or(0);
                 let hours = elapsed_secs / 3600;
                 if hours < 24 {
-                    format!("Íntegro (atualizado há {}h)", hours).green().bold()
+                    format!("Intact (updated {}h ago)", hours).green().bold()
                 } else {
-                    format!("Atenção (>{}h sem update)", hours).yellow().bold()
+                    format!("Warning (>{}h without update)", hours).yellow().bold()
                 }
             } else {
-                "Presente".green().bold()
+                "Present".green().bold()
             };
             println!(
                 "   {:<30} - {:<30} [{}]",
@@ -194,15 +194,13 @@ fn check_backup_chain() {
             println!(
                 "   {:<30} - {:<30} [{}]",
                 folder.bold(),
-                "AUSENTE".red().bold(),
+                "MISSING".red().bold(),
                 desc.dimmed()
             );
         }
     }
 
-    // Git push do espelho → GitHub privado mnemocine (off-site versionado).
-    // Antes: token vazio no `gh` do edu → o push falhava SILENCIOSAMENTE desde ~09/2026
-    // (script engole stderr). Canônico 21/09: credential store + token no store sops.
+    // Git push of mirror -> private GitHub mnemocine (versioned off-site).
     let mirror = backup_dir.join("configs-homelab");
     let mirror_synced = Command::new("git")
         .args([
@@ -219,17 +217,17 @@ fn check_backup_chain() {
             let ahead = s.contains("ahead");
             let diverged = behind && ahead;
             if diverged {
-                "DIVERGIDO local×remoto (push manual + timer em conflito)".to_string()
+                "DIVERGED local×remote (manual push + timer conflict)".to_string()
             } else if ahead {
-                "AHEAD — mudanças locais ainda não pushadas (timer 05:55 pendente)".to_string()
+                "AHEAD — local changes not yet pushed (05:55 timer pending)".to_string()
             } else if behind {
-                "BEHIND — remoto tem commits que o local não tem".to_string()
+                "BEHIND — remote has commits not present locally".to_string()
             } else {
-                "SINCRONIZADO com GitHub (push OK)".to_string()
+                "SYNCED with GitHub (push OK)".to_string()
             }
         })
-        .unwrap_or_else(|_| "Não foi possível verificar o git".to_string());
-    let synced_ok = mirror_synced.contains("SINCRONIZADO");
+        .unwrap_or_else(|_| "Could not inspect git".to_string());
+    let synced_ok = mirror_synced.contains("SYNCED");
     println!(
         "   {:<30} - {:<30} [{}]",
         "git push (GitHub)".bold(),
@@ -238,7 +236,7 @@ fn check_backup_chain() {
         } else {
             mirror_synced.yellow().bold()
         },
-        "Off-site versionado".dimmed()
+        "Versioned off-site".dimmed()
     );
 }
 
@@ -316,7 +314,7 @@ fn check_disk_health(path: &str, label: &str) {
                 "   {:<30} [{}] - {}",
                 label.bold(),
                 path.cyan(),
-                "CAMINHO INVÁLIDO".red()
+                "INVALID PATH".red()
             );
             return;
         }
@@ -338,15 +336,15 @@ fn check_disk_health(path: &str, label: &str) {
             let free_gb = free_bytes / (1024.0 * 1024.0 * 1024.0);
 
             let status = if pct > 90.0 {
-                format!("CRÍTICO ({:.0}% usado)", pct).red().bold()
+                format!("CRITICAL ({:.0}% used)", pct).red().bold()
             } else if pct > 75.0 {
-                format!("ALERTA ({:.0}% usado)", pct).yellow().bold()
+                format!("WARNING ({:.0}% used)", pct).yellow().bold()
             } else {
-                format!("SAUDÁVEL ({:.0}% usado)", pct).green().bold()
+                format!("HEALTHY ({:.0}% used)", pct).green().bold()
             };
 
             println!(
-                "   {:<30} [{}] - {:.1} GB livres de {:.1} GB ({})",
+                "   {:<30} [{}] - {:.1} GB free of {:.1} GB ({})",
                 label.bold(),
                 path.cyan(),
                 free_gb,
@@ -361,7 +359,7 @@ fn check_disk_health(path: &str, label: &str) {
         "   {:<30} [{}] - {}",
         label.bold(),
         path.cyan(),
-        "Não foi possível inspecionar".yellow()
+        "Could not inspect".yellow()
     );
 }
 
@@ -385,14 +383,14 @@ fn check_memory_health() {
             let avail_gb = avail_kb / (1024.0 * 1024.0);
 
             let status = if used_pct > 90.0 {
-                format!("{:.1}% em uso", used_pct).red().bold()
+                format!("{:.1}% in use", used_pct).red().bold()
             } else {
-                format!("{:.1}% em uso", used_pct).green().bold()
+                format!("{:.1}% in use", used_pct).green().bold()
             };
 
             println!(
-                "   {:<30} {:.1} GB disponíveis de {:.1} GB ({})",
-                "Memória RAM Total".bold(),
+                "   {:<30} {:.1} GB available of {:.1} GB ({})",
+                "Total RAM Memory".bold(),
                 avail_gb,
                 total_gb,
                 status
@@ -402,8 +400,8 @@ fn check_memory_health() {
     }
     println!(
         "   {:<30} {}",
-        "Memória RAM".bold(),
-        "Não disponível".yellow()
+        "RAM Memory".bold(),
+        "Not available".yellow()
     );
 }
 
@@ -433,7 +431,7 @@ fn check_gpu_health() {
                     let total = parts[2];
                     let free = parts[3];
                     println!(
-                        "   {:<30} {} (Driver {}) | VRAM: {} MiB livres / {} MiB total",
+                        "   {:<30} {} (Driver {}) | VRAM: {} MiB free / {} MiB total",
                         "NVIDIA GPU".bold(),
                         name.cyan().bold(),
                         driver,
@@ -447,8 +445,8 @@ fn check_gpu_health() {
     }
     println!(
         "   {:<30} {}",
-        "GPU Física".bold(),
-        "Não detectada ou sem driver NVIDIA ativo".yellow()
+        "Physical GPU".bold(),
+        "Not detected or no active NVIDIA driver".yellow()
     );
 }
 
@@ -479,7 +477,7 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
             name.bold(),
             port,
             role.dimmed(),
-            "OFFLINE (em repouso)".dimmed()
+            "OFFLINE (idle)".dimmed()
         );
     }
 }
@@ -521,7 +519,7 @@ fn check_http_service(name: &str, url: &str, role: &str) {
         name.bold(),
         ":9090",
         role.dimmed(),
-        "OFFLINE (em repouso)".dimmed()
+        "OFFLINE (idle)".dimmed()
     );
 }
 
@@ -529,12 +527,12 @@ fn check_frontend_parity() {
     let root = std::path::Path::new(".");
     if let Some(parity) = crate::deploy::check_static_parity(root) {
         let status_badge = if parity.in_sync {
-            format!("PARIDADE OK ({})", parity.local_bundle)
+            format!("PARITY OK ({})", parity.local_bundle)
                 .green()
                 .bold()
         } else {
             format!(
-                "DRIFT DETECTADO (local: {}, borda: {})",
+                "DRIFT DETECTED (local: {}, edge: {})",
                 parity.local_bundle, parity.remote_bundle
             )
             .yellow()
@@ -544,7 +542,7 @@ fn check_frontend_parity() {
             "   {:<20} {:<6} [{}] - {}",
             "frontend-v2".bold(),
             ":443",
-            "Borda Ybyra vs Local Build".dimmed(),
+            "Edge Ybyra vs Local Build".dimmed(),
             status_badge
         );
     }
@@ -560,7 +558,7 @@ fn check_docker_health() {
             println!(
                 "   {:<25} - {}",
                 "Docker Daemon".bold(),
-                "Inativo ou não instalado".dimmed()
+                "Inactive or not installed".dimmed()
             );
             return;
         }
@@ -593,7 +591,7 @@ fn check_docker_health() {
             };
 
             println!(
-                "   {:<25} [{:>2} ativos / {:>2} total] - {}",
+                "   {:<25} [{:>2} active / {:>2} total] - {}",
                 format!("Docker {}", row_type).bold(),
                 active.green().bold(),
                 total.white(),
@@ -604,7 +602,7 @@ fn check_docker_health() {
 
     if total_reclaimable > 1024 * 1024 * 1024 {
         println!(
-            "   ⚠️  {} acumulado em imagens órfãs/cache. Dica: use '{}' para limpar.",
+            "   ⚠️  {} accumulated in dangling images/cache. Tip: use '{}' to clean.",
             crate::clean::format_bytes(total_reclaimable)
                 .yellow()
                 .bold(),
@@ -612,7 +610,7 @@ fn check_docker_health() {
         );
     } else {
         println!(
-            "   ✨ Docker higienizado e enxuto ({:.2} MiB recuperável).",
+            "   ✨ Docker sanitized and lean ({:.2} MiB reclaimable).",
             total_reclaimable as f64 / (1024.0 * 1024.0)
         );
     }
@@ -662,12 +660,12 @@ fn check_ports_health() {
 
     if warn_count == 0 {
         println!(
-            "   ✨ {} portas ativas mapeadas. Superfície de ataque 100% conforme ao catálogo canônico.",
+            "   ✨ {} active mapped ports. Attack surface 100% compliant with canonical catalog.",
             open_count.to_string().green().bold()
         );
     } else {
         println!(
-            "   ⚠️  {} portas ativas ({} anomalia(s) ou bind 0.0.0.0 detectados). Use '{}' para auditar.",
+            "   ⚠️  {} active ports ({} anomaly/anomalies or 0.0.0.0 bind detected). Use '{}' to audit.",
             open_count.to_string().yellow().bold(),
             warn_count.to_string().red().bold(),
             "stenio --ports".cyan().bold()

@@ -1,6 +1,6 @@
 [package]
 name = "stenio-sentinel"
-version = "3.9.0-beta"
+version = "3.9.0-rc"
 edition = "2024"
 description = "Sub-millisecond static governance engine, anti-bypass quality gate, and architectural integrity sentinel for AI coding agents written in Rust 2024."
 license = "MIT OR Apache-2.0"

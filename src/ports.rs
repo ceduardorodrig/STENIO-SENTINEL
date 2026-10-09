@@ -38,7 +38,7 @@ pub enum PortClassification {
     SecurityExposureWarning,
 }
 
-/// Carrega o Catálogo Canônico de Portas a partir de mnemocine/network/ports.md
+/// Loads the Canonical Port Catalog from mnemocine/network/ports.md
 pub fn load_port_catalog(root: &Path) -> Vec<PortEntry> {
     let candidates = [
         root.join("mnemocine/network/ports.md"),
@@ -59,7 +59,7 @@ pub fn load_port_catalog(root: &Path) -> Vec<PortEntry> {
     fallback_catalog()
 }
 
-/// Faz o parsing da tabela Markdown de portas
+/// Parses the Markdown ports table
 fn parse_markdown_catalog(content: &str) -> Vec<PortEntry> {
     let mut entries = Vec::new();
     let mut current_host = "psicopompo".to_string();
@@ -94,7 +94,7 @@ fn parse_markdown_catalog(content: &str) -> Vec<PortEntry> {
                     (raw_port_proto.as_str(), "tcp")
                 };
 
-                // Suporta portas com vírgula (ex: 80, 443)
+                // Supports comma-separated ports (e.g. 80, 443)
                 for p_sub in port_str.split(',') {
                     if let Ok(p_num) = p_sub.trim().parse::<u16>() {
                         entries.push(PortEntry {
@@ -115,7 +115,7 @@ fn parse_markdown_catalog(content: &str) -> Vec<PortEntry> {
     entries
 }
 
-/// Fallback canônico embutido caso o arquivo de catálogo não seja encontrado
+/// Embedded canonical fallback in case the catalog file is not found
 fn fallback_catalog() -> Vec<PortEntry> {
     vec![
         PortEntry {
@@ -124,7 +124,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "100.82.51.112:9090".into(),
             service: "steniorec (Axum/Whisper)".into(),
-            justification: "Inferência GPU de áudio e streaming STT".into(),
+            justification: "GPU inference for audio and STT streaming".into(),
             doc_link: "mnemocine/network/service-topology.md".into(),
         },
         PortEntry {
@@ -133,7 +133,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "127.0.0.1 / 100.82.51.112".into(),
             service: "Syncthing Web GUI".into(),
-            justification: "Interface administrativa do Syncthing".into(),
+            justification: "Syncthing administrative web interface".into(),
             doc_link: "mnemocine/backups/".into(),
         },
         PortEntry {
@@ -142,7 +142,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp,udp".into(),
             bind: "LAN / tailscale0".into(),
             service: "Syncthing Sync".into(),
-            justification: "Sincronização de dados entre nós".into(),
+            justification: "Node-to-node data synchronization".into(),
             doc_link: "mnemocine/backups/".into(),
         },
         PortEntry {
@@ -151,7 +151,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp,udp".into(),
             bind: "LAN / tailscale0".into(),
             service: "NFSv4 Server".into(),
-            justification: "Compartilhamento de arquivos do NAS".into(),
+            justification: "NAS file sharing".into(),
             doc_link: "mnemocine/network/nfs.md".into(),
         },
         PortEntry {
@@ -160,7 +160,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "tailscale0".into(),
             service: "Glances".into(),
-            justification: "Telemetria de recursos".into(),
+            justification: "Resource telemetry".into(),
             doc_link: "mnemocine/network/service-topology.md".into(),
         },
         PortEntry {
@@ -169,7 +169,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "tailscale0".into(),
             service: "Node Exporter".into(),
-            justification: "Métricas Prometheus".into(),
+            justification: "Prometheus metrics".into(),
             doc_link: "mnemocine/services/".into(),
         },
         PortEntry {
@@ -178,7 +178,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "100.124.146.77".into(),
             service: "PostgreSQL (sae-core_db)".into(),
-            justification: "Banco de dados relacional".into(),
+            justification: "Relational database".into(),
             doc_link: "mnemocine/services/database.md".into(),
         },
         PortEntry {
@@ -187,7 +187,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "100.124.146.77".into(),
             service: "Valkey (sae-core_valkey)".into(),
-            justification: "Cache e mensageria de eventos".into(),
+            justification: "Cache and event messaging".into(),
             doc_link: "mnemocine/services/valkey.md".into(),
         },
         PortEntry {
@@ -196,13 +196,13 @@ fn fallback_catalog() -> Vec<PortEntry> {
             proto: "tcp".into(),
             bind: "100.124.146.77".into(),
             service: "sae-core_api".into(),
-            justification: "API Core do Sumænimá Hub".into(),
+            justification: "Sumænimá Hub Core API".into(),
             doc_link: "mnemocine/services/core-api.md".into(),
         },
     ]
 }
 
-/// Escaneia sockets ouvindo ativamente na máquina local via ss
+/// Scans actively listening sockets on local machine via ss
 pub fn scan_local_active_sockets() -> Vec<ActiveSocket> {
     let output = match Command::new("ss").args(["-Htlpn"]).output() {
         Ok(o) if o.status.success() => o,
@@ -213,7 +213,7 @@ pub fn scan_local_active_sockets() -> Vec<ActiveSocket> {
     parse_ss_output(&stdout)
 }
 
-/// Faz o parsing da saída tabular do comando ss (-Htlpn ou -tlpn)
+/// Parses tabular output of ss command (-Htlpn or -tlpn)
 pub fn parse_ss_output(stdout: &str) -> Vec<ActiveSocket> {
     let mut sockets = Vec::new();
     for line in stdout.lines() {
@@ -223,7 +223,7 @@ pub fn parse_ss_output(stdout: &str) -> Vec<ActiveSocket> {
         }
         let cols: Vec<&str> = trimmed.split_whitespace().collect();
         if cols.len() >= 4 {
-            // No ss -Htlpn ou -tlpn com State Recv-Q Send-Q Local Address:Port Peer Address:Port
+            // In ss -Htlpn or -tlpn with State Recv-Q Send-Q Local Address:Port Peer Address:Port
             let addr_col = if cols[0] == "LISTEN" && cols.len() >= 4 {
                 cols[3]
             } else if cols.len() >= 4 && cols[0].starts_with("tcp") || cols[0].starts_with("udp") {
@@ -293,7 +293,7 @@ fn render_active_socket(
     catalog_map: &HashMap<u16, Vec<&PortEntry>>,
     alerts_count: &mut usize,
 ) {
-    let proc_label = sock.process.as_deref().unwrap_or("sistema / docker").cyan();
+    let proc_label = sock.process.as_deref().unwrap_or("system / docker").cyan();
     let entries_for_port = catalog_map.get(&sock.port);
     let node_entry = entries_for_port.and_then(|v| v.iter().find(|e| e.host == node_name));
 
@@ -322,7 +322,7 @@ fn render_active_socket(
                 format!("{}/{}", sock.port, sock.proto).yellow().bold(),
                 sock.ip.red().bold(),
                 entry.service.white().bold(),
-                "⚠️ BIND 0.0.0.0 NÃO AUTORIZADO".red().bold(),
+                "⚠️ UNAUTHORIZED BIND 0.0.0.0".red().bold(),
                 entry.doc_link.dimmed(),
             );
         } else {
@@ -331,7 +331,7 @@ fn render_active_socket(
                 format!("{}/{}", sock.port, sock.proto).green().bold(),
                 sock.ip.dimmed(),
                 entry.service.white().bold(),
-                "CONFORME".green().bold(),
+                "COMPLIANT".green().bold(),
                 entry.doc_link.dimmed(),
             );
         }
@@ -341,8 +341,8 @@ fn render_active_socket(
             format!("{}/{}", sock.port, sock.proto).dimmed(),
             sock.ip.dimmed(),
             proc_label,
-            "LOCALHOST / DEV TEMPORÁRIO".dimmed(),
-            "Não exposto à rede externa".dimmed(),
+            "LOCALHOST / TEMPORARY DEV".dimmed(),
+            "Not exposed to external network".dimmed(),
         );
     } else if node_name == "psicopompo"
         && (sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863)
@@ -352,14 +352,14 @@ fn render_active_socket(
             format!("{}/{}", sock.port, sock.proto).blue(),
             sock.ip.dimmed(),
             proc_label,
-            "CLIENTE / DESKTOP EFÊMERO".blue(),
-            "Uso de aplicação local".dimmed(),
+            "CLIENT / EPHEMERAL DESKTOP".blue(),
+            "Local application usage".dimmed(),
         );
     } else if node_name != "psicopompo" && (sock.port > 30000 || sock.port == 22) {
         let label = if sock.port == 22 {
             "SSH DAEMON"
         } else {
-            "CLIENTE / DESKTOP EFÊMERO"
+            "CLIENT / EPHEMERAL DESKTOP"
         };
         print_port_table_row(
             indent,
@@ -367,7 +367,7 @@ fn render_active_socket(
             sock.ip.dimmed(),
             proc_label,
             label.blue(),
-            "Acesso de gestão / aplicação".dimmed(),
+            "Management / application access".dimmed(),
         );
     } else {
         *alerts_count += 1;
@@ -376,8 +376,8 @@ fn render_active_socket(
             format!("{}/{}", sock.port, sock.proto).red().bold(),
             sock.ip.yellow().bold(),
             proc_label,
-            "PORTA ÓRFÃ NÃO CATALOGADA".red().bold(),
-            "Cadastrar em mnemocine/network/ports.md".yellow(),
+            "UNCATALOGED ORPHAN PORT".red().bold(),
+            "Register in mnemocine/network/ports.md".yellow(),
         );
     }
 }
@@ -395,17 +395,17 @@ fn render_offline_ports<T>(
                 format!("{}/{}", entry.port, entry.proto).dimmed(),
                 entry.bind.dimmed(),
                 entry.service.dimmed(),
-                "EM REPOUSO / OFFLINE".dimmed(),
+                "IDLE / OFFLINE".dimmed(),
                 entry.doc_link.dimmed(),
             );
         }
     }
 }
 
-/// Executa a auditoria completa do Porteiro das Portas (Attack Surface Management)
+/// Runs full Port Gatekeeper audit (Attack Surface Management)
 pub async fn run_ports_audit(root: &Path) -> Result<()> {
     crate::baseline::print_banner(
-        "StênioKernel — Porteiro das Portas & Superfície de Ataque (--ports)",
+        "StenioKernel — Port Gatekeeper & Attack Surface Management (--ports)",
     );
 
     let catalog = load_port_catalog(root);
@@ -416,17 +416,17 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         catalog_map.entry(entry.port).or_default().push(entry);
     }
 
-    // ── 1. Auditoria do Host Local (Psicopompo) ──────────────────────────────
+    // ── 1. Local Host Audit (Psicopompo) ─────────────────────────────────────
     println!(
         "{}",
-        "── 🛡️ Host Local: Psicopompo (100.82.51.112) — Sockets Ativos & Conformidade ──".dimmed()
+        "── 🛡️ Local Host: Psicopompo (100.82.51.112) — Active Sockets & Compliance ──".dimmed()
     );
 
     let mut active_ports_found = HashMap::new();
     let mut alerts_count = 0;
 
     for sock in &local_sockets {
-        // Evita duplicatas de bind IPv4/IPv6 idênticas
+        // Avoid duplicate identical IPv4/IPv6 binds
         if active_ports_found.contains_key(&sock.port) {
             continue;
         }
@@ -435,15 +435,15 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         render_active_socket("   ", sock, "psicopompo", &catalog_map, &mut alerts_count);
     }
 
-    // Listar portas catalogadas que estão em repouso (offline)
+    // List cataloged ports that are idle (offline)
     render_offline_ports("   ", &catalog, "psicopompo", &active_ports_found);
 
     println!();
 
-    // ── 2. Auditoria Remota na Malha Tailscale & SSH Deep Inspection ──────────
+    // ── 2. Remote Homelab Nodes Audit via Tailscale & SSH ────────────────────
     println!(
         "{}",
-        "── 🌐 Auditoria Remota dos Nós Homelab via Tailscale & SSH ─────────────".dimmed()
+        "── 🌐 Remote Homelab Nodes Audit via Tailscale & SSH ─────────────────────".dimmed()
     );
 
     let remote_nodes = [
@@ -456,12 +456,12 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     for (node_name, ip) in remote_nodes {
         println!(
             "   [{}] {} ({})",
-            "NÓ".cyan().bold(),
+            "NODE".cyan().bold(),
             node_name.bold(),
             ip.dimmed()
         );
 
-        // 1. Tentar SSH para raio-X completo interno com detecção de re-auth Tailscale
+        // 1. Try SSH for internal health snapshot with Tailscale re-auth detection
         let outcome =
             crate::remote::run_ssh(node_name, "sudo -n ss -Htlpn 2>/dev/null || ss -Htlpn", 4);
 
@@ -490,30 +490,30 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                         );
                     }
 
-                    // Reportar portas catalogadas em repouso no nó remoto
+                    // Report cataloged ports at rest on remote node
                     render_offline_ports("      ", &catalog, node_name, &node_active_ports);
                 }
             }
             crate::remote::RemoteOutcome::AuthRequired { ref auth_url, .. } => {
                 println!(
                     "      ⚠️  {} {}",
-                    "AUTENTICAÇÃO TAILSCALE SSH NECESSÁRIA:".yellow().bold(),
+                    "TAILSCALE SSH AUTHENTICATION REQUIRED:".yellow().bold(),
                     auth_url.cyan().underline().bold()
                 );
                 println!(
                     "         {}",
-                    "👉 Abra o link acima no navegador para autorizar o acesso SSH a este nó."
+                    "👉 Open the link above in your browser to authorize SSH access to this node."
                         .dimmed()
                 );
             }
             _ => {}
         }
 
-        // 2. Se o SSH não respondeu ou falhou, fallback transparente para TCP Probing
+        // 2. If SSH is unresponsive or failed, transparent fallback to TCP Probing
         if !ssh_success {
             println!(
                 "      {}",
-                "ℹ️  SSH indisponível ou pendente — executando TCP Probing direto via Tailnet..."
+                "ℹ️  SSH unavailable or pending — running direct TCP probing via Tailnet..."
                     .dimmed()
             );
 
@@ -529,12 +529,12 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                             let lat = t0.elapsed();
                             format!(
                                 "{} ({:.1}ms)",
-                                "ABERTA / ONLINE".green().bold(),
+                                "OPEN / ONLINE".green().bold(),
                                 lat.as_secs_f64() * 1000.0
                             )
                         }
-                        Ok(Err(_e)) => "FECHADA / REPOUSO".dimmed().to_string(),
-                        Err(_) => "TIMEOUT / BLOQUEADA".yellow().dimmed().to_string(),
+                        Ok(Err(_e)) => "CLOSED / IDLE".dimmed().to_string(),
+                        Err(_) => "TIMEOUT / BLOCKED".yellow().dimmed().to_string(),
                     };
 
                 println!(
@@ -556,13 +556,13 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     if alerts_count == 0 {
         println!(
             "{}",
-            "✨ Superfície de ataque 100% mapeada e conforme ao catálogo de portas."
+            "✨ Attack surface 100% mapped and compliant with the port catalog."
                 .green()
                 .bold()
         );
     } else {
         println!(
-            "⚠️  Foram detectadas {} anomalia(s) ou portas não catalogadas. Revise a tabela acima.",
+            "⚠️  Detected {} anomaly/anomalies or uncataloged ports. Review the table above.",
             alerts_count.to_string().yellow().bold()
         );
     }
@@ -570,3 +570,4 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
 
     Ok(())
 }
+

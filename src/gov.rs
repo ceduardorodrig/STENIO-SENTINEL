@@ -197,7 +197,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     let skill_md = path.join("SKILL.md");
                     if !skill_md.is_file() {
                         skill_errors
-                            .push(format!("❌ Skill '{}': SKILL.md não encontrado", dir_name));
+                            .push(format!("❌ Skill '{}': SKILL.md not found", dir_name));
                         continue;
                     }
 
@@ -209,7 +209,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
                         if !has_name || !has_desc || !has_comp || !has_tools {
                             skill_errors.push(format!(
-                                "❌ Skill '{}': metadados incompletos no frontmatter",
+                                "❌ Skill '{}': incomplete frontmatter metadata",
                                 dir_name
                             ));
                         } else {
@@ -222,7 +222,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
 
         if skill_errors.is_empty() && total_skills > 0 {
             messages.push(format!(
-                "✅ Todas as {} skills em skills/ com manifesto SKILL.md íntegro",
+                "✅ All {} skills in skills/ have valid SKILL.md manifests",
                 valid_skills
             ));
         } else {
@@ -233,11 +233,11 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         }
     }
 
-    // Auditoria de Artefatos Residuais de Teste (Regra 3 do AGENTS.md)
+    // Leftover Test Artifact Audit (AGENTS.md Rule 3)
     let leftover_artifacts = audit_leftover_test_artifacts(repo_root);
     if leftover_artifacts.is_empty() {
         messages.push(
-            "✅ Nenhum artefato residual de teste (*.bak, *.tmp, scratch_*) detectado".to_string(),
+            "✅ Zero leftover test artifacts (*.bak, *.tmp, scratch_*) detected".to_string(),
         );
     } else {
         for err in &leftover_artifacts {
@@ -246,11 +246,11 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         }
     }
 
-    // Auditoria de Convenção de Nomenclatura de Pastas (lowercase, kebab-case)
+    // Directory Naming Convention Audit (lowercase, kebab-case)
     let naming_warnings = audit_directory_casing(repo_root);
     if naming_warnings.is_empty() {
         messages.push(
-            "✅ Nomenclatura de pastas conforme com o padrão (lowercase, kebab-case)".to_string(),
+            "✅ Directory naming compliant with standard (lowercase, kebab-case)".to_string(),
         );
     } else {
         for w in &naming_warnings {
@@ -343,7 +343,7 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
                 .display()
                 .to_string();
             artifact_errors.push(format!(
-                "❌ [GOV-LEFTOVER-TEST-ARTIFACTS] Artefato residual de teste/rascunho detectado: '{}'. Violação da Regra 3 do AGENTS.md (arquivos de teste devem ser limpos após a tarefa).",
+                "❌ [GOV-LEFTOVER-TEST-ARTIFACTS] Leftover test/scratch artifact detected: '{}'. Violation of AGENTS.md Rule 3 (test artifacts must be cleaned up after task completion).",
                 rel_path
             ));
         }
@@ -352,8 +352,8 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
     artifact_errors
 }
 
-/// Auditoria de Convenção de Nomenclatura de Pastas (agent-conventions.md: lowercase, kebab-case).
-/// Detecta pastas com letras maiúsculas no workspace (ex: SUMAENIMA-HUB, STIRPS-PETRI) que violam o padrão.
+/// Directory Naming Convention Audit (agent-conventions.md: lowercase, kebab-case).
+/// Detects directories with uppercase letters in workspace that violate the standard.
 pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation> {
     let mut violations = Vec::new();
     let walker = ignore::WalkBuilder::new(repo_root)
@@ -377,7 +377,7 @@ pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation>
             None => continue,
         };
 
-        // Ignora diretórios ocultos (.git, .github, etc.) e caches de build
+        // Ignore hidden directories (.git, .github, etc.) and build caches
         if dir_name.starts_with('.')
             || dir_name == "node_modules"
             || dir_name == "target"
@@ -386,7 +386,7 @@ pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation>
             continue;
         }
 
-        // Se o nome do diretório contiver letras maiúsculas
+        // If directory name contains uppercase letters
         if dir_name.chars().any(|c| c.is_ascii_uppercase()) {
             let rel_path = path
                 .strip_prefix(repo_root)
@@ -398,17 +398,17 @@ pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation>
 
             violations.push(crate::engine::Violation {
                 rule_id: "GOV-NAMING-KEBAB-CASE".to_string(),
-                rule_name: "Convenção de Nomenclatura de Pastas (kebab-case)".to_string(),
+                rule_name: "Directory Naming Convention (kebab-case)".to_string(),
                 severity: crate::rule::Severity::Warning,
                 file_path: rel_path,
                 line_number: 1,
-                snippet: format!("Pasta: {}", dir_name),
+                snippet: format!("Directory: {}", dir_name),
                 message: format!(
-                    "Pasta '{}' contém letras maiúsculas. O padrão do homelab em governance/agent-conventions.md exige 'lowercase, kebab-case'.",
+                    "Directory '{}' contains uppercase letters. Homelab standard in governance/agent-conventions.md mandates 'lowercase, kebab-case'.",
                     dir_name
                 ),
                 suggestion: Some(format!(
-                    "Considere padronizar o nome da pasta para '{}'.",
+                    "Consider standardizing directory name to '{}'.",
                     suggested_kebab
                 )),
             });

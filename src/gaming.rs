@@ -2,50 +2,50 @@ use anyhow::Result;
 use colored::*;
 use std::process::Command;
 
-/// ── stênio --gaming — Raio-X de Gaming Health (sessão-aware) ───────────────
+/// ── stenio --gaming — Gaming Health Snapshot (session-aware) ───────────────
 ///
-/// Inventário canônico de otimizações de gaming do psicopompo, com fonte por item:
+/// Canonical inventory of gaming optimizations for psicopompo, with source per item:
 ///   - CachyOS wiki  → https://wiki.cachyos.org/configuration/gaming/
 ///   - ArchWiki      → https://wiki.archlinux.org/title/Gaming
 ///   - Hyprland wiki → https://wiki.hypr.land/
-/// Canonizado em 21/09/2026 (ver mnemocine/guides/hyprland-noctalia-guide.md).
+/// Canonized on 21/09/2026 (see mnemocine/guides/hyprland-noctalia-guide.md).
 pub fn run_gaming_health() -> Result<()> {
-    crate::baseline::print_banner("StênioKernel — Raio-X de Gaming Health (--gaming)");
+    crate::baseline::print_banner("StenioKernel — Gaming Health Snapshot (--gaming)");
 
-    // 0. Sessão ativa (define quais checks compositor se aplicam)
+    // 0. Active session (determines applicable compositor checks)
     println!(
         "{}",
-        "── 🖥️  Sessão ativa (Hyprland vs KDE) ────────────────────────────────".dimmed()
+        "── 🖥️  Active Session (Hyprland vs KDE) ────────────────────────────────".dimmed()
     );
     let session = detect_session();
     match session.as_str() {
         "Hyprland" => {
             println!(
                 "   {:<34} [{}]",
-                "Sessão".bold(),
+                "Session".bold(),
                 "Hyprland (Wayland)".green().bold()
             );
             println!(
-                "   {:<34} KWin-equivalent: Hyprland compõe via scanout opt-in",
+                "   {:<34} KWin-equivalent: Hyprland composes via opt-in scanout",
                 "Compositor".bold()
             );
         }
         "KDE" => {
             println!(
                 "   {:<34} [{}]",
-                "Sessão".bold(),
+                "Session".bold(),
                 "KDE Plasma (Wayland)".cyan().bold()
             );
             println!(
-                "   {:<34} KWin compõe SEMPRE (sem direct scanout → SM funciona)",
+                "   {:<34} KWin ALWAYS composes (no direct scanout -> SM works)",
                 "Compositor".bold()
             );
         }
         _ => {
             println!(
                 "   {:<34} {}",
-                "Sessão".bold(),
-                format!("{} (check compositor desativado)", session).yellow()
+                "Session".bold(),
+                format!("{} (compositor check disabled)", session).yellow()
             );
         }
     }
@@ -59,57 +59,57 @@ pub fn run_gaming_health() -> Result<()> {
     check_dmemcg_stack(&session);
     println!();
 
-    // 2. Scanout do Hyprland (jogos NÃO passam pelo compositor em fullscreen)
+    // 2. Hyprland Direct Scanout (minimal latency in fullscreen)
     println!(
         "{}",
-        "── ⚡ Scanout direto do Hyprland (latência mínima em fullscreen) ──────".dimmed()
+        "── ⚡ Hyprland Direct Scanout (minimal latency in fullscreen) ─────────".dimmed()
     );
     if session == "Hyprland" {
         check_hyprland_scanout();
     } else {
         println!(
-            "   {:<34} KWin compõe sempre — scanout não se aplica (SM ok nativo)",
+            "   {:<34} KWin always composes — scanout not applicable (SM natively ok)",
             "direct_scanout".bold()
         );
         check_kde_tearing();
     }
     println!();
 
-    // 3. Gaming stack (launch options / profil por jogo / DLSS)
+    // 3. Gaming stack (launch options / profile per game / DLSS)
     println!(
         "{}",
-        "── 🕹️  Stack de Gaming (launch options, VRAM cgroup, Wayland, DLSS) ───".dimmed()
+        "── 🕹️  Gaming Stack (launch options, VRAM cgroup, Wayland, DLSS) ───────".dimmed()
     );
     check_gaming_stack();
     println!();
 
-    // 4. Núcleo / kernel (CachyOS-BORE, NTSYNC, ReBAR, clocksource)
+    // 4. Core & Kernel (CachyOS-BORE, NTSYNC, ReBAR, clocksource)
     println!(
         "{}",
-        "── 🧠 Núcleo & Kernel (CachyOS BORE, NTSYNC, ReBAR, clocksource) ────".dimmed()
+        "── 🧠 Core & Kernel (CachyOS BORE, NTSYNC, ReBAR, clocksource) ────────".dimmed()
     );
     check_kernel_gaming();
     println!();
 
-    // 5. Performance do CPU (game-performance on-demand)
+    // 5. CPU Performance (on-demand game-performance)
     println!(
         "{}",
-        "── 🚀 Performance do CPU (game-performance on-demand) ────────────────".dimmed()
+        "── 🚀 CPU Performance (on-demand game-performance) ────────────────────".dimmed()
     );
     check_game_performance();
     println!();
 
-    // 6. Shader cache + avisos informativos (sem alterar nada)
+    // 6. Shader cache & informational notices
     println!(
         "{}",
-        "── 💾 Shader cache & avisos informativos ─────────────────────────────".dimmed()
+        "── 💾 Shader Cache & Informational Notices ─────────────────────────────".dimmed()
     );
     check_shader_cache_warnings();
     println!();
 
     println!(
         "{}",
-        "✨ Gaming health verificado. Nada quebrado, nada alterado."
+        "✨ Gaming health verified. Nothing broken, nothing altered."
             .green()
             .bold()
     );
@@ -117,7 +117,7 @@ pub fn run_gaming_health() -> Result<()> {
     Ok(())
 }
 
-/// Detecta a sessão ativa via XDG_CURRENT_DESKTOP + WAYLAND_DISPLAY.
+/// Detects active session via XDG_CURRENT_DESKTOP + WAYLAND_DISPLAY.
 fn detect_session() -> String {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if desktop.to_lowercase().contains("hyprland") {
@@ -127,7 +127,7 @@ fn detect_session() -> String {
     } else if !desktop.is_empty() {
         desktop
     } else {
-        "desconhecida".to_string()
+        "unknown".to_string()
     }
 }
 
@@ -154,7 +154,7 @@ fn check_status(label: &str, ok: bool, ok_msg: &str, fail_msg: &str) {
 }
 
 fn check_dmemcg_stack(_session: &str) {
-    // a) controlador dmem disponível? (CachyOS kernel CONFIG_CGROUP_DMEM)
+    // a) dmem controller available? (CachyOS kernel CONFIG_CGROUP_DMEM)
     let has_dmem = Command::new("sh")
         .args([
             "-c",
@@ -167,24 +167,24 @@ fn check_dmemcg_stack(_session: &str) {
     check_status(
         "dmem controller (cgroup v2)",
         has_dmem,
-        "PRESENTE no kernel CachyOS",
-        "AUSENTE — kernel sem CONFIG_CGROUP_DMEM",
+        "PRESENT in CachyOS kernel",
+        "MISSING — kernel without CONFIG_CGROUP_DMEM",
     );
 
-    // b) serviços do stack VRAM
+    // b) VRAM stack services
     let sys_boost = service_active(true, "dmemcg-booster-system");
     let user_boost = service_active(false, "dmemcg-booster-user");
     let hlf_boost = service_active(false, "hyprland-focused-booster");
-    check_status("dmemcg-booster-system", sys_boost, "ativo", "INATIVO");
-    check_status("dmemcg-booster-user", user_boost, "ativo", "INATIVO");
+    check_status("dmemcg-booster-system", sys_boost, "active", "INACTIVE");
+    check_status("dmemcg-booster-user", user_boost, "active", "INACTIVE");
     check_status(
         "hyprland-focused-booster",
         hlf_boost,
-        "ativo (boost janela focada)",
-        "INATIVO",
+        "active (focused window boost)",
+        "INACTIVE",
     );
 
-    // c) teste funcional: janela focada com dmem.low alto (8G), backgrounds 0
+    // c) functional test: focused window with high dmem.low (8G), backgrounds 0
     let functional = Command::new("sh")
         .args([
             "-c",
@@ -201,14 +201,14 @@ fn check_dmemcg_stack(_session: &str) {
                 .unwrap_or(0)
         })
         .unwrap_or(0);
-    let boosted = max_low > 1_000_000_000; // >1GB de dmem.low na janela mais alta
+    let boosted = max_low > 1_000_000_000; // >1GB dmem.low on highest window
     let ok_msg = format!(
-        "ativo (máx ~{:.1} GB de VRAM protegida)",
+        "active (max ~{:.1} GB protected VRAM)",
         max_low as f64 / 1e9
     );
-    let fail_msg = format!("INATIVO (máx {} B — booster não elevou dmem.low)", max_low);
+    let fail_msg = format!("INACTIVE (max {} B — booster did not raise dmem.low)", max_low);
     check_status(
-        "Boost funcional (dmem.low janela focada)",
+        "Functional Boost (focused window dmem.low)",
         boosted,
         &ok_msg,
         &fail_msg,
@@ -216,7 +216,7 @@ fn check_dmemcg_stack(_session: &str) {
 }
 
 fn check_hyprland_scanout() {
-    // a) direct_scanout = 2 (auto — ativa com content type 'game')
+    // a) direct_scanout = 2 (auto — activates for content 'game')
     let ds = Command::new("hyprctl")
         .args(["getoption", "render:direct_scanout"])
         .stdin(std::process::Stdio::null())
@@ -228,15 +228,15 @@ fn check_hyprland_scanout() {
     check_status(
         "direct_scanout (Hyprland)",
         ds_ok,
-        "= 2 (auto: ativa p/ content 'game')",
+        "= 2 (auto: activates for content 'game')",
         format!(
-            "≠ 2 — atual: {}",
+            "≠ 2 — current: {}",
             ds_str.lines().next().unwrap_or("?").trim()
         )
         .as_str(),
     );
 
-    // b) windowrule marca jogos como content = 'game' (gatilho do scanout)
+    // b) windowrule marks games as content = 'game' (scanout trigger)
     let wr = Command::new("sh")
         .args([
             "-c",
@@ -245,13 +245,13 @@ fn check_hyprland_scanout() {
         .stdin(std::process::Stdio::null())
         .status();
     check_status(
-        "Windowrule content='game' (gatilho scanout)",
+        "Windowrule content='game' (scanout trigger)",
         wr.map(|s| s.success()).unwrap_or(false),
-        "presente — jogos registrados como game",
-        "AUSENTE — scanout auto nunca ativa",
+        "present — games registered as game",
+        "MISSING — auto scanout never triggers",
     );
 
-    // c) VRR (misc.vrr) — baixo lag em fullscreen de jogo
+    // c) VRR (misc.vrr) — low lag in fullscreen game
     let vrr = Command::new("hyprctl")
         .args(["getoption", "misc:vrr"])
         .stdin(std::process::Stdio::null())
@@ -262,14 +262,14 @@ fn check_hyprland_scanout() {
     check_status(
         "VRR (misc:vrr)",
         vrr_str.contains("int: 3") || vrr_str.contains("int: 1"),
-        "fullscreen de jogo (VRR)",
-        "off/informativo",
+        "fullscreen game (VRR)",
+        "off/informational",
     );
 }
 
 fn check_kde_tearing() {
-    // KWin não tem direct scanout agressivo: composição sempre → SM ok nativo.
-    // Checamos apenas se o tearing/VRR do Plasma está em modo jogo (informativo).
+    // KWin does not have aggressive direct scanout: composition always -> SM ok natively.
+    // Check if Plasma tearing/VRR is in game mode (informational).
     let vrr_plasma = Command::new("kscreen-doctor")
         .args(["-o"])
         .stdin(std::process::Stdio::null())
@@ -277,18 +277,18 @@ fn check_kde_tearing() {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
         .unwrap_or_default();
     check_status(
-        "KWin composição (Smooth Motion)",
+        "KWin composition (Smooth Motion)",
         true,
-        "sempre ativa — SM funciona nativo",
+        "always active — SM functions natively",
         "-",
     );
     if vrr_plasma.contains("automatic") {
-        println!("   {:<34} VRR automático (KDE) detectado", "VRR".bold());
+        println!("   {:<34} Automatic VRR (KDE) detected", "VRR".bold());
     }
 }
 
 fn check_gaming_stack() {
-    // a) steam-launch-options status (0 divergências = configs aplicadas)
+    // a) steam-launch-options status (0 discrepancies = configs applied)
     let status = Command::new("steam-launch-options")
         .arg("status")
         .stdin(std::process::Stdio::null())
@@ -300,11 +300,11 @@ fn check_gaming_stack() {
     check_status(
         "steam-launch-options sync",
         sync_ok,
-        "0 divergências (36 jogos aplicados)",
-        "DIVERGÊNCIAS — rode 'steam-launch-options sync'",
+        "0 discrepancies (36 games applied)",
+        "DISCREPANCIES — run 'steam-launch-options sync'",
     );
 
-    // b) VRAM cgroup em todos os jogos (systemd-run --user --scope no VDF)
+    // b) VRAM cgroup on all games (systemd-run --user --scope in VDF)
     let vdf = std::fs::read_to_string(
         "/home/edu/.local/share/Steam/userdata/115099278/config/localconfig.vdf",
     );
@@ -315,18 +315,18 @@ fn check_gaming_stack() {
     check_status(
         "VRAM cgroup (systemd-run --scope)",
         vram_count >= 36,
-        format!("{} ocorrências (36 jogos)", vram_count).as_str(),
-        format!("APENAS {} — nem todo jogo com VRAM boost", vram_count).as_str(),
+        format!("{} occurrences (36 games)", vram_count).as_str(),
+        format!("ONLY {} — not all games have VRAM boost", vram_count).as_str(),
     );
     check_status(
         "Wayland (PROTON_ENABLE_WAYLAND=1)",
         wayland_count >= 36,
-        format!("{} ocorrências", wayland_count).as_str(),
-        format!("APENAS {} — jogos sem wayland", wayland_count).as_str(),
+        format!("{} occurrences", wayland_count).as_str(),
+        format!("ONLY {} — games without Wayland", wayland_count).as_str(),
     );
 
-    // c) Smooth Motion + gamescope: quais jogos usam (dinâmico, fonte real
-    //    = games.toml [jogo→perfil] × profiles.toml [perfil→options], nomes via list)
+    // c) Smooth Motion + gamescope: which games use it (dynamic, real source
+    //    = games.toml [game->profile] x profiles.toml [profile->options])
     let name_map = game_names_from_list();
     let games = load_games();
     let profiles = load_profiles();
@@ -353,32 +353,32 @@ fn check_gaming_stack() {
         }
     }
     check_status(
-        "Smooth Motion (por jogo)",
+        "Smooth Motion (per game)",
         !sm_games.is_empty(),
         &sm_games.join(", "),
-        "nenhum jogo configurado com SM",
+        "no games configured with SM",
     );
     check_status(
-        "Gamescope (por jogo)",
+        "Gamescope (per game)",
         !gs_games.is_empty(),
         &gs_games.join(", "),
-        "nenhum jogo configurado com gamescope",
+        "no games configured with gamescope",
     );
 
-    // d) DLSS upgrade global (environment.d)
+    // d) Global DLSS upgrade (environment.d)
     let env_gaming = std::fs::read_to_string("/home/edu/.config/environment.d/gaming.conf");
     let env_body = env_gaming.unwrap_or_default();
     let dlss_ok = env_body.contains("PROTON_DLSS_UPGRADE=1");
     check_status(
-        "DLSS upgrade global",
+        "Global DLSS upgrade",
         dlss_ok,
         "PROTON_DLSS_UPGRADE=1 (environment.d)",
-        "AUSENTE no gaming.conf",
+        "MISSING in gaming.conf",
     );
 }
 
 fn check_kernel_gaming() {
-    // a) kernel CachyOS BORE
+    // a) CachyOS BORE kernel
     let uname = Command::new("uname")
         .arg("-r")
         .stdin(std::process::Stdio::null())
@@ -389,7 +389,7 @@ fn check_kernel_gaming() {
         "Kernel",
         uname.contains("cachyos"),
         format!("{} (CachyOS-BORE)", uname).as_str(),
-        format!("{} (não-CachyOS)", uname).as_str(),
+        format!("{} (non-CachyOS)", uname).as_str(),
     );
 
     // b) NTSYNC (kernel + dev)
@@ -409,7 +409,7 @@ fn check_kernel_gaming() {
             }
         )
         .as_str(),
-        "AUSENTE",
+        "MISSING",
     );
 
     // c) ReBAR (Resizable BAR)
@@ -419,10 +419,10 @@ fn check_kernel_gaming() {
         "ReBAR (Resizable BAR)",
         rebar_ok,
         "nvidia.NVreg_EnableResizableBar=1",
-        "AUSENTE no cmdline",
+        "MISSING in cmdline",
     );
 
-    // d) clocksource TSC (menos overhead que HPET)
+    // d) clocksource TSC (less overhead than HPET)
     let tsc = Command::new("sh")
         .args([
             "-c",
@@ -435,11 +435,11 @@ fn check_kernel_gaming() {
     check_status(
         "Clocksource",
         tsc == "tsc",
-        "tsc (mais rápido que HPET/acpi_pm)",
-        format!("{} (HPET limita clock_gettime)", tsc).as_str(),
+        "tsc (faster than HPET/acpi_pm)",
+        format!("{} (HPET limits clock_gettime)", tsc).as_str(),
     );
 
-    // e) vm.max_map_count (informativo: Proton considera 1048576 suficiente)
+    // e) vm.max_map_count (informational: Proton treats 1048576 as sufficient)
     let mm = Command::new("sysctl")
         .args(["-n", "vm.max_map_count"])
         .stdin(std::process::Stdio::null())
@@ -450,14 +450,12 @@ fn check_kernel_gaming() {
         "   {:<34} {} ({})",
         "vm.max_map_count".bold(),
         mm.cyan(),
-        "Proton trata 1048576 como suficiente — SteamOS usa 2147483642 (opcional)".dimmed()
+        "Proton considers 1048576 sufficient — SteamOS uses 2147483642 (optional)".dimmed()
     );
 }
 
 fn check_game_performance() {
-    // Verificação ESTÁTICA (sem efeito colateral): o wrapper game-performance
-    // deve existir e estar presente na launch line de todos os jogos (mesmo
-    // objetivo do teste dinâmico anterior, sem piscar o power profile).
+    // Static check: game-performance wrapper must exist and be on launch lines
     let binary_ok = Command::new("sh")
         .args(["-c", "command -v game-performance >/dev/null 2>&1"])
         .stdin(std::process::Stdio::null())
@@ -465,10 +463,10 @@ fn check_game_performance() {
         .map(|s| s.success())
         .unwrap_or(false);
     check_status(
-        "game-performance (binário)",
+        "game-performance (binary)",
         binary_ok,
-        "presente no PATH",
-        "AUSENTE — wrapper CachyOS não instalado",
+        "present in PATH",
+        "MISSING — CachyOS wrapper not installed",
     );
 
     let vdf = std::fs::read_to_string(
@@ -479,10 +477,10 @@ fn check_game_performance() {
         .matches("systemd-run --user --scope game-performance")
         .count();
     check_status(
-        "game-performance (nos jogos)",
+        "game-performance (in games)",
         in_all_games >= 36,
-        format!("presente na launch line de {} jogos", in_all_games).as_str(),
-        format!("só em {} jogos — nem todo jogo com wrapper", in_all_games).as_str(),
+        format!("present in launch line of {} games", in_all_games).as_str(),
+        format!("only in {} games — not all games have wrapper", in_all_games).as_str(),
     );
 
     let ppd = Command::new("sh")
@@ -494,8 +492,8 @@ fn check_game_performance() {
     check_status(
         "power-profiles-daemon",
         ppd,
-        "powerprofilesctl presente",
-        "AUSENTE — game-performance não consegue subir profile",
+        "powerprofilesctl present",
+        "MISSING — game-performance cannot raise profile",
     );
 }
 
@@ -508,26 +506,25 @@ fn check_shader_cache_warnings() {
         "Shader cache NVIDIA (12GB)",
         sc_ok,
         "__GL_SHADER_DISK_CACHE_SIZE=12000000000",
-        "AUSENTE — recompila shaders toda hora (stutter)",
+        "MISSING — recompiles shaders frequently (stutter)",
     );
 
-    // b) Avisos informativos (NÃO altera nada — decisão do dono)
+    // b) Informational notices (does NOT alter anything — user discretion)
     println!(
         "   {:<34} {}",
         "kernel.split_lock_mitigate".bold(),
-        "informativo: 0 melhora certos jogos Wine (ArchWiki) — não alterado".dimmed()
+        "informational: 0 improves certain Wine games (ArchWiki) — not altered".dimmed()
     );
     println!(
         "   {:<34} {}",
         "Shader pre-caching (Steam)".bold(),
-        "informativo: desligado manualmente no Steam (CachyOS wiki recomenda)".dimmed()
+        "informational: manually disabled in Steam (recommended by CachyOS wiki)".dimmed()
     );
 }
 
-// ── Helpers: fonte real do mapeamento jogo → perfil → flags ────────────────
-// games.toml define o perfil de cada jogo; profiles.toml define o options de
-// cada perfil. Cruzando os dois sabemos QUAIS jogos usam SM/gamescope — sem
-// hardcode de nome/quantidade (dinâmico: muda sozinho ao editar os TOMLs).
+// ── Helpers: real source of game -> profile -> flags mapping ────────────────
+// games.toml defines the profile of each game; profiles.toml defines profile options.
+// Cross-referencing both tells us WHICH games use SM/gamescope dynamically.
 
 #[derive(Debug)]
 struct GameEntry {

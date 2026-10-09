@@ -15,10 +15,10 @@ pub enum CleanCategory {
 impl CleanCategory {
     pub fn label(&self) -> &'static str {
         match self {
-            CleanCategory::RustTarget => "Build Rust",
-            CleanCategory::TempJunk => "Arquivo Temporário",
-            CleanCategory::Cache => "Cache Descartável",
-            CleanCategory::Docker => "Docker Descartável",
+            CleanCategory::RustTarget => "Rust Build",
+            CleanCategory::TempJunk => "Temporary File",
+            CleanCategory::Cache => "Disposable Cache",
+            CleanCategory::Docker => "Disposable Docker",
         }
     }
 }
@@ -41,7 +41,7 @@ pub struct CleanReport {
     pub duration: std::time::Duration,
 }
 
-/// Formata bytes em formato legível humano (B, KiB, MiB, GiB)
+/// Formats bytes into human-readable format (B, KiB, MiB, GiB)
 pub fn format_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
@@ -54,7 +54,7 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Calcula o tamanho total de um diretório recursivamente
+/// Calculates total size of a directory recursively
 pub fn dir_size(path: &Path) -> u64 {
     let mut total = 0;
     if let Ok(entries) = fs::read_dir(path) {
@@ -72,7 +72,7 @@ pub fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// Verifica se um arquivo é considerado lixo temporário por nome/extensão
+/// Checks if a file is considered temporary junk by name/extension
 fn is_temp_file(name: &str) -> bool {
     name.ends_with('~')
         || name.ends_with(".swp")
@@ -88,7 +88,7 @@ fn is_temp_file(name: &str) -> bool {
         || (name.ends_with(".pyc") || name.ends_with(".pyo"))
 }
 
-/// Converte strings de tamanho do Docker (ex: "1.849GB (52%)", "5.583MB", "117.5MB", "9.106kB") em bytes
+/// Converts Docker size strings (e.g. "1.849GB (52%)", "5.583MB", "117.5MB", "9.106kB") to bytes
 pub fn parse_docker_size(size_str: &str) -> u64 {
     let clean = size_str.split('(').next().unwrap_or("").trim();
     if clean.is_empty() || clean == "0B" {
@@ -122,7 +122,7 @@ pub fn parse_docker_size(size_str: &str) -> u64 {
     }
 }
 
-/// Executa a varredura e higienização inteligente do workspace
+/// Executes workspace scanning and smart hygiene
 pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> {
     let t0 = Instant::now();
     let mut items = Vec::new();
@@ -131,7 +131,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
     let clean_docker = mode == "docker" || mode == "safe" || mode == "all";
     let deep_target_wipe = mode == "all" || mode == "targets";
 
-    // ── 1. Localização e Limpeza de Pastas target/ Rust ─────────────────────
+    // ── 1. Locate and Clean Rust target/ Directories ────────────────────
     if clean_targets {
         let mut walker = ignore::WalkBuilder::new(root);
         walker
@@ -145,7 +145,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
             let p = entry.path();
             let path_str = p.to_string_lossy();
 
-            // Proteção contra .git
+            // Protection against .git
             if path_str.contains("/.git/") || path_str.ends_with("/.git") {
                 continue;
             }
@@ -153,7 +153,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
             if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                 if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
                     if name == "target" {
-                        // Confirma se é um target de Cargo (pasta irmã tem Cargo.toml)
+                        // Confirm if it is a Cargo target (parent directory has Cargo.toml)
                         let parent = p.parent().unwrap_or(root);
                         if parent.join("Cargo.toml").is_file() {
                             let rel = p
@@ -163,7 +163,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                 .to_string();
 
                             if deep_target_wipe {
-                                // Limpeza total do target/
+                                // Total target/ cleanup
                                 let sz = dir_size(p);
                                 if sz > 0 {
                                     items.push(CleanItem {
@@ -172,12 +172,12 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes: sz,
                                         is_dir: true,
                                         category: CleanCategory::RustTarget,
-                                        description: "Árvore completa de build Rust (target/)"
+                                        description: "Complete Rust build tree (target/)"
                                             .to_string(),
                                     });
                                 }
                             } else {
-                                // Modo safe: limpa target/debug e target/incremental, preservando target/release
+                                // Safe mode: cleans target/debug and target/incremental, preserving target/release
                                 let debug_dir = p.join("debug");
                                 if debug_dir.is_dir() {
                                     let sz = dir_size(&debug_dir);
@@ -188,7 +188,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Artefatos de compilação debug"
+                                            description: "Debug compilation artifacts"
                                                 .to_string(),
                                         });
                                     }
@@ -204,7 +204,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Cache de compilação incremental"
+                                            description: "Incremental compilation cache"
                                                 .to_string(),
                                         });
                                     }
@@ -220,7 +220,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Documentação HTML gerada (rustdoc)"
+                                            description: "Generated HTML documentation (rustdoc)"
                                                 .to_string(),
                                         });
                                     }
@@ -233,7 +233,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
         }
     }
 
-    // ── 2. Localização e Limpeza de Arquivos Temporários e Caches ───────────
+    // ── 2. Locate and Clean Temporary Files and Caches ───────────
     if clean_temps {
         let mut walker = ignore::WalkBuilder::new(root);
         walker
@@ -251,7 +251,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                 continue;
             }
 
-            // Ignora ambientes virtuais Python e dependências Node
+            // Ignore Python virtual environments and Node dependencies
             if path_str.contains("/.venv/")
                 || path_str.contains("/venv/")
                 || path_str.contains("/node_modules/")
@@ -259,7 +259,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                 continue;
             }
 
-            // Não varrer dentro de pastas target/ já tratadas
+            // Do not scan inside already handled target/ directories
             if path_str.contains("/target/") {
                 continue;
             }
@@ -273,9 +273,9 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
             if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                 if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
                     let desc = if name == "__pycache__" && !path_str.contains("/.venv/") {
-                        Some("Bytecode Python em cache (__pycache__)")
+                        Some("Cached Python bytecode (__pycache__)")
                     } else if name == ".pytest_cache" {
-                        Some("Cache do executor de testes Pytest")
+                        Some("Pytest test runner cache")
                     } else {
                         None
                     };
@@ -301,7 +301,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                             bytes: sz,
                             is_dir: false,
                             category: CleanCategory::TempJunk,
-                            description: "Arquivo temporário residual".to_string(),
+                            description: "Residual temporary file".to_string(),
                         });
                     }
                 }
@@ -309,7 +309,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
         }
     }
 
-    // ── 2.5. Localização de Desperdício Docker (Imagens órfãs, containers e cache) ──
+    // ── 2.5. Locate Docker Waste (Dangling images, containers, and build cache) ──
     if clean_docker {
         if let Ok(output) = std::process::Command::new("docker")
             .args(["system", "df", "--format", "{{json .}}"])
@@ -341,7 +341,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         is_dir: false,
                                         category: CleanCategory::Docker,
                                         description: format!(
-                                            "Imagens Docker descartáveis ({}/{} ativas)",
+                                            "Disposable Docker images ({}/{} active)",
                                             active, total
                                         ),
                                     });
@@ -354,7 +354,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         is_dir: false,
                                         category: CleanCategory::Docker,
                                         description: format!(
-                                            "Containers finalizados ({}/{} ativos)",
+                                            "Stopped containers ({}/{} active)",
                                             active, total
                                         ),
                                     });
@@ -366,7 +366,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes,
                                         is_dir: false,
                                         category: CleanCategory::Docker,
-                                        description: "Cache intermediário de builds Docker"
+                                        description: "Intermediate Docker build cache"
                                             .to_string(),
                                     });
                                 }
@@ -379,7 +379,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
         }
     }
 
-    // ── 3. Remoção Física (quando não for dry-run) ──────────────────────────
+    // ── 3. Physical Removal (when not dry-run) ──────────────────────────
     let total_bytes: u64 = items.iter().map(|i| i.bytes).sum();
 
     if !dry_run {
@@ -418,29 +418,29 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
     })
 }
 
-/// Renderiza o relatório visual da zeladoria no terminal
+/// Renders the visual hygiene report in the terminal
 pub fn print_clean_report(report: &CleanReport) {
     let badge = format!("[{:?}]", report.duration);
     crate::baseline::print_banner_with_badge(
-        "StenioSentinel (Clean Engine v3.1.0) — Zeladoria e Higiene Inteligente",
+        "StenioSentinel (Clean Engine v3.1.0) — Smart Workspace Hygiene",
         &badge,
     );
 
     let mode_desc = match report.mode.as_str() {
-        "targets" => "Build Targets Rust",
-        "temp" => "Arquivos Temporários e Caches",
-        "docker" => "Higiene do Ecossistema Docker (Imagens + Containers + Cache)",
-        "all" => "Limpeza Profunda Total (Targets + Caches + Temporários + Docker)",
-        _ => "Modo Seguro (Debug/Incremental + Temporários + Docker Prune)",
+        "targets" => "Rust Build Targets",
+        "temp" => "Temporary Files and Caches",
+        "docker" => "Docker Ecosystem Hygiene (Images + Containers + Cache)",
+        "all" => "Total Deep Clean (Targets + Caches + Temporary + Docker)",
+        _ => "Safe Mode (Debug/Incremental + Temporary + Docker Prune)",
     };
 
     println!(
-        "Modo: {} | Status: {}",
+        "Mode: {} | Status: {}",
         mode_desc.yellow().bold(),
         if report.dry_run {
-            "SIMULAÇÃO (Dry Run)".yellow().bold()
+            "SIMULATION (Dry Run)".yellow().bold()
         } else {
-            "EXECUÇÃO REAL".green().bold()
+            "LIVE EXECUTION".green().bold()
         }
     );
     println!();
@@ -448,7 +448,7 @@ pub fn print_clean_report(report: &CleanReport) {
     if report.items.is_empty() {
         println!(
             "{}",
-            "✨ O workspace já está 100% limpo! Zero lixo acumulado encontrado."
+            "✨ The workspace is already 100% clean! Zero accumulated junk found."
                 .green()
                 .bold()
         );
@@ -458,7 +458,7 @@ pub fn print_clean_report(report: &CleanReport) {
 
     println!(
         "{}",
-        "Itens catalogados para higienização (ordenados por tamanho):".bold()
+        "Cataloged items for hygiene (sorted by size):".bold()
     );
     let mut sorted_items = report.items.clone();
     sorted_items.sort_by(|a, b| b.bytes.cmp(&a.bytes));
@@ -471,7 +471,7 @@ pub fn print_clean_report(report: &CleanReport) {
             println!(
                 "  {}",
                 format!(
-                    "... e mais {} itens menores ({})",
+                    "... and {} smaller items ({})",
                     remaining,
                     format_bytes(remaining_bytes)
                 )
@@ -505,27 +505,27 @@ pub fn print_clean_report(report: &CleanReport) {
 
     if report.dry_run {
         println!(
-            "🔍 Total recuperável: {} em {} item(ns).",
+            "🔍 Total reclaimable: {} across {} item(s).",
             format_bytes(report.total_bytes).green().bold(),
             report.items.len().to_string().yellow().bold()
         );
         println!(
             "{}",
-            "💡 Modo Dry Run ativo: Nenhum arquivo foi excluído fisicamente.".yellow()
+            "💡 Dry Run mode active: No files were physically deleted.".yellow()
         );
         println!(
-            "   Para efetivar a limpeza e recuperar espaço, rode: {}",
+            "   To execute cleanup and reclaim space, run: {}",
             format!("stenio --clean {}", report.mode).cyan().bold()
         );
     } else {
         println!(
-            "🧹 Espaço recuperado com sucesso: {} em {} item(ns).",
+            "🧹 Space successfully reclaimed: {} across {} item(s).",
             format_bytes(report.total_bytes).green().bold(),
             report.items.len().to_string().yellow().bold()
         );
         println!(
             "{}",
-            "✨ Higienização concluída! Workspace pronto e enxuto."
+            "✨ Hygiene complete! Workspace lean and ready."
                 .green()
                 .bold()
         );

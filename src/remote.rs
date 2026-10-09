@@ -2,7 +2,7 @@ use colored::*;
 use regex::Regex;
 use std::process::{Command, Stdio};
 
-/// Argumentos universais padronizados para SSH não-interativo no ecossistema Tailscale / Homelab
+/// Standardized universal non-interactive SSH arguments for the Tailscale / Homelab ecosystem
 pub const CANONICAL_SSH_OPTS: &[&str] = &[
     "-o",
     "ConnectTimeout=3",
@@ -16,18 +16,18 @@ pub const CANONICAL_SSH_OPTS: &[&str] = &[
     "ServerAliveCountMax=1",
 ];
 
-/// Resultado semântico estruturado de uma operação remota
+/// Structured semantic outcome of a remote operation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteOutcome {
-    /// Executado com êxito (stdout capturado)
+    /// Executed successfully (stdout captured)
     Success(String),
-    /// Requer autenticação interativa / renovação de check web no Tailscale SSH
+    /// Requires interactive authentication / web check renewal in Tailscale SSH
     AuthRequired { node: String, auth_url: String },
-    /// A conexão expirou dentro do tempo limite
+    /// Connection timed out within the limit
     Timeout { node: String, timeout_secs: u64 },
-    /// Falha de conexão ou nó inacessível
+    /// Connection failure or unreachable node
     Unreachable { node: String, reason: String },
-    /// Falha na execução do comando remoto
+    /// Failed remote command execution
     Failed {
         node: String,
         exit_code: Option<i32>,
@@ -40,15 +40,15 @@ impl RemoteOutcome {
         matches!(self, RemoteOutcome::Success(_))
     }
 
-    /// Exibe no terminal a notificação com formatação visual Sumænimá
+    /// Prints status notification to the terminal with styled formatting
     pub fn print_status(&self, action_label: &str) {
         match self {
             RemoteOutcome::Success(_) => {
-                println!("  ✅ {} concluído com sucesso.", action_label.green());
+                println!("  ✅ {} completed successfully.", action_label.green());
             }
             RemoteOutcome::AuthRequired { node, auth_url } => {
                 println!(
-                    "  🔑 {} no nó '{}' requer renovação de credencial Tailscale SSH:",
+                    "  🔑 {} on node '{}' requires Tailscale SSH credential renewal:",
                     action_label.yellow().bold(),
                     node.cyan().bold()
                 );
@@ -56,7 +56,7 @@ impl RemoteOutcome {
             }
             RemoteOutcome::Timeout { node, timeout_secs } => {
                 println!(
-                    "  ⏳ {} no nó '{}' atingiu timeout após {}s.",
+                    "  ⏳ {} on node '{}' timed out after {}s.",
                     action_label.yellow(),
                     node.cyan(),
                     timeout_secs
@@ -64,7 +64,7 @@ impl RemoteOutcome {
             }
             RemoteOutcome::Unreachable { node, reason } => {
                 println!(
-                    "  ⚠️  Nó '{}' inacessível para {}: {}",
+                    "  ⚠️  Node '{}' unreachable for {}: {}",
                     node.cyan(),
                     action_label,
                     reason.dimmed()
@@ -79,7 +79,7 @@ impl RemoteOutcome {
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "?".to_string());
                 println!(
-                    "  ❌ Falha ao executar {} no nó '{}' (exit {}): {}",
+                    "  ❌ Failed to execute {} on node '{}' (exit {}): {}",
                     action_label,
                     node.cyan(),
                     code_str.red(),
@@ -90,13 +90,13 @@ impl RemoteOutcome {
     }
 }
 
-/// Extrai a URL de autenticação do Tailscale SSH se presente na saída de erro
+/// Extracts Tailscale SSH authentication URL if present in error output
 pub fn extract_tailscale_auth_url(output_str: &str) -> Option<String> {
     let re = Regex::new(r#"https://login\.tailscale\.com/a/[a-zA-Z0-9]+"#).ok()?;
     re.find(output_str).map(|m| m.as_str().to_string())
 }
 
-/// Constrói um comando SSH padronizado não-interativo com as flags canônicas
+/// Constructs a standardized non-interactive SSH command with canonical flags
 pub fn build_ssh_command(node: &str, remote_cmd: &str) -> Command {
     let mut cmd = Command::new("ssh");
     for opt in CANONICAL_SSH_OPTS {
@@ -108,7 +108,7 @@ pub fn build_ssh_command(node: &str, remote_cmd: &str) -> Command {
     cmd
 }
 
-/// Executa um comando SSH com proteção ativa contra hangs de autenticação
+/// Executes an SSH command with active protection against authentication hangs
 pub fn run_ssh(node: &str, remote_cmd: &str, timeout_secs: u64) -> RemoteOutcome {
     let mut cmd = build_ssh_command(node, remote_cmd);
     cmd.stdout(Stdio::piped());
@@ -117,9 +117,9 @@ pub fn run_ssh(node: &str, remote_cmd: &str, timeout_secs: u64) -> RemoteOutcome
     execute_command_with_detection(cmd, node, timeout_secs)
 }
 
-/// Executa sincronização atômica via rsync com SSH canônico e detecção Tailscale
+/// Executes atomic rsync synchronization using canonical SSH and Tailscale detection
 pub fn run_rsync(src: &str, dest: &str, timeout_secs: u64) -> RemoteOutcome {
-    let node = dest.split(':').next().unwrap_or("remoto").to_string();
+    let node = dest.split(':').next().unwrap_or("remote").to_string();
     let ssh_opts_str = format!("ssh {}", CANONICAL_SSH_OPTS.join(" "));
 
     let mut cmd = Command::new("rsync");
@@ -137,7 +137,7 @@ pub fn run_rsync(src: &str, dest: &str, timeout_secs: u64) -> RemoteOutcome {
     execute_command_with_detection(cmd, &node, timeout_secs + 2)
 }
 
-/// Executa o comando e faz o parsing semântico de erros de rede e do Tailscale SSH
+/// Executes command and performs semantic parsing of network and Tailscale SSH errors
 fn execute_command_with_detection(
     mut cmd: Command,
     node: &str,
@@ -157,7 +157,7 @@ fn execute_command_with_detection(
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}\n{}", stdout, stderr);
 
-    // 1. Detecção de autenticação exigida pelo Tailscale SSH
+    // 1. Detection of required Tailscale SSH authentication
     if let Some(auth_url) = extract_tailscale_auth_url(&combined) {
         return RemoteOutcome::AuthRequired {
             node: node.to_string(),
@@ -165,7 +165,7 @@ fn execute_command_with_detection(
         };
     }
 
-    // 2. Detecção de timeout de I/O ou conexão
+    // 2. I/O or connection timeout detection
     if combined.contains("io timeout")
         || combined.contains("Operation timed out")
         || combined.contains("Connection timed out")
@@ -176,7 +176,7 @@ fn execute_command_with_detection(
         };
     }
 
-    // 3. Sucesso ou falha de comando
+    // 3. Command success or failure
     if output.status.success() {
         RemoteOutcome::Success(stdout)
     } else {
