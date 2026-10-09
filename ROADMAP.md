@@ -6,7 +6,7 @@ tags: [meta, governance, roadmap, canon]
 
 > **Target Version:** `v4.0.0` (Major Release)  
 > **Language Tier:** Tier A (Public Open Source) — see [language-policy.md](../language-policy.md)  
-> **Status:** Planned / Approved (Phase 0 Foundations Active)
+> **Status:** Released / Completed (v4.0.0)
 
 ---
 
