@@ -354,6 +354,14 @@ pub async fn audit_tailscale_mesh() -> Vec<NodeStatus> {
 }
 
 /// Prints visual report of the Homelab mesh in terminal
+/// Formats a mesh latency for the status badge (`TS-OK` when unknown).
+pub fn format_latency(latency: Option<Duration>) -> String {
+    match latency {
+        Some(l) => format!("{:.1}ms", l.as_secs_f64() * 1000.0),
+        None => "TS-OK".to_string(),
+    }
+}
+
 pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     let badge = format!("[{:.2?}]", total_duration);
     crate::baseline::print_banner_with_badge(
@@ -365,10 +373,7 @@ pub fn print_mesh_report(results: &[NodeStatus], total_duration: Duration) {
     for res in results {
         let status_badge = if res.is_online {
             online_count += 1;
-            let lat_str = match res.latency {
-                Some(l) => format!("{:.1}ms", l.as_secs_f64() * 1000.0),
-                None => "TS-OK".to_string(),
-            };
+            let lat_str = format_latency(res.latency);
             format!("● ONLINE [{}]", lat_str).green().bold()
         } else {
             "○ OFFLINE".red().bold()

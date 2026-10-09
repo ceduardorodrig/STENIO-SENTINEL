@@ -122,6 +122,12 @@ pub fn rust_units(source: &str, min_tokens: usize) -> Vec<AstUnit> {
     units
 }
 
+/// Structural units with at least this many tokens are blocking `Error`s;
+/// smaller ones stay `Warning`. Adaptive severity: substantial structural
+/// duplication blocks delivery, idiomatic short patterns stay visible without
+/// impeding work (ARCH-DRY-DUPLICATION stays non-impeditive).
+const AST_ERROR_TOKENS: usize = 40;
+
 /// Detects identical structural units (Type-1) shared by two or more files.
 pub fn detect_ast_duplication(
     files: &[(String, Vec<AstUnit>)],
@@ -149,7 +155,11 @@ pub fn detect_ast_duplication(
         violations.push(Violation {
             rule_id: "ARCH-DRY-DUPLICATION".to_string(),
             rule_name: "Code Duplication (DRY Principle)".to_string(),
-            severity: Severity::Warning,
+            severity: if u1.tokens >= AST_ERROR_TOKENS {
+                Severity::Error
+            } else {
+                Severity::Warning
+            },
             file_path: p1.to_string(),
             line_number: u1.start_line,
             snippet: format!("L{}-L{} ({} tokens)", u1.start_line, u1.end_line, u1.tokens),

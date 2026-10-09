@@ -74,10 +74,7 @@ pub fn run_system_health() -> Result<()> {
         for res in &results {
             let status_badge = if res.is_online {
                 online_count += 1;
-                let lat_str = match res.latency {
-                    Some(l) => format!("{:.1}ms", l.as_secs_f64() * 1000.0),
-                    None => "TS-OK".to_string(),
-                };
+                let lat_str = crate::mesh::format_latency(res.latency);
                 format!("ONLINE ({})", lat_str).green().bold()
             } else {
                 "OFFLINE".red().bold()
@@ -424,7 +421,7 @@ fn check_gpu_health() {
         if out.status.success() {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if let Some(first_line) = stdout.lines().next() {
-                let parts: Vec<&str> = first_line.split(',').map(|s| s.trim()).collect();
+                let parts = crate::util::csv_fields(first_line);
                 if parts.len() >= 4 {
                     let name = parts[0];
                     let driver = parts[1];

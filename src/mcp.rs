@@ -461,10 +461,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
 }
 
 fn format_violation_line(v: &Violation) -> String {
-    let sev = match v.severity {
-        Severity::Error => "ERROR",
-        Severity::Warning => "WARN",
-    };
+    let sev = crate::util::severity_label(v.severity);
     format!(
         "[{}] {}:{}: [{}] {} (💡 {})",
         sev,

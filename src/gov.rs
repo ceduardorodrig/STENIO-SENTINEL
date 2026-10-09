@@ -305,11 +305,7 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             None => continue,
         };
 
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::util::lower_ext(path);
 
         // 1. Temporary/backup file extensions
         let is_temp_ext = matches!(ext.as_str(), "bak" | "tmp" | "orig" | "old" | "swp" | "rej");

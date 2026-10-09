@@ -182,11 +182,7 @@ impl Engine {
                 continue;
             }
 
-            let ext = path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+            let ext = crate::util::lower_ext(path);
 
             let Ok(content) = fs::read_to_string(path) else {
                 continue;

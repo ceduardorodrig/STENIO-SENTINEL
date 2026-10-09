@@ -145,11 +145,7 @@ pub fn is_dry_eligible(path: &Path) -> bool {
         return false;
     }
 
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = crate::util::lower_ext(path);
 
     matches!(
         ext.as_str(),

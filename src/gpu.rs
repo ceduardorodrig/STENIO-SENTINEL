@@ -129,7 +129,7 @@ fn query_host_gpu() -> Option<String> {
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let first_line = stdout.lines().next()?.trim();
-        let parts: Vec<&str> = first_line.split(',').map(|s| s.trim()).collect();
+        let parts = crate::util::csv_fields(first_line);
         if parts.len() >= 4 {
             let name = parts[0];
             let driver = parts[1];

@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::mpsc::channel;
 
 use crate::engine::Engine;
-use crate::rule::Severity;
 
 pub fn start_watch_mode(
     root: &Path,
@@ -63,10 +62,7 @@ pub fn start_watch_mode(
                                     format!("[{:.2?}]", elapsed).yellow()
                                 );
                                 for v in violations {
-                                    let badge = match v.severity {
-                                        Severity::Error => "[ERROR]".red().bold(),
-                                        Severity::Warning => "[WARN] ".yellow().bold(),
-                                    };
+                                    let badge = crate::util::severity_badge(v.severity);
                                     println!(
                                         "      {} {}:{} [{}] {}",
                                         badge,

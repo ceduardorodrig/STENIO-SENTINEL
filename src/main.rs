@@ -32,6 +32,7 @@ pub mod remote;
 mod rule;
 mod tools;
 mod typegen;
+mod util;
 mod vault;
 mod watch;
 
@@ -1852,10 +1853,7 @@ fn main() -> Result<()> {
 
     if args.compact {
         for v in &report.violations {
-            let sev = match v.severity {
-                Severity::Error => "ERROR",
-                Severity::Warning => "WARN",
-            };
+            let sev = crate::util::severity_label(v.severity);
             if let Some(ref sug) = v.suggestion {
                 println!(
                     "[{}] {}:{}: [{}] {} - {} (💡 {})",
@@ -2020,10 +2018,7 @@ fn main() -> Result<()> {
     }
 
     for v in &report.violations {
-        let badge = match v.severity {
-            Severity::Error => "[ERROR]".red().bold(),
-            Severity::Warning => "[WARN] ".yellow().bold(),
-        };
+        let badge = crate::util::severity_badge(v.severity);
 
         println!(
             "{} {} {}: {}",
