@@ -4,6 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+/// FNV-1a 64-bit constants. A fixed, in-house hasher keeps window keys
+/// deterministic across Rust versions and targets — `DefaultHasher` (SipHash)
+/// makes no such guarantee, so cached/compared keys could silently drift.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 use crate::baseline::Whitelist;
 use crate::engine::Violation;
 use crate::rule::Severity;
@@ -70,6 +76,45 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
     }
 
     Some(trimmed.to_string())
+}
+
+/// A declarative line carries no logic of its own: a struct-field initializer
+/// (`key: value,`) or a bare field-shorthand identifier (`key,`). Duplication of
+/// such lines (e.g. the tail of two different struct literals) is not meaningful
+/// logic duplication and must not be reported (ARCH-DRY-DUPLICATION FP guard).
+fn is_declarative_line(text: &str) -> bool {
+    let core = text.trim().strip_suffix(',').unwrap_or(text.trim()).trim();
+    if let Some((key, value)) = core.split_once(':') {
+        if !value.trim().is_empty() && is_ident_path(key.trim()) {
+            return true;
+        }
+    }
+    is_ident_path(core)
+}
+
+/// True when `s` is a plain identifier path (`foo`, `foo.bar`, `foo::bar`).
+fn is_ident_path(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == ':')
+}
+
+/// Stable 64-bit FNV-1a over a window's normalized lines (see [`FNV_OFFSET`]).
+fn window_hash(lines: &[SubstantiveLine]) -> u64 {
+    let mut h = FNV_OFFSET;
+    for l in lines {
+        for &b in l.text.as_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+        // Line separator so `ab` + `c` never collides with `a` + `bc`.
+        h ^= 0xff;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
 }
 
 /// Checks whether a file should participate in DRY analysis.
@@ -156,13 +201,7 @@ pub fn detect_dry_duplication(
         }
 
         for i in 0..=(file.substantive.len() - min_lines) {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::Hasher;
-            for j in 0..min_lines {
-                hasher.write(file.substantive[i + j].text.as_bytes());
-                hasher.write_u8(0);
-            }
-            let h = hasher.finish();
+            let h = window_hash(&file.substantive[i..i + min_lines]);
             window_map.entry(h).or_default().push((f_idx, i));
         }
     }
@@ -215,6 +254,15 @@ pub fn detect_dry_duplication(
                         break;
                     }
                     ext_len += 1;
+                }
+
+                // Structural guard: a block made only of declarative lines carries
+                // no logic and is not a meaningful duplication.
+                let has_logic = (0..ext_len).any(|k| {
+                    !is_declarative_line(&files[f1].substantive[idx1 + k].text)
+                });
+                if !has_logic {
+                    continue;
                 }
 
                 // Record covered positions to avoid redundant violation reports

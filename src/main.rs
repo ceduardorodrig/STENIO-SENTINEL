@@ -295,6 +295,28 @@ fi
     );
 }
 
+/// Builds two synthetic files from `a`/`b` and reports whether the DRY engine
+/// flags at least one duplication between them. Used by the self-test canaries.
+fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
+    let mk = |name: &str, lines: &[&str]| dry::FileRecord {
+        path: PathBuf::from(name),
+        rel_path: name.to_string(),
+        has_ignore: false,
+        substantive: lines
+            .iter()
+            .enumerate()
+            .map(|(i, t)| dry::SubstantiveLine {
+                line_no: i + 1,
+                text: t.trim().to_string(),
+            })
+            .collect(),
+    };
+    let fa = mk("CanaryA.rs", a);
+    let fb = mk("CanaryB.rs", b);
+    let whitelist = Whitelist::default();
+    !dry::detect_dry_duplication(&[fa, fb], 6, &whitelist).is_empty()
+}
+
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
     baseline::print_banner("StenioKernel — Synthetic Self-Test Suite");
 
@@ -880,6 +902,47 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             "DRY Block Duplication",
             "ARCH-DRY-DUPLICATION".red()
         );
+    }
+
+    // ── DRY canaries: precision & recall guards (ARCH-DRY-DUPLICATION) ───
+    let dry_logic: [&str; 6] = [
+        "let filtered = items.iter().filter(|x| x.active).collect::<Vec<_>>();",
+        "let ordered = filtered.iter().map(|x| x.order).collect::<Vec<_>>();",
+        "let page = ordered.iter().skip(offset).take(limit).collect::<Vec<_>>();",
+        "let total = filtered.len();",
+        "let reached = total >= 100;",
+        "return (page, total, reached);",
+    ];
+    let dry_declarative: [&str; 6] = [
+        "severity: Severity::Warning,",
+        "file_path: display_path.clone(),",
+        "line_number: 1,",
+        "snippet: format!(\"{}:\", svc_name),",
+        "message,",
+        "suggestion,",
+    ];
+    for (label, lines, expect) in [
+        ("DRY logic clone", dry_logic, true),
+        ("DRY declarative tail", dry_declarative, false),
+    ] {
+        total += 1;
+        let got = dry_has_violation(&lines, &lines);
+        if got == expect {
+            passed += 1;
+            println!(
+                "   ✅ Test {:<26} [{}] - OK",
+                label,
+                "ARCH-DRY-DUPLICATION".cyan()
+            );
+        } else {
+            println!(
+                "   ❌ Test {:<26} [{}] - FAILED (got {}, expect {})",
+                label,
+                "ARCH-DRY-DUPLICATION".red(),
+                got,
+                expect
+            );
+        }
     }
 
     // ── Monorepo Scope Isolation Test (ARCH-SCOPE-ISOLATION) ─────────────
