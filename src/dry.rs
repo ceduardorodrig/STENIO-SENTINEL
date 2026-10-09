@@ -330,7 +330,12 @@ pub fn detect_dry_duplication(
     violations
 }
 
-/// Executes DRY scan across a directory or file tree.
+/// Minimum token count for an AST structural unit to be reported. Tuned so that
+/// trivial statements never trigger a finding.
+const AST_MIN_TOKENS: usize = 24;
+
+/// Executes DRY scan across a directory or file tree. Runs the line/token engine
+/// and, for Rust sources, the structural AST pass (Fase 2).
 pub fn scan_dry_directory(
     root: &Path,
     min_lines: usize,
@@ -338,6 +343,7 @@ pub fn scan_dry_directory(
 ) -> (Vec<Violation>, usize, std::time::Duration) {
     let t0 = Instant::now();
     let mut file_records = Vec::new();
+    let mut ast_files: Vec<(String, Vec<crate::dry_ast::AstUnit>)> = Vec::new();
 
     let walker = crate::baseline::create_standard_walker(root);
 
@@ -346,6 +352,12 @@ pub fn scan_dry_directory(
             let p = entry.path();
             if is_dry_eligible(p) {
                 if let Ok(content) = fs::read_to_string(p) {
+                    if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                        let units = crate::dry_ast::rust_units(&content, AST_MIN_TOKENS);
+                        if !units.is_empty() {
+                            ast_files.push((p.to_string_lossy().to_string(), units));
+                        }
+                    }
                     file_records.push(parse_file_substantive(p, &content));
                 }
             }
@@ -353,7 +365,11 @@ pub fn scan_dry_directory(
     }
 
     let files_count = file_records.len();
-    let violations = detect_dry_duplication(&file_records, min_lines, whitelist);
+    let mut violations = detect_dry_duplication(&file_records, min_lines, whitelist);
+    violations.extend(crate::dry_ast::detect_ast_duplication(
+        &ast_files,
+        AST_MIN_TOKENS,
+    ));
     (violations, files_count, t0.elapsed())
 }
 

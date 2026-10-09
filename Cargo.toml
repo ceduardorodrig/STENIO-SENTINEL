@@ -31,6 +31,11 @@ serde_yaml = "0.9"
 tokio = { version = "1.38", features = ["rt-multi-thread", "net", "time", "macros"] }
 notify = "6.1"
 libc = "0.2"
+# AST-based DRY detection (Fase 2). syn/quote/proc-macro2 are already in the
+# dependency tree (via serde_derive) so this adds no new crates.
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "visit"] }
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
 
 [profile.release]
 opt-level = 3

@@ -12,6 +12,7 @@ mod cv;
 mod deploy;
 mod doc;
 mod dry;
+mod dry_ast;
 mod engine;
 mod explain;
 mod frontend;
@@ -973,6 +974,29 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         println!(
             "   ❌ Test {:<26} [{}] - FAILED",
             "DRY severity warning",
+            "ARCH-DRY-DUPLICATION".red()
+        );
+    }
+
+    // ── AST structural canary (Fase 2): formatting-invariant detection ───
+    total += 1;
+    let ast_src = "fn lower(p: &std::path::Path) -> String {\n    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or(\"\").to_lowercase();\n    ext\n}\n";
+    let ast_units = dry_ast::rust_units(ast_src, 8);
+    let ast_files = vec![
+        ("CanaryA.rs".to_string(), ast_units.clone()),
+        ("CanaryB.rs".to_string(), ast_units),
+    ];
+    if !dry_ast::detect_ast_duplication(&ast_files, 8).is_empty() {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<26} [{}] - OK",
+            "DRY ast structural",
+            "ARCH-DRY-DUPLICATION".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<26} [{}] - FAILED",
+            "DRY ast structural",
             "ARCH-DRY-DUPLICATION".red()
         );
     }
