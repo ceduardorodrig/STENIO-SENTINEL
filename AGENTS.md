@@ -46,3 +46,14 @@ The `INFRA-COMPOSE-*` checks (YAML syntax, restart policy, **healthcheck presenc
 - The mirror scan skips `golden/` (duplicate copies) and only runs when the target is the **real vault layout** (an external `--path` does not drag the NAS in).
 - `SEC-*` rules are deliberately **not** run on the mirror: it is captured content, not our authored tree.
 - A service may declare the documented exception for **distroless** images instead of a healthcheck: `labels: {homelab.healthcheck: watchdog}` (covered by an external watchdog — see `scripts/dns-watchdog`).
+
+## DRY engine coverage (`ARCH-DRY-DUPLICATION`, v4.1 — 2026-10-09)
+
+The DRY engine runs in **two layers** and grades severity (it never silences):
+
+- **Line/token layer** (`src/dry.rs`) — every eligible language (`rs, ts, tsx, js, jsx, py, sh, css`): stable **FNV-1a** window hashing (replacing the non-stable `DefaultHasher`). A block made only of **declarative** lines (struct-field initializers / bare field shorthand) is **not reported**; a block that is **≥50% logic** is an `Error`, otherwise a `Warning`.
+- **AST layer** (`src/dry_ast.rs`, Rust only) — `syn` fingerprints each statement subtree **formatting-invariantly** (identifiers/literals preserved for precision) and reports identical units shared by two or more files. Emitted as **`Warning` during rollout**; promote to `Error` after a fleet audit with zero false positives.
+
+`run_quality_gate` blocks **only** on `Error` DRY findings; `Warning` findings are counted and surfaced without rejecting delivery.
+
+See the vault runbook [`../stenio-troubleshooting.md`](../stenio-troubleshooting.md) §6 for the "single emission point" remediation recipe and the multi-language (Fase 4) decision.
