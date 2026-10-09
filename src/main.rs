@@ -295,9 +295,9 @@ fi
     );
 }
 
-/// Builds two synthetic files from `a`/`b` and reports whether the DRY engine
-/// flags at least one duplication between them. Used by the self-test canaries.
-fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
+/// Builds two synthetic files from `a`/`b` and returns the severity of the first
+/// duplication the DRY engine reports between them (`None` = no duplication).
+fn dry_run(a: &[&str], b: &[&str]) -> Option<Severity> {
     let mk = |name: &str, lines: &[&str]| dry::FileRecord {
         path: PathBuf::from(name),
         rel_path: name.to_string(),
@@ -314,7 +314,14 @@ fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
     let fa = mk("CanaryA.rs", a);
     let fb = mk("CanaryB.rs", b);
     let whitelist = Whitelist::default();
-    !dry::detect_dry_duplication(&[fa, fb], 6, &whitelist).is_empty()
+    dry::detect_dry_duplication(&[fa, fb], 6, &whitelist)
+        .first()
+        .map(|v| v.severity)
+}
+
+/// Convenience predicate over [`dry_run`] for the boolean canaries.
+fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
+    dry_run(a, b).is_some()
 }
 
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
@@ -945,6 +952,31 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         }
     }
 
+    // ── DRY severity canary: mostly-declarative block -> Warning ─────────
+    total += 1;
+    let dry_mixed: [&str; 6] = [
+        "let value = compute(input);",
+        "severity: Severity::Warning,",
+        "file_path: display_path.clone(),",
+        "line_number: 1,",
+        "message,",
+        "suggestion,",
+    ];
+    if dry_run(&dry_mixed, &dry_mixed) == Some(Severity::Warning) {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<26} [{}] - OK",
+            "DRY severity warning",
+            "ARCH-DRY-DUPLICATION".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<26} [{}] - FAILED",
+            "DRY severity warning",
+            "ARCH-DRY-DUPLICATION".red()
+        );
+    }
+
     // ── Monorepo Scope Isolation Test (ARCH-SCOPE-ISOLATION) ─────────────
     total += 1;
     let mixed_paths = vec![
@@ -1054,7 +1086,14 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 
     // 5. Absolute DRY Principle (Zero Code Duplication)
     let (dry_violations, _dry_count, _dry_dur) = scan_dry_directory(&args.path, 6, whitelist);
+    let mut dry_warnings = 0usize;
     for dv in &dry_violations {
+        if dv.severity == Severity::Warning {
+            // Adaptive severity: low logic-density duplication is surfaced but
+            // does not block delivery (ARCH-DRY-DUPLICATION stays non-impeditive).
+            dry_warnings += 1;
+            continue;
+        }
         blocker_errors.push(format!(
             "[{}] {}:{}: {} (💡 {})",
             dv.rule_id.red().bold(),
@@ -1078,7 +1117,14 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         println!("   • Zero blocking errors.");
         println!("   • Zero stubs or placeholders detected.");
         println!("   • Zero silenced tests.");
-        println!("   • Zero code duplication (100% DRY).");
+        if dry_warnings == 0 {
+            println!("   • Zero code duplication (100% DRY).");
+        } else {
+            println!(
+                "   • Zero blocking duplication; {} non-blocking DRY warning(s).",
+                dry_warnings
+            );
+        }
         println!("   • Zero leftover test artifacts.");
         println!();
         println!(

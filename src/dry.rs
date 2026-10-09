@@ -256,14 +256,21 @@ pub fn detect_dry_duplication(
                     ext_len += 1;
                 }
 
-                // Structural guard: a block made only of declarative lines carries
-                // no logic and is not a meaningful duplication.
-                let has_logic = (0..ext_len).any(|k| {
-                    !is_declarative_line(&files[f1].substantive[idx1 + k].text)
-                });
-                if !has_logic {
+                // Structural guard + adaptive severity: a block made only of
+                // declarative lines carries no logic and is not reported. A block
+                // that is mostly logic is a blocking `Error`; a low logic-density
+                // match stays visible as `Warning` (never silently dropped).
+                let logic_lines = (0..ext_len)
+                    .filter(|&k| !is_declarative_line(&files[f1].substantive[idx1 + k].text))
+                    .count();
+                if logic_lines == 0 {
                     continue;
                 }
+                let severity = if logic_lines * 2 >= ext_len {
+                    Severity::Error
+                } else {
+                    Severity::Warning
+                };
 
                 // Record covered positions to avoid redundant violation reports
                 for k in 0..ext_len {
@@ -306,7 +313,7 @@ pub fn detect_dry_duplication(
                 violations.push(Violation {
                     rule_id: "ARCH-DRY-DUPLICATION".to_string(),
                     rule_name: "Code Duplication (DRY Principle)".to_string(),
-                    severity: Severity::Error,
+                    severity,
                     file_path: file1_str,
                     line_number: start_line1,
                     snippet: format!("{}\n...", snippet),

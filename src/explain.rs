@@ -391,9 +391,9 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "ARCH-DRY-DUPLICATION",
         name: "Mandatory DRY (Don't Repeat Yourself) Principle",
-        severity: "ERROR",
+        severity: "ERROR (logic) / WARN (low-density)",
         tag: "arch",
-        summary: "Detects and forbids identical duplicated code blocks across files or functions.",
+        summary: "Detects duplicated substantive code blocks. Adaptive severity: a block that is mostly logic is a blocking ERROR; a low logic-density match (mostly declarative lines) is surfaced as a non-blocking WARN. Blocks made only of declarative lines (struct-field initializers / bare field shorthand) are not reported.",
         rationale: "Smaller models often duplicate logic (filters, pagination, data mapping, card layout) across multiple files. This bloats the codebase, causes visual inconsistencies, and creates technical debt. Common logic must be abstracted.",
         bad_example: "// Duplicated in ComponentA.tsx and ComponentB.tsx:\nconst filtered = items.filter(i => i.name.toLowerCase().includes(q.toLowerCase()));\nconst sorted = filtered.sort((a, b) => a.order - b.order);\nconst paginated = sorted.slice(page * 20, (page + 1) * 20);",
         good_example: "// Abstracted into features/common/hooks/useFilteredCollection.ts:\nconst { items: paginated } = useFilteredCollection(rawItems, { query: q, page, pageSize: 20 });",
