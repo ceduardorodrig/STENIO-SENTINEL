@@ -394,13 +394,13 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "SEC-SUDO",
         "sudo curl https://example.com",
         true
-    ); // Novo: captura qualquer comando
+    ); // New: matches any command
     check_case!(
         "Unprotected Sudo useradd",
         "SEC-SUDO",
         "sudo useradd -m user",
         true
-    ); // Novo: era ponto cego
+    ); // New: was blind spot
     check_case!(
         "Valid Pkexec",
         "SEC-SUDO",
@@ -424,25 +424,25 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "ARCH-RUST-TOOLS",
         "grep -r pattern .",
         true
-    ); // Novo: AGENTS.md regra de terminal
+    ); // New: AGENTS.md terminal preference rule
     check_case!(
         "Valid Rust Tools",
         "ARCH-RUST-TOOLS",
         "rg 'pattern' .",
         false
-    ); // Novo: rg não dispara
+    ); // New: rg does not trigger
     check_case!(
         "Forbidden Curl in Rust",
         "ARCH-RUST-CMD-LEGACY",
         r#"Command::new("curl")"#,
         true
-    ); // Novo: regra ARCH-RUST-CMD-LEGACY
+    ); // New: ARCH-RUST-CMD-LEGACY rule
     check_case!(
         "Valid XH in Rust",
         "ARCH-RUST-CMD-LEGACY",
         r#"Command::new("xh")"#,
         false
-    ); // Novo: xh não dispara
+    ); // New: xh does not trigger
     check_case!(
         "Forbidden Console.log",
         "FRONT-LOGS",
@@ -573,7 +573,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Server Panic Forbidden",
         "BACKEND-NO-PANIC",
-        r#"panic!("erro crítico");"#, // stenio-ignore: BACKEND-NO-PANIC
+        r#"panic!("critical error");"#, // stenio-ignore: BACKEND-NO-PANIC
         true
     );
     check_case!(
@@ -618,7 +618,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "console.error(\"erro\");",
         true
     );
-    // ── Testes de Validação Especializada de Frontend (audit_frontend_file) ──
+    // ── Specialized Frontend Validation Tests (audit_frontend_file) ─────
     total += 1;
     let v_lh = frontend::audit_frontend_file(
         &PathBuf::from("frontend/src/api.ts"),
@@ -661,7 +661,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
-    // ── Testes de Validação Especializada de SEO (SEO-* Rules) ───────────
+    // ── Specialized SEO Validation Tests (SEO-* Rules) ───────────────────
     total += 1;
     let v_seo_bad = frontend::audit_frontend_file(
         &PathBuf::from("frontend/index.html"),
@@ -725,7 +725,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
-    // ── Teste de Idempotência SQL (check_sql_idempotency) ───────────────
+    // ── SQL Idempotency Test (check_sql_idempotency) ───────────────────────
     total += 1;
     if migrations::check_sql_idempotency("CREATE TABLE users (id INT);").is_some() {
         passed += 1;
@@ -758,7 +758,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
-    // ── Testes das 6 Boas Práticas Rust Anti-Preguiça / Anti-Bug ────────
+    // ── Tests for 6 Anti-Laziness / Anti-Bug Rust Best Practices ──────────
     check_case!(
         "Unbounded Channel",
         "RUST-NO-UNBOUNDED-CHANNEL",
@@ -826,7 +826,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         true
     );
 
-    // ── Teste Sintético do Motor DRY (Rolling Block Hash) ───────────────
+    // ── Synthetic Test for DRY Engine (Rolling Block Hash) ───────────────
     total += 1;
     let sample_f1 = dry::FileRecord {
         path: PathBuf::from("ComponentA.tsx"),
@@ -882,7 +882,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
-    // ── Teste de Isolamento de Escopo Monorepo (ARCH-SCOPE-ISOLATION) ───
+    // ── Monorepo Scope Isolation Test (ARCH-SCOPE-ISOLATION) ─────────────
     total += 1;
     let mixed_paths = vec![
         PathBuf::from(
@@ -969,12 +969,12 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         }
     }
 
-    // 2. Erros de governança (incluindo GOV-LEFTOVER-TEST-ARTIFACTS)
+    // 2. Governance errors (including GOV-LEFTOVER-TEST-ARTIFACTS)
     for err in &gov_result.errors {
         blocker_errors.push(format!("[GOVERNANCE] {}", err));
     }
 
-    // 3. Documentação corrompida / links quebrados
+    // 3. Corrupted documentation / broken links
     for v in &doc_result.violations {
         if v.severity == Severity::Error {
             blocker_errors.push(format!(
@@ -989,7 +989,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         blocker_errors.push(format!("[GUARDIAN] {}", alert));
     }
 
-    // 5. Princípio DRY Absoluto (Zero Duplicação de Código)
+    // 5. Absolute DRY Principle (Zero Code Duplication)
     let (dry_violations, _dry_count, _dry_dur) = scan_dry_directory(&args.path, 6, whitelist);
     for dv in &dry_violations {
         blocker_errors.push(format!(
@@ -1028,7 +1028,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
         return Ok(());
     }
 
-    // Se houver qualquer erro bloqueador
+    // If there are any blocking errors
     baseline::print_banner_red("🛑 [GATE REJECTED] Delivery Blocked by StenioSentinel!");
     println!(
         "{}",
@@ -1088,7 +1088,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Modo Explicação de Regras (--explain [RULE_ID]) ─────────────────────
+    // ── Rule Explanation Mode (--explain [RULE_ID]) ───────────────────────
     if let Some(ref rule_target) = args.explain {
         if rule_target == "all" || rule_target.is_empty() {
             println!("{}", explain::list_all_explanations());
@@ -1133,7 +1133,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Porteiro das Portas & Superfície de Ataque (--ports) ───────────
+    // ── Port Gatekeeper & Attack Surface Mode (--ports) ───────────────────
     if args.ports {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(ports::run_ports_audit(&args.path))?;
@@ -1150,7 +1150,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Typegen Automático Rust → TypeScript (--typegen) ──────────────
+    // ── Automated Rust → TypeScript Typegen Mode (--typegen) ──────────────
     if args.typegen {
         let target_dir = if args.path.join("app/frontend-v2").is_dir() {
             args.path.clone()
@@ -1165,20 +1165,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Knowledge Context Engine para LLMs (--context) ────────────────
+    // ── LLM Knowledge Context Engine Mode (--context) ─────────────────────
     if args.context {
         context::generate_llm_context(&args.path);
         return Ok(());
     }
 
-    // ── Modo Zeladoria e Higiene Inteligente (--clean) ─────────────────────
+    // ── Smart Cleanup & Repository Hygiene Mode (--clean) ─────────────────
     if let Some(ref mode) = args.clean {
         let rep = clean::run_clean(&args.path, mode, args.dry_run)?;
         clean::print_clean_report(&rep);
         return Ok(());
     }
 
-    // ── Modo Pre-Commit Hook (--pre-commit install / check) ────────────────
+    // ── Pre-Commit Hook Mode (--pre-commit install / check) ───────────────
     if let Some(ref action) = args.pre_commit {
         match action.as_str() {
             "install" => {
@@ -1186,7 +1186,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             "check" => {
-                // Continua a execução no modo diff com target staged
+                // Continue execution in diff mode with staged target
             }
             other => {
                 eprintln!(
@@ -1198,7 +1198,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Modo Guardian Anti-Tampering & Auto-Preservação (--guardian) ────────
+    // ── Guardian Anti-Tampering & Self-Preservation Mode (--guardian) ────────
     if args.guardian {
         let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
         let rep = audit_stenio_integrity(&stenio_src);
@@ -1221,32 +1221,32 @@ fn main() -> Result<()> {
     let whitelist_path = args.path.join(".steniocheck-whitelist-registry.json");
     let whitelist = Whitelist::load_from_file(&whitelist_path);
 
-    // Carrega configuração canônica steniocheck.toml
+    // Load canonical configuration steniocheck.toml
     let steniocheck_cfg = SteniocheckConfig::load_from_dir(&args.path);
     let mut rules = get_rules_from_config(&steniocheck_cfg);
 
-    // ── Escopo `fork`: repositório DERIVADO (fork de terceiros) ────────────
+    // ── Scope `fork`: DERIVED repository (third-party fork) ───────────────
     //
-    // POR QUE EXISTE (29/09/2026): um fork recebe as leis AUTORAIS do ecossistema,
-    // mas elas descrevem como o autor constrói o próprio software — não como se
-    // contribui num projeto alheio. O caso real: `macrokey-driver` (fork de um
-    // driver Python) produzia ~305 erros `ARCH-NO-PYTHON`, exigindo reescrever o
-    // upstream. Um gate vermelho que ninguém pode consertar é pior do que não ter
-    // gate: treina todos a ignorar o resultado.
+    // WHY IT EXISTS (2026-09-29): a fork receives the ecosystem's AUTHORIAL laws,
+    // but they describe how the author builds their own software — not how to
+    // contribute to an external project. Real case: `macrokey-driver` (fork of a
+    // Python driver) produced ~305 `ARCH-NO-PYTHON` errors, requiring rewriting
+    // upstream. A red gate that no one can fix is worse than having no gate:
+    // it trains everyone to ignore the result.
     //
-    // Este escopo mantém apenas o que protege um repositório derivado:
-    //   SEC-*  (segredos, sudo, SQL, except)  — protegem o autor
-    //   VAULT-* (frontmatter, taxonomia)      — integridade de notas
-    //   DOC-*  (disclaimer, âncoras)          — rastreabilidade de governança
-    //   GOV-LEFTOVER-TEST-ARTIFACTS           — limpeza de artefatos
-    //   HOMELAB-* / INFRA-* quando o alvo for de infraestrutura
+    // This scope retains only what protects a derived repository:
+    //   SEC-*  (secrets, sudo, SQL, except)  — protect the author
+    //   VAULT-* (frontmatter, taxonomy)      — note integrity
+    //   DOC-*  (disclaimer, anchors)         — governance traceability
+    //   GOV-LEFTOVER-TEST-ARTIFACTS          — test artifact cleanup
+    //   HOMELAB-* / INFRA-* when target is infrastructure
     //
-    // Removidas: ARCH-*, RUST-*, GOV-AGENT-LAWS, FRONT-*, BACKEND-*, TEST-*, DB-*,
-    // PERF-*, CONF-*, AGENT-* — todas pressupõem código autoral do ecossistema.
+    // Excluded: ARCH-*, RUST-*, GOV-AGENT-LAWS, FRONT-*, BACKEND-*, TEST-*, DB-*,
+    // PERF-*, CONF-*, AGENT-* — all presuppose authorial ecosystem code.
     //
-    // Ver `governance/agent-conventions.md` §2b e
+    // See `governance/agent-conventions.md` §2b and
     // `governance/stenio-troubleshooting.md` §3.
-    // O `--scope` é opcional (default `all`); comparamos sem `unwrap` (RUST-NO-UNWRAP).
+    // `--scope` is optional (default `all`); compare without `unwrap` (RUST-NO-UNWRAP).
     let cfg_scope_val = steniocheck_cfg.general.as_ref().and_then(|g| g.scope.as_deref()).unwrap_or("");
     let scope_opt = if !args.scope.as_deref().unwrap_or("").is_empty() {
         args.scope.as_deref().unwrap_or("")
@@ -1294,13 +1294,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo MCP Server (Protocolo JSON-RPC 2.0 stdio para OpenCode, Antigravity, Claude) ──
+    // ── MCP Server Mode (JSON-RPC 2.0 stdio protocol for OpenCode, Antigravity, Claude) ──
     if args.mcp {
         mcp::run_mcp_server(&args.path, rules, whitelist)?;
         return Ok(());
     }
 
-    // ── Modo Watchdog em Tempo Real (--watch com inotify) ─────────────────
+    // ── Real-Time Watchdog Mode (--watch with inotify) ────────────────────
     if args.watch {
         let engine = Engine::new(rules, whitelist)?;
         let tag_lower = args.tag.as_ref().map(|s| s.to_lowercase());
@@ -1309,7 +1309,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Listagem (--list) ─────────────────────────────────────────────
+    // ── Rules Catalog Listing Mode (--list) ───────────────────────────────
     if args.list {
         baseline::print_banner("StenioKernel — Active Rules & Automata Catalog");
         println!(
@@ -1347,7 +1347,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Auto-Teste (--self-test) ──────────────────────────────────────
+    // ── Self-Test Mode (--self-test) ──────────────────────────────────────
     if args.self_test {
         run_self_tests(&rules)?;
         return Ok(());
@@ -1460,7 +1460,7 @@ fn main() -> Result<()> {
 
     let engine = Engine::new(rules, whitelist)?;
 
-    // Executa em paralelo o escaneamento do repositório e os subsistemas auxiliares
+    // Execute repository scanning and auxiliary subsystems in parallel
     let (
         (scan_res, (gov_res, doc_res)),
         ((gpu_res, mig_res), (((homelab_res, infra_res), vault_res), cv_res)),
@@ -1510,8 +1510,8 @@ fn main() -> Result<()> {
                 || {
                     rayon::join(
                         || {
-                            // ⚠️ CORREÇÃO DE SEGURANÇA (29/09/2026): o
-                            // `audit_infrastructure` roda agora também no escopo
+                            // ⚠️ SECURITY FIX (2026-09-29):
+                            // `audit_infrastructure` now runs also under the scope
                             // Security infrastructure checks run across homelab, fork, derived, and mirror scopes.
                             // Evaluates: SEC-PLAINTEXT-SECRET, SEC-PRIVATE-KEY-CLEARTEXT, SEC-PERM-LEAK, SEC-SOPS-UNENCRYPTED.
                             let runs_infra_audit = is_homelab_active
@@ -1559,7 +1559,7 @@ fn main() -> Result<()> {
 
     let mut report = scan_res?;
 
-    // ── Subsistema de Governança (AGENTS.md & skills) ──────────────────────
+    // ── Governance Subsystem (AGENTS.md & skills) ──────────────────────────
     let mut gov_messages = Vec::new();
     if let Some(gov) = gov_res {
         gov_messages = gov.messages;
@@ -1569,14 +1569,14 @@ fn main() -> Result<()> {
             for err in gov.errors {
                 report.violations.push(engine::Violation {
                     rule_id: "GOV-AGENT-LAWS".to_string(),
-                    rule_name: "Governança & Leis do Agente".to_string(),
+                    rule_name: "Governance & Agent Laws".to_string(),
                     severity: Severity::Error,
                     file_path: "AGENTS.md".to_string(),
                     line_number: 1,
                     snippet: "".to_string(),
                     message: err,
                     suggestion: Some(
-                        "Mantenha as 38 Leis Absolutas e a Regra de Ouro no AGENTS.md.".to_string(),
+                        "Maintain the Absolute Laws and Golden Rule in AGENTS.md.".to_string(),
                     ),
                 });
             }
@@ -1588,7 +1588,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Subsistema de Documentação (docs/ & ADRs) ───────────────────────────
+    // ── Documentation Subsystem (docs/ & ADRs) ─────────────────────────────
     let mut doc_messages = Vec::new();
     if let Some(doc) = doc_res {
         doc_messages = doc.messages;
@@ -1603,7 +1603,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Subsistema GPU & Modelos (RTX / NVMe) ──────────────────────────────
+    // ── GPU & AI Models Subsystem (RTX / NVMe) ────────────────────────────
     let mut gpu_messages = Vec::new();
     if let Some(gpu) = gpu_res {
         gpu_messages = gpu.messages;
@@ -1613,19 +1613,19 @@ fn main() -> Result<()> {
             for gpu_err in gpu.errors {
                 report.violations.push(engine::Violation {
                     rule_id: "GPU-BLOAT-OR-MODEL".to_string(),
-                    rule_name: "Integridade de GPU & Modelos".to_string(),
+                    rule_name: "GPU & AI Models Integrity".to_string(),
                     severity: Severity::Error,
                     file_path: "llm_model_cache".to_string(),
                     line_number: 1,
                     snippet: "".to_string(),
                     message: gpu_err,
-                    suggestion: Some("Verifique o arquivo GGML em /mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
+                    suggestion: Some("Check GGML file in /mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache/whisper-ggml/.".to_string()),
                 });
             }
         }
     }
 
-    // ── Subsistema de Banco de Dados & Migrações (migrations/) ───────────────
+    // ── Database & Migrations Subsystem (migrations/) ─────────────────────
     let mut mig_messages = Vec::new();
     if let Some(mig) = mig_res {
         mig_messages = mig.messages;
@@ -1634,21 +1634,21 @@ fn main() -> Result<()> {
             report.total_violations += 1;
             report.violations.push(Violation {
                 rule_id: "DB-IDEMPOTENT-MIGRATION".to_string(),
-                rule_name: "Migração SQL Não-Idempotente".to_string(),
+                rule_name: "Non-Idempotent SQL Migration".to_string(),
                 severity: Severity::Error,
                 file_path: "migrations/".to_string(),
                 line_number: 1,
                 snippet: err.clone(),
                 message: err.clone(),
                 suggestion: Some(
-                    "Use 'IF NOT EXISTS' em CREATE TABLE/INDEX ou 'IF EXISTS' em DROP TABLE/INDEX."
+                    "Use 'IF NOT EXISTS' in CREATE TABLE/INDEX or 'IF EXISTS' in DROP TABLE/INDEX."
                         .to_string(),
                 ),
             });
         }
     }
 
-    // ── Subsistema Homelab (mnemocine/) ────────────────────────────────────
+    // ── Homelab Subsystem (mnemocine/) ────────────────────────────────────
     let mut homelab_messages = Vec::new();
     if let Some(hl) = homelab_res {
         report.total_files_scanned += hl.total_files_scanned;
@@ -1663,7 +1663,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Subsistema de Infraestrutura (Compose, Systemd, SOPS) ──────────────
+    // ── Infrastructure Subsystem (Compose, Systemd, SOPS) ─────────────────
     if let Some(inf) = infra_res {
         report.total_files_scanned += inf.total_files_scanned;
         for msg in inf.messages {
@@ -1679,7 +1679,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Subsistema Vault (Obsidian & Governança) ───────────────────────────
+    // ── Obsidian Vault Subsystem (Universal Governance) ───────────────────
     let mut vault_messages = Vec::new();
     if let Some(vl) = vault_res {
         report.total_files_scanned += vl.total_files_scanned;
@@ -1694,7 +1694,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── Subsistema de Currículo Bilíngue (curriculum-vitae/) ───────────────
+    // ── Bilingual Curriculum Vitae Subsystem (curriculum-vitae/) ──────────
     let mut cv_messages = Vec::new();
     if let Some(cv) = cv_res {
         report.total_files_scanned += cv.total_files_scanned;
@@ -1749,7 +1749,7 @@ fn main() -> Result<()> {
             };
             if let Some(ref sug) = v.suggestion {
                 println!(
-                    "::{} file={},line={},title=[{}] {}::{} (💡 Sugestão: {})",
+                    "::{} file={},line={},title=[{}] {}::{} (💡 Suggestion: {})",
                     level, v.file_path, v.line_number, v.rule_id, v.rule_name, v.message, sug
                 );
             } else {
@@ -1772,7 +1772,7 @@ fn main() -> Result<()> {
     let badge = format!("[{:.2?}]", report.duration);
     baseline::print_banner_with_badge(&banner_title, &badge);
 
-    // Auditoria de Governança (AGENTS.md)
+    // Governance Audit (AGENTS.md)
     if should_audit_gov {
         println!(
             "{}",
@@ -1784,7 +1784,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria de Documentação (docs/)
+    // Documentation Audit (docs/)
     if should_audit_doc {
         println!(
             "{}",
@@ -1796,7 +1796,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria de GPU & Modelos
+    // GPU & AI Models Audit
     if should_audit_gpu {
         println!(
             "{}",
@@ -1808,7 +1808,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria de Banco de Dados & Migrações (SQLx)
+    // Database & Migrations Audit (SQLx)
     if should_audit_mig {
         println!(
             "{}",
@@ -1820,7 +1820,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria do Homelab (Mnemocine)
+    // Homelab Audit (Mnemocine)
     if is_homelab_active && !homelab_messages.is_empty() {
         println!(
             "{}",
@@ -1832,7 +1832,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria do Vault Obsidian (Governança Universal)
+    // Obsidian Vault Audit (Universal Governance)
     if is_vault_active && !vault_messages.is_empty() {
         println!(
             "{}",
@@ -1844,7 +1844,7 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Auditoria de Currículo Bilíngue
+    // Bilingual Curriculum Vitae Audit
     if is_cv_active && !cv_messages.is_empty() {
         println!(
             "{}",

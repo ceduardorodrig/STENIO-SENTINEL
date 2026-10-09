@@ -251,7 +251,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Wrap the selector function in useShallow(state => ({ ... })) imported from 'zustand/react/shallow'."),
     ));
 
-    // ── 8. Frontend: Pureza de Logs de Produção ────────────────────────────
+    // ── 8. Frontend: Production Log Purity ─────────────────────────────────
     rules.push(Rule::new(
         "FRONT-LOGS",
         "frontend",
@@ -391,7 +391,6 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Never bypass or disable validation hooks (--no-verify). StênioSentinel is the canonical delivery gatekeeper."),
     ));
 
-    // ── 15.3 Integridade de Build: Proibição de Enfraquecimento de Modo Estrito ─
     // ── 15.3 Build Integrity: Prohibition of Weakening Compiler Strict Mode ───
     rules.push(Rule::new(
         "CONF-NO-WEAKEN-STRICT",
@@ -668,7 +667,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Rename directory to lowercase kebab-case (e.g. sumaenima-hub, stirps-petri)."),
     ));
 
-    // ── 30. Regras Customizadas e Aprendidas Dinamicamente (steniocheck.toml) ──
+    // ── 37. Custom and Dynamically Learned Rules (steniocheck.toml) ────────
 
     if let Some(custom_rules) = &config.custom_rules {
         for cr in custom_rules {
@@ -689,8 +688,8 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
                 fix_replacement: cr.fix_replacement.clone(),
                 path_includes: cr.path_include.clone().unwrap_or_default(),
                 path_excludes: cr.path_exclude.clone().unwrap_or_default(),
-                // Regras aprendidas (`--learn`) NÃO expõem o contexto: os campos
-                // são engine-only, para ninguém criar regra com contexto artificial.
+                // Learned rules (`--learn`) do NOT expose context: these fields
+                // are engine-only, preventing artificial context rule creation.
                 requires_pattern: None,
                 severity_without_requires: None,
             };

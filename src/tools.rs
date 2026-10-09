@@ -232,7 +232,7 @@ fn is_ignored(name: &str) -> bool {
     false
 }
 
-/// Compares hostname with local node, tolerando casing differences.
+/// Compares hostname with local node, tolerating casing differences.
 fn host_matches_local(host: &str) -> bool {
     let local = std::env::var("HOSTNAME")
         .ok()
@@ -246,11 +246,11 @@ fn host_matches_local(host: &str) -> bool {
     host.eq_ignore_ascii_case(&local)
 }
 
-/// Lê as ferramentas declaradas do instalador canônico.
+/// Reads declared tools from the canonical installer.
 ///
-/// O instalador mantém dois mapas bash (`RUST_TOOLS` e `SHELL_TOOLS`). Ler dali —
-/// em vez de manter uma lista paralela em Rust — garante que auditar e instalar
-/// nunca divirjam. É parsing simples de linha, não um interpretador de bash.
+/// The installer maintains two bash maps (`RUST_TOOLS` and `SHELL_TOOLS`). Reading from there —
+/// rather than maintaining a parallel list in Rust — guarantees that audit and install
+/// never diverge. This is simple line parsing, not a full bash interpreter.
 fn read_declared_tools(repo_root: &Path) -> BTreeSet<String> {
     let installer = repo_root.join("provisioning/scripts/install-homelab-tools.sh");
     let mut set = BTreeSet::new();
@@ -261,21 +261,21 @@ fn read_declared_tools(repo_root: &Path) -> BTreeSet<String> {
 
     for line in content.lines() {
         let t = line.trim();
-        // Formato das entradas: `[nome]=nome`
+        // Entry format: `[name]=name`
         if !t.starts_with('[') || !t.contains("]=") {
             continue;
         }
         if let Some(end) = t.find(']') {
             let name = &t[1..end];
-            // Ignora a chave `--help` e afins; nomes vêm só do mapa de ferramentas.
+            // Ignore `--help` key and flags; names come only from the tool map.
             if !name.is_empty() && !name.starts_with('-') {
                 set.insert(name.to_string());
             }
         }
     }
 
-    // Ferramentas Rust também têm o diretório do crate como declaração, mesmo que
-    // o map do bash use outro nome. Varre `provisioning/*/Cargo.toml`.
+    // Rust tools also have their crate directory as declaration, even if
+    // the bash map uses another name. Scan `provisioning/*/Cargo.toml`.
     if let Ok(entries) = fs::read_dir(repo_root.join("provisioning")) {
         for e in entries.flatten() {
             let p = e.path();
@@ -295,7 +295,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ignora_backups_e_allowlist() {
+    fn test_ignores_backups_and_allowlist() {
         assert!(is_ignored("config-backup.bak-20260929"));
         assert!(is_ignored("scryfall-prefetch.disabled"));
         assert!(is_ignored("bat"));
@@ -305,14 +305,14 @@ mod tests {
     }
 
     #[test]
-    fn nao_ignora_ferramenta_nossa() {
+    fn test_does_not_ignore_internal_tools() {
         assert!(!is_ignored("config-backup"));
         assert!(!is_ignored("zomboid-backup"));
         assert!(!is_ignored("smart-metrics"));
     }
 
     #[test]
-    fn le_mapas_do_instalador() {
+    fn test_reads_installer_maps() {
         let dir = std::env::temp_dir().join("stenio-tools-test");
         let scripts = dir.join("provisioning/scripts");
         let _ = fs::create_dir_all(&scripts);
@@ -327,8 +327,8 @@ mod tests {
     }
 
     #[test]
-    fn host_local_e_reconhecido_sem_ssh() {
-        // O nó atual precisa ser tratado como local para não depender de ssh.
+    fn test_local_host_recognized_without_ssh() {
+        // The current node must be treated as local to avoid relying on SSH.
         let me = std::env::var("HOSTNAME").unwrap_or_default();
         if !me.is_empty() {
             assert!(host_matches_local(&me));

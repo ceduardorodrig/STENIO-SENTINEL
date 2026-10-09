@@ -1,78 +1,78 @@
 use std::path::Path;
 
 pub fn generate_llm_context(_root: &Path) {
-    let context_markdown = r#"# Contexto Canônico de Governança & Arquitetura (StenioSentinel v3.0)
+    let context_markdown = r#"# Canonical Governance & Architecture Context (StenioSentinel v4.0)
 
-Este contexto sintetiza em alta densidade todas as leis, arquitetura e infraestrutura do ecossistema SUMÆNIMÁ e Homelab Mnemocine. Consuma como fonte da verdade absoluta.
+This context synthesizes in high density all laws, architecture, and infrastructure of the SUMÆNIMÁ and Mnemocine Homelab ecosystem. Treat as canonical source of truth.
 
-## 👤 Identidade & Prestador
-- **Nome:** Carlos Eduardo Rodrigues (SUMÆNIMÁ / MEI)
+## 👤 Identity & Service Provider
+- **Name:** Carlos Eduardo Rodrigues (SUMÆNIMÁ / MEI)
 - **CNPJ:** 62.447.037/0001-10
 - **Email/PIX:** ceduardorodrig@gmail.com
-- **Espaço de Trabalho:** Vault Obsidian em `/mnt/NVME_PCI/agentic-ai` (Sincronizado via Syncthing).
-- **Backend & Plataforma:** `/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub` (Rust Axum + React/Vite).
+- **Workspace:** Obsidian Vault at `/mnt/NVME_PCI/agentic-ai` (Synchronized via Syncthing).
+- **Backend & Platform:** `/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub` (Rust Axum + React/Vite).
 
-## ⚡ Hardware & Aceleração Local (psicopompo)
-- **GPU:** NVIDIA GeForce RTX 5050 (Driver 615.71.09, Arquitetura Blackwell).
-- **VRAM:** 8.151 MiB total (~6.300 MiB livres dedicados a inferência).
-- **IA/ASR Local:** Whisper GGML Q8_0 em `/mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache/whisper-ggml/` executando no Rust com suporte CUDA.
+## ⚡ Hardware & Local Acceleration (psicopompo)
+- **GPU:** NVIDIA GeForce RTX 5050 (Driver 615.71.09, Blackwell Architecture).
+- **VRAM:** 8,151 MiB total (~6,300 MiB free dedicated to inference).
+- **Local AI/ASR:** Whisper GGML Q8_0 at `/mnt/NVME_PCI/homelab/sumaenimahub/llm_model_cache/whisper-ggml/` executing in Rust with CUDA support.
 - **Storage:** NVMe PCI 2TB `/mnt/NVME_PCI` + NAS ZFS/Btrfs `/mnt/BACKUP`.
 
-## 🌐 Malha Tailscale (Mnemocine Homelab)
-| Host | IP Tailscale | Papel Canônico |
+## 🌐 Tailscale Mesh Network (Mnemocine Homelab)
+| Host | Tailscale IP | Canonical Role |
 |---|---|---|
 | **psicopompo** | `100.82.51.112` | Dev + GPU Workers + NAS NFSv4 |
-| **ybyra** | `100.66.224.34` | Borda Cloud Primária / Nginx Reverse Proxy / SPA |
-| **kuaray** | `100.94.209.99` | Multimídia / Home Assistant / Media Server |
-| **ybytu** | `100.115.253.109` | Exit Node Cloud / DNS Primário AdGuard |
-| **kavure** | `100.124.146.77` | Servidor de Serviços Dedicado (Docker / Zomboid / Sumænimá) |
+| **ybyra** | `100.66.224.34` | Primary Cloud Edge / Nginx Reverse Proxy / SPA |
+| **kuaray** | `100.94.209.99` | Multimedia / Home Assistant / Media Server |
+| **ybytu** | `100.115.253.109` | Cloud Exit Node / Primary AdGuard DNS |
+| **kavure** | `100.124.146.77` | Dedicated Services Server (Docker / Zomboid / Sumænimá) |
 
-## 🛑 Leis Absolutas de Governança
-1. **Ferramentas Rust Obrigatórias no Terminal:** Nunca usar ferramentas GNU legadas. Usar `bat` em vez de `cat`, `eza` em vez de `ls`, `rg` em vez de `grep`, `fd` em vez de `find`, `sd` em vez de `sed`, `dust` em vez de `du`, `xh` em vez de `curl`.
-2. **NFS Soft Mount Obrigatório:** Montagens NFS clientes via Tailscale NUNCA devem usar `hard`. Sempre: `rw,soft,timeo=30,retrans=2,_netdev,x-systemd.automount,nofail`.
-3. **Guarda SOPS/Age:** Nenhum segredo ou chave sobe desprotegido para git ou NAS. Tudo cifrado via SOPS com chaves Age.
-4. **Privilégios Administrativos:** Use regra NOPASSWD no sudoers (`sudo <cmd>`) ou injete variáveis via `.env`/SOPS. Evite senhas interativas ou forçar `pkexec` em servidores headless.
-5. **Quality Gate Pré-Entrega (`stenio --gate`):** O modelo DEVE executar `stenio --gate` antes de finalizar qualquer tarefa. Zero erros impeditivos permitidos.
+## 🛑 Absolute Governance Laws
+1. **Mandatory Rust Terminal Tools:** Never use legacy GNU tools. Use `bat` instead of `cat`, `eza` instead of `ls`, `rg` instead of `grep`, `fd` instead of `find`, `sd` instead of `sed`, `dust` instead of `du`, `xh` instead of `curl`.
+2. **Mandatory NFS Soft Mounts:** Client NFS mounts over Tailscale MUST NEVER use `hard`. Always: `rw,soft,timeo=30,retrans=2,_netdev,x-systemd.automount,nofail`.
+3. **SOPS/Age Secret Guard:** Zero plaintext credentials or keys committed to git or NAS. Everything encrypted via SOPS with Age keys.
+4. **Administrative Privileges:** Use sudoers NOPASSWD rule (`sudo <cmd>`) or inject credentials via `.env`/SOPS. Avoid interactive passwords or forcing `pkexec` on headless servers.
+5. **Pre-Delivery Quality Gate (`stenio --gate`):** The model MUST execute `stenio --gate` before concluding any task. Zero blocking errors permitted.
 
 ## 🎨 Sumænimá Hub Frontend Cheat Sheet (React + Vite + Tailwind + Zustand)
-- **Paleta Canônica (Proibido cinzas genéricos gray/zinc/slate):**
-  - Fundo principal da aplicação: `bg-surface-950` (`#09090b`)
-  - Cards e containers: `bg-surface-900` (`#18181b`) ou classe `.sm-glass` (blur 20px)
-  - Hover e superfícies elevadas: `bg-surface-800` (`#27272a`)
-  - Texto de alto contraste: `text-on-surface` (`#e4e4e7`)
-  - Bordas e divisores: `border-outline` (`rgba(255, 255, 255, 0.06)`)
+- **Canonical Palette (Generic grays gray/zinc/slate forbidden):**
+  - Application main background: `bg-surface-950` (`#09090b`)
+  - Cards and containers: `bg-surface-900` (`#18181b`) or `.sm-glass` class (20px blur)
+  - Hover and elevated surfaces: `bg-surface-800` (`#27272a`)
+  - High-contrast text: `text-on-surface` (`#e4e4e7`)
+  - Borders and dividers: `border-outline` (`rgba(255, 255, 255, 0.06)`)
 - **Zustand Store:**
-  - Sempre importe `useShallow` de `'zustand/react/shallow'` ao selecionar mais de uma propriedade da store:
+  - Always import `useShallow` from `'zustand/react/shallow'` when selecting multiple store properties:
     `const { stateA, stateB } = useStore(useShallow(s => ({ stateA: s.a, stateB: s.b })));`
-- **Áudio & DSP:**
-  - O processamento de áudio em tempo real roda no módulo WebAssembly `wasm-audio-dsp` acoplado ao `AudioWorkletNode`. É proibido usar `createScriptProcessor`.
-- **Tipagem Estrita:**
-  - Proibido o uso de `any` (`: any`, `as any`). Utilize os tipos em `src/types/` ou sincronize com `stenio --typegen`.
+- **Audio & DSP:**
+  - Real-time audio processing runs in the WebAssembly module `wasm-audio-dsp` coupled to `AudioWorkletNode`. Forbidden to use `createScriptProcessor`.
+- **Strict Typing:**
+  - Forbidden use of `any` (`: any`, `as any`). Use concrete types from `src/types/` or synchronize with `stenio --typegen`.
 
-## 🧩 Princípio DRY Absoluto (Zero Duplicação de Código)
-- **Regra Fundamental:** Modelos de IA são terminantemente proibidos de copiar e colar blocos de lógica (>6 linhas idênticas).
-- **Desacoplamento:** Toda lógica repetida de filtros, paginação, coleções ou mutações DEVE ser extraída para Custom Hooks (`features/<dominio>/hooks/`), componentes atômicos (`features/<dominio>/components/`) ou utilitários puros.
-- **Detecção Automática:** O Stenio audita o repositório com Rolling Block Hash e falha no Quality Gate se detectar blocos clonados.
+## 🧩 Absolute DRY Principle (Zero Code Duplication)
+- **Fundamental Law:** AI models are strictly prohibited from copying and pasting logic blocks (>6 identical lines).
+- **Decoupling:** All repeated logic (filters, pagination, collections, mutations) MUST be extracted into Custom Hooks (`features/<domain>/hooks/`), atomic components (`features/<domain>/components/`), or pure utilities.
+- **Automated Detection:** Stenio audits the repository with Rolling Block Hash and fails the Quality Gate upon detecting cloned blocks.
 
-## 🚀 Padrões de Performance GPU & Arandu (Zero-Repaint & 60/120 FPS)
-- **Zero-Repaint em Hovers & 3D Tilt:**
-  - NUNCA anime `box-shadow`, `backdrop-filter` ou `background-color` diretamente no container em hover. Isso força repaints pesados de GPU a cada frame.
-  - Sempre utilize pseudo-elementos (`::after`) com pré-renderização da sombra e transicione exclusivamente `opacity: 0 -> 1` com `transform: translateZ(0)` (opera a 0ms no Compositor da GPU).
+## 🚀 GPU Performance & Arandu Standards (Zero-Repaint & 60/120 FPS)
+- **Zero-Repaint on Hovers & 3D Tilt:**
+  - NEVER animate `box-shadow`, `backdrop-filter`, or `background-color` directly on the container upon hover. This forces heavy GPU repaints on every frame.
+  - Always use pseudo-elements (`::after`) with pre-rendered shadow and transition exclusively `opacity: 0 -> 1` with `transform: translateZ(0)` (operates at 0ms on the GPU Compositor).
 - **Event Buffering (Zero Layout Thrashing):**
-  - NUNCA invoque `getBoundingClientRect()`, `offsetWidth` ou `offsetHeight` dentro de loops ou handlers de mouse (`onMouseMove`, `pointermove`).
-  - Faça cache do rect no evento `onMouseEnter` / `isHoveredRef` ou armazene coordenadas em buffer (`useRef`) consumido no loop de `requestAnimationFrame` (conforme padrão canônico em `use3DTilt.ts`).
-- **Contenção CSS de Grade:**
-  - Em grades densas de cards (Arandu Binder, Catálogo, Decks, Wishlist), envolva cada carta em um container `.card-cell` com `position: relative; overflow: visible`.
-  - Isso isola o stacking context 3D de cada carta, impedindo que a GPU recalcule o layout de cards vizinhos.
-- **will-change Dinâmico:**
-  - NUNCA aplique `will-change: transform` estático em classes de repouso. Aplique estritamente em `:hover` ou sob a classe ativa `.is-hovered`.
-- **Orquestração Pura de Páginas:**
-  - Arquivos em `src/pages/*.tsx` são orquestradores de alto nível (<400 linhas). Chamadas de API (`fetch`, `axios`) e websockets DEVEM residir em Custom Hooks em `features/<dominio>/hooks/`.
+  - NEVER invoke `getBoundingClientRect()`, `offsetWidth`, or `offsetHeight` inside mouse loops or handlers (`onMouseMove`, `pointermove`).
+  - Cache rect on `onMouseEnter` / `isHoveredRef` or buffer coordinates in `useRef` consumed inside `requestAnimationFrame` (per canonical pattern in `use3DTilt.ts`).
+- **CSS Grid Containment:**
+  - In dense card grids (Arandu Binder, Catalog, Decks, Wishlist), wrap each card in a `.card-cell` container with `position: relative; overflow: visible`.
+  - This isolates the 3D stacking context of each card, preventing the GPU from recalculating layout of neighbor cards.
+- **Dynamic will-change:**
+  - NEVER apply static `will-change: transform` on rest classes. Apply strictly under `:hover` or active `.is-hovered`.
+- **Pure Page Orchestration:**
+  - Files in `src/pages/*.tsx` are high-level orchestrators (<400 lines). API calls (`fetch`, `axios`) and websockets MUST reside in Custom Hooks in `features/<domain>/hooks/`.
 
 ## 🦀 Sumænimá Hub Backend Cheat Sheet (Axum + Tokio + SQLx)
-- **E/S Assíncrona:** Nunca use `std::fs` síncrono em handlers de rota. Utilize `tokio::fs` com `.await`.
-- **Zero Panic em Produção:** Proibido unwrap, expect, `assert!()` ou `panic!()` em código do servidor. Retorne `Result<..., AppError>` ou mapeie em `StatusCode`.
-- **Queries Parametrizadas:** Use sempre binds `$1`, `$2` do SQLx. Nunca formate strings diretamente em queries SQL.
+- **Async I/O:** Never use synchronous `std::fs` in route handlers. Use `tokio::fs` with `.await`.
+- **Zero Panic in Production:** Forbidden unwrap, expect, `assert!()`, or `panic!()` in server code. Return `Result<..., AppError>` or map to `StatusCode`.
+- **Parameterized Queries:** Always use SQLx binds `$1`, `$2`. Never format strings directly into SQL queries.
 "#;
 
     println!("{}", context_markdown);

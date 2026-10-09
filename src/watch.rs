@@ -13,15 +13,15 @@ pub fn start_watch_mode(
     tag_filter: Option<&str>,
     only_rule: Option<&str>,
 ) -> Result<()> {
-    crate::baseline::print_banner("StenioSentinel — Daemon Watchdog em Tempo Real (Inotify/Rust)");
+    crate::baseline::print_banner("StenioSentinel — Real-Time Watchdog Daemon (Inotify/Rust)");
     println!(
-        "   👀 Monitorando alterações em: {}",
+        "   👀 Watching for changes in: {}",
         root.display().to_string().green().bold()
     );
     println!(
-        "   ⚡ Qualquer salvamento feito por OpenCode, IDEs ou agentes será auditado em <5ms."
+        "   ⚡ Any file save made by OpenCode, IDEs, or agents will be audited in <5ms."
     );
-    println!("   🛑 Pressione Ctrl+C para encerrar.");
+    println!("   🛑 Press Ctrl+C to terminate.");
     println!();
 
     let (tx, rx) = channel();
@@ -84,7 +84,7 @@ pub fn start_watch_mode(
                     }
                 }
             }
-            Err(e) => eprintln!("Erro no watchdog inotify: {:?}", e),
+            Err(e) => eprintln!("Error in inotify watchdog: {:?}", e),
         }
     }
 

@@ -294,7 +294,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "RUST-IDIOMATIC-ARC-CLONE",
                 "RUST-IDIOMATIC-SLICES",
                 "RUST-SPAWN-ERROR-HANDLING",
-                r"(?m)\bsudo\s+", // regex expandido — não pode ser revertido para lista curta
+                r"(?m)\bsudo\s+", // expanded regex — cannot be reverted to short list
             ],
         ),
         (
@@ -361,7 +361,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "VAULT-TAG-TAXONOMY",
                 "VAULT-FRONTMATTER",
                 "PROJECT-NAMING-CONVENTION",
-                "projects/cold-storage", // cold-storage deve estar isento da regra de nomenclatura
+                "projects/cold-storage", // cold-storage must be exempt from naming convention rule
             ],
         ),
         (
@@ -408,7 +408,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         if p.exists() {
             files_checked += 1;
             if let Ok(content) = fs::read_to_string(&p) {
-                // Checar presença de todas as strings obrigatórias com suporte a Human Override
+                // Check presence of all required invariant strings with Human Override support
                 let human_auth = std::env::var("STENIO_HUMAN_AUTHORIZATION").ok();
                 for required in *required_strings {
                     if !content.contains(required) {
@@ -428,7 +428,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                     }
                 }
 
-                // Checagem Anti-Tampering: bypass global explícito
+                // Anti-Tampering check: explicit global bypass
                 let bypass_count = content.matches("// stenio-ignore-all").count();
                 if bypass_count > 0 {
                     tamper_alerts.push(format!(

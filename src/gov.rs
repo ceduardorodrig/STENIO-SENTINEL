@@ -36,7 +36,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         } else if base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md").is_file() {
             base.join("sumaenimahub/SUMAENIMA-HUB/AGENTS.md")
         } else {
-            // Sobe recursivamente pela árvore de diretórios até encontrar o AGENTS.md raiz (suporta subpastas profundas)
+            // Ascend recursively through directory tree until root AGENTS.md is found (supports deep subfolders)
             let mut curr = base.to_path_buf();
             let mut found = None;
             for _ in 0..10 {
@@ -56,13 +56,13 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     };
 
     if !agents_md_path.is_file() {
-        let err = "❌ AGENTS.md não encontrado na raiz do repositório!".to_string();
+        let err = "❌ AGENTS.md not found in repository root!".to_string();
         messages.push(err.clone());
         errors.push(err);
     } else {
         match fs::read_to_string(&agents_md_path) {
             Ok(content) => {
-                // Se for o AGENTS.md universal do Vault/Homelab
+                // If this is the universal AGENTS.md of Vault/Homelab
                 if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
                     let has_conventions = content.contains("agent-conventions.md");
                     let has_rust_tools = content.contains("Ferramentas Rust")
@@ -97,7 +97,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                         && !content.contains("LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA)")
                         && !content.contains("ABSOLUTE LAWS OF THE AGENT"))
                 {
-                    // AGENTS.md de Repositório Satélite / Público especializado
+                    // Satellite / Specialized Public Repository AGENTS.md
                     for line in content.lines() {
                         let trimmed = line.trim();
                         if trimmed.starts_with(|c: char| c.is_ascii_digit())
@@ -121,7 +121,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                         errors.push(err);
                     }
                 } else {
-                    // AGENTS.md do Hub de Engenharia (38 Leis Absolutas)
+                    // Engineering Hub AGENTS.md (38 Absolute Laws)
                     for line in content.lines() {
                         let trimmed = line.trim();
                         if trimmed.starts_with(|c: char| c.is_ascii_digit())
@@ -145,7 +145,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                         errors.push(err);
                     }
 
-                    // Validação de cláusulas vitais (bilíngue PT/EN)
+                    // Vital clauses validation (bilingual PT/EN)
                     if content.contains("REGRA DE OURO") || content.contains("GOLDEN RULE") {
                         messages.push("✅ Golden Rule clause present".to_string());
                     } else {
@@ -172,7 +172,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
         }
     }
 
-    // Auditoria de Skills (substitui validate_skills.py por completo)
+    // Skills audit (completely replaces legacy validate_skills.py)
     let skills_dir = if repo_root.join("sumaenimahub/sumaenima-hub/skills").is_dir() {
         repo_root.join("sumaenimahub/sumaenima-hub/skills")
     } else if repo_root.join("sumaenimahub/SUMAENIMA-HUB/skills").is_dir() {
@@ -267,9 +267,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     }
 }
 
-/// Auditoria de Artefatos de Teste e Arquivos Residuais (AGENTS.md Regra 3).
-/// Agentes de IA e modelos menores frequentemente criam scripts temporários de teste (*.bak, *.tmp, scratch_*, etc.)
-/// e esquecem de apagá-los, violando a regra mandatória de limpeza de artefatos de teste.
+/// Audit of Test Artifacts and Residual Files (AGENTS.md Rule 3).
+/// AI agents and smaller models frequently create temporary test scripts (*.bak, *.tmp, scratch_*, etc.)
+/// and fail to delete them, violating the mandatory test artifact cleanup rule.
 pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
     let mut artifact_errors = Vec::new();
     let walker = ignore::WalkBuilder::new(repo_root)
@@ -327,7 +327,7 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             || file_name == "scratch.py"
             || file_name == "scratch.sh";
 
-        // 3. Scripts de teste na raiz do repositório/projetos fora de diretórios tests/
+        // 3. Test scripts in repository root/projects outside tests/ directories
         let is_root_test_script = (file_name == "test.py"
             || file_name == "test.sh"
             || file_name == "test.rs"

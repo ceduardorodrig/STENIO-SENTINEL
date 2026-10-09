@@ -587,8 +587,8 @@ fn load_profiles() -> Vec<ProfileEntry> {
     out
 }
 
-/// Nomes reais dos jogos via `steam-launch-options list` (que usa game_name()
-/// do appinfo do Steam — fonte canônica, sem hardcode).
+/// Real game names via `steam-launch-options list` (which uses game_name()
+/// from Steam appinfo — canonical source, without hardcoding).
 fn game_names_from_list() -> std::collections::HashMap<u64, String> {
     let mut map = std::collections::HashMap::new();
     let out = Command::new("steam-launch-options")

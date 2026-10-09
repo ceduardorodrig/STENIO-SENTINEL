@@ -96,7 +96,7 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                 for (svc_key, svc_val) in services {
                     let svc_name = svc_key.as_str().unwrap_or("unknown");
 
-                    // Política de restart
+                    // Restart policy
                     let has_restart = svc_val.get("restart").is_some()
                         || svc_val
                             .get("deploy")
@@ -105,19 +105,19 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                     if !has_restart {
                         violations.push(Violation {
                             rule_id: "INFRA-COMPOSE-RESTART".to_string(),
-                            rule_name: "Política de Restart Ausente no Serviço".to_string(),
+                            rule_name: "Service Missing Restart Policy".to_string(),
                             severity: Severity::Warning,
                             file_path: path_str.to_string(),
                             line_number: 1,
                             snippet: format!("{}:", svc_name),
-                            message: format!("Serviço '{}' não define 'restart: unless-stopped' ou 'restart: always'.", svc_name),
-                            suggestion: Some("Adicione 'restart: unless-stopped' ao serviço no compose.yml.".to_string()),
+                            message: format!("Service '{}' does not define 'restart: unless-stopped' or 'restart: always'.", svc_name),
+                            suggestion: Some("Add 'restart: unless-stopped' to the service in compose.yml.".to_string()),
                         });
                     }
 
-                    // Healthcheck (ou exceção explícita para imagens distroless).
-                    // Aceita o label em duas formas: mapa (`labels: {homelab.healthcheck: watchdog}`)
-                    // ou lista (`labels: ["homelab.healthcheck=watchdog"]`).
+                    // Healthcheck (or explicit exception label for distroless images).
+                    // Accepts label as map (`labels: {homelab.healthcheck: watchdog}`)
+                    // or list (`labels: ["homelab.healthcheck=watchdog"]`).
                     let has_healthcheck = svc_val.get("healthcheck").is_some();
                     let has_watchdog_label = svc_val
                         .get("labels")
@@ -137,17 +137,17 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                     if !has_healthcheck && !has_watchdog_label {
                         violations.push(Violation {
                             rule_id: "INFRA-COMPOSE-HEALTHCHECK".to_string(),
-                            rule_name: "Healthcheck Ausente no Serviço".to_string(),
+                            rule_name: "Service Missing Healthcheck".to_string(),
                             severity: Severity::Warning,
                             file_path: path_str.to_string(),
                             line_number: 1,
                             snippet: format!("{}:", svc_name),
                             message: format!(
-                                "Serviço '{}' não define 'healthcheck' (nem a exceção 'homelab.healthcheck: watchdog').",
+                                "Service '{}' does not define 'healthcheck' (nor the 'homelab.healthcheck: watchdog' exception label).",
                                 svc_name
                             ),
                             suggestion: Some(
-                                "Adicione 'healthcheck' ao serviço (ver mnemocine/guides/docker-healthchecks.md) ou, para imagem distroless, o label 'homelab.healthcheck: watchdog'.".to_string(),
+                                "Add 'healthcheck' to the service (see mnemocine/guides/docker-healthchecks.md) or label 'homelab.healthcheck: watchdog' for distroless images.".to_string(),
                             ),
                         });
                     }
@@ -157,13 +157,13 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
         Err(e) => {
             violations.push(Violation {
                 rule_id: "INFRA-COMPOSE-SYNTAX".to_string(),
-                rule_name: "Erro de Sintaxe em Docker Compose".to_string(),
+                rule_name: "Docker Compose Syntax Error".to_string(),
                 severity: Severity::Error,
                 file_path: path_str.to_string(),
                 line_number: 1,
                 snippet: e.to_string(),
-                message: format!("Sintaxe inválida no arquivo compose: {}", e),
-                suggestion: Some("Corrija a formatação YAML do arquivo compose.yml.".to_string()),
+                message: format!("Invalid syntax in compose file: {}", e),
+                suggestion: Some("Fix YAML formatting in the compose.yml file.".to_string()),
             });
         }
     }
@@ -207,8 +207,8 @@ pub fn audit_compose_dir(root: &Path) -> InfraReport {
             continue;
         }
         let path_str = path.display().to_string();
-        // `golden/` são cópias do `config-backup` dos MESMOS composes — escanear
-        // as duas gera achado duplicado. Ignoramos a cópia dourada.
+        // `golden/` contains copies from `config-backup` of the SAME composes — scanning
+        // both causes duplicate findings. Ignore the golden copy.
         if path_str.contains("/golden/") {
             continue;
         }
@@ -351,33 +351,28 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                             && !value.contains("ENC[AES256_GCM")
                             && value != "\"\""
                             && value != "''"
-                            // placeholders óbvios não são vazamento
+                            // Obvious placeholders are not secret leaks
                             && !value.eq_ignore_ascii_case("changeme")
                             && !value.eq_ignore_ascii_case("placeholder")
                             && !value.eq_ignore_ascii_case("example")
                             && !value.eq_ignore_ascii_case("your_password")
                             && !value.starts_with('<')
                             && !value.starts_with('%')
-                            // Template de configuração não é segredo: o valor é
-                            // preenchido em runtime. As definições de indexador do
-                            // Prowlarr usam Go template (`{{ .Config.password }}`) e
-                            // são ~195 dos alertas de um espelho de configs — ruído
-                            // puro que esconderia o achado real ao lado.
+                            // Configuration templates are not plaintext secrets: values are
+                            // populated at runtime (e.g. Go templates in indexers like `{{ .Config.password }}`).
                             && !value.contains("{{")
                             && !value.contains("}}")
                             && !value.contains("<%")
                             && !value.contains("${{")
-                            // Declaração "em algum outro lugar": não é segredo em claro,
-                            // é a REFERÊNCIA ao cofre. Sem isto, uma linha como
-                            // `- **Password:** in the sops store (VAR)` disparava o
-                            // alerta por conter a palavra "in ... store".
+                            // Vault reference declarations: referencing a secret in a store
+                            // (e.g. `Password: in the sops store`) is a pointer, not a secret leak.
                             && !value.contains("sops")
                             && !value.contains("SOPS")
                             && !value.contains("secrets.env")
                             && !value.contains("cofre")
                             && !value.contains("secret manager")
                             && !value.contains("vault")
-                            // Continuação de frase: valores reais não começam assim.
+                            // Prose continuations: actual secrets do not begin with these prepositions.
                             && !value.starts_with("in ")
                             && !value.starts_with("no ")
                             && !value.starts_with("em ")
@@ -485,10 +480,10 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
 
         // ── 5. Technical Debt Detection: Loose Python (ARCH-LEGACY-PYTHON) ────
         // Rule: scripts/archive/ is the proper place for legacy scripts — total silence there.
-        // Projetos Rust dedicados (docx-extractor/, validador-roteiro/) têm seu próprio
-        // steniocheck.toml, não auditamos aqui.
-        // Só disparamos WARN para .py soltos fora do archive e fora de projeto próprio.
-        // Só no código NOSSO (`code_debt`): num fork/espelho o `.py` é de terceiros.
+        // Dedicated Rust projects (docx-extractor/, validador-roteiro/) have their own
+        // steniocheck.toml; they are not audited here.
+        // Only trigger WARN for loose .py scripts outside archive and outside dedicated projects.
+        // Only in OUR code (`code_debt`): in a mirror/fork, `.py` files belong to upstream.
         if code_debt && file_name.ends_with(".py") {
             scanned_count += 1;
             let in_archive =
@@ -499,18 +494,18 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
             if !in_archive && !in_dedicated_project {
                 violations.push(Violation {
                     rule_id: "ARCH-LEGACY-PYTHON".to_string(),
-                    rule_name: "Script Python Solto (Fora do Archive)".to_string(),
+                    rule_name: "Unarchived Loose Python Script".to_string(),
                     severity: Severity::Warning,
                     file_path: path_str.clone(),
                     line_number: 1,
-                    snippet: format!("Arquivo: {}", file_name),
-                    message: "Script Python encontrado fora de scripts/archive/. Scripts legados devem ser movidos para archive/ ou migrados para Rust.".to_string(),
-                    suggestion: Some("Mova para scripts/archive/ se for legado/referência, ou reescreva em Rust se ainda estiver em uso ativo.".to_string()),
+                    snippet: format!("File: {}", file_name),
+                    message: "Python script detected outside scripts/archive/. Legacy scripts must be moved to archive/ or migrated to Rust.".to_string(),
+                    suggestion: Some("Move to scripts/archive/ if legacy/reference, or rewrite in Rust if in active use.".to_string()),
                 });
             }
         }
 
-        // ── 6. Auditoria de Permissões POSIX em Segredos (SEC-PERM-LEAK) ──────
+        // ── 6. Insecure POSIX Permissions on Secrets Audit (SEC-PERM-LEAK) ────
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -524,13 +519,13 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                     if mode > 0o600 {
                         violations.push(Violation {
                             rule_id: "SEC-PERM-LEAK".to_string(),
-                            rule_name: "Permissões POSIX Inseguras em Arquivo de Segredo".to_string(),
+                            rule_name: "Insecure POSIX Permissions on Secret File".to_string(),
                             severity: Severity::Error,
                             file_path: path_str.clone(),
                             line_number: 1,
-                            snippet: format!("Permissão atual: 0{:o}", mode),
-                            message: format!("Arquivo sensível '{}' possui permissão 0{:o} (deve ser 0600 ou 0400).", file_name, mode),
-                            suggestion: Some("Corrija imediatamente executando: chmod 0600 <arquivo>.".to_string()),
+                            snippet: format!("Current mode: 0{:o}", mode),
+                            message: format!("Sensitive file '{}' has permissions 0{:o} (must be 0600 or 0400).", file_name, mode),
+                            suggestion: Some("Remediate immediately by executing: chmod 0600 <file>.".to_string()),
                         });
                     }
                 }
@@ -538,26 +533,26 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         }
     }
 
-    // ── 7. Verificação de Paridade Estática de Produção (OPS-STATIC-PARITY) ──
+    // ── 7. Production Static Parity Verification (OPS-STATIC-PARITY) ──────
     if let Some(parity) = crate::deploy::check_static_parity(root) {
         if !parity.in_sync {
             violations.push(Violation {
                 rule_id: "OPS-STATIC-PARITY".to_string(),
-                rule_name: "Deriva de Paridade Estática do Frontend em Produção".to_string(),
+                rule_name: "Production Frontend Static Parity Drift".to_string(),
                 severity: Severity::Warning,
                 file_path: "app/frontend-v2/dist/index.html".to_string(),
                 line_number: 1,
-                snippet: format!("Local: {} | Remoto: {}", parity.local_bundle, parity.remote_bundle),
+                snippet: format!("Local: {} | Remote: {}", parity.local_bundle, parity.remote_bundle),
                 message: format!(
-                    "Nó de borda em produção está servindo bundle legado ('{}'), divergente da build local ('{}').",
+                    "Production edge node is serving a legacy bundle ('{}'), diverging from local build ('{}').",
                     parity.remote_bundle, parity.local_bundle
                 ),
-                suggestion: Some("Sincronize a produção imediatamente executando: stenio --deploy front".to_string()),
+                suggestion: Some("Synchronize production immediately by executing: stenio --deploy front".to_string()),
             });
         }
     }
 
-    // ── 8. Auditoria de Integridade de Release (REL-PKGBUILD-SYNC & REL-TAG-DRIFT)
+    // ── 8. Release Integrity Audit (REL-PKGBUILD-SYNC & REL-TAG-DRIFT) ─────
     let pkgbuild_path = root.join("PKGBUILD");
     let cargo_path = root.join("Cargo.toml");
     if pkgbuild_path.exists() && cargo_path.exists() {
@@ -591,16 +586,16 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 if cver != pver {
                     violations.push(Violation {
                         rule_id: "REL-PKGBUILD-SYNC".to_string(),
-                        rule_name: "Dessincronia de Versão entre Cargo.toml e PKGBUILD".to_string(),
+                        rule_name: "Version Mismatch Between Cargo.toml and PKGBUILD".to_string(),
                         severity: Severity::Error,
                         file_path: "PKGBUILD".to_string(),
                         line_number: 1,
                         snippet: format!("Cargo.toml: {} | PKGBUILD: {}", cver, pver),
                         message: format!(
-                            "A versão do pacote PKGBUILD ('{}') difere da versão declarada em Cargo.toml ('{}').",
+                            "PKGBUILD package version ('{}') diverges from version declared in Cargo.toml ('{}').",
                             pver, cver
                         ),
-                        suggestion: Some(format!("Sincronize pkgver={} no PKGBUILD conforme governance/release-policy.md.", cver)),
+                        suggestion: Some(format!("Synchronize pkgver={} in PKGBUILD per governance/release-policy.md.", cver)),
                     });
                 }
             }
@@ -609,12 +604,12 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
 
     if violations.is_empty() {
         messages.push(format!(
-            "✅ {} arquivos de infraestrutura (Compose/Systemd/SOPS) auditados e conformes.",
+            "✅ {} infrastructure files (Compose/Systemd/SOPS) audited and compliant.",
             scanned_count
         ));
     } else {
         messages.push(format!(
-            "ℹ️ {} desvio(s) de infraestrutura detectados.",
+            "ℹ️ {} infrastructure issue(s) detected.",
             violations.len()
         ));
     }

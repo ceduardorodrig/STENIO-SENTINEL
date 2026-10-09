@@ -31,7 +31,7 @@ struct McpResponse {
 }
 
 pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) -> Result<()> {
-    eprintln!("🦀 StenioSentinel MCP Server inicializado em stdio (JSON-RPC 2.0)");
+    eprintln!("🦀 StenioSentinel MCP Server initialized on stdio (JSON-RPC 2.0)");
     let engine = Engine::new(rules.clone(), whitelist.clone())?;
 
     let stdin = io::stdin();
@@ -51,7 +51,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
         let req: McpRequest = match serde_json::from_str(trimmed) {
             Ok(r) => r,
             Err(err) => {
-                eprintln!("Erro ao deserializar MCP request: {}", err);
+                eprintln!("Error deserializing MCP request: {}", err);
                 continue;
             }
         };
@@ -70,7 +70,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         },
                         "serverInfo": {
                             "name": "stenio-sentinel",
-                            "version": "3.1.0"
+                            "version": "4.0.0"
                         }
                     })),
                     error: None,
@@ -80,7 +80,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                 stdout.flush()?;
             }
             "notifications/initialized" => {
-                // Notificação: sem resposta necessária
+                // Notification: no response needed
             }
             "ping" => {
                 let resp = McpResponse {
@@ -98,41 +98,41 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                     "tools": [
                         {
                             "name": "stenio_scan",
-                            "description": "Audita um arquivo ou diretório usando as regras universais de governança do StenioSentinel e retorna as violações de forma concisa.",
+                            "description": "Audits a file or directory using StenioSentinel universal governance rules and returns violations concisely.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "path": {
                                         "type": "string",
-                                        "description": "Caminho do arquivo ou diretório a auditar"
+                                        "description": "Path to file or directory to audit"
                                     },
                                     "tag": {
                                         "type": "string",
-                                        "description": "Filtrar por tag específica (ex: sec, arch, frontend, infra, doc)"
+                                        "description": "Filter by specific tag (e.g., sec, arch, frontend, infra, doc)"
                                     },
                                     "only_rule": {
                                         "type": "string",
-                                        "description": "Executar apenas uma regra (ex: SEC-SUDO, ARCH-RUST-CMD-LEGACY)"
+                                        "description": "Execute only a single rule by ID (e.g., SEC-SUDO, ARCH-RUST-CMD-LEGACY)"
                                     }
                                 }
                             }
                         },
                         {
                             "name": "stenio_diff",
-                            "description": "Executa auditoria cirúrgica ultrarrápida (<5ms) apenas nos arquivos modificados no Git (staged ou última revisão).",
+                            "description": "Executes sub-millisecond surgical audit (<5ms) only on files modified in Git (staged or given revision).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "rev": {
                                         "type": "string",
-                                        "description": "Alvo do diff (ex: 'staged', 'HEAD~1'). Default: arquivos em staging/modificados"
+                                        "description": "Target git revision (e.g., 'staged', 'HEAD~1'). Default: staged/modified files"
                                     }
                                 }
                             }
                         },
                         {
                             "name": "stenio_guardian",
-                            "description": "Verifica a integridade criptográfica SHA-256 e mecanismos anti-tampering do núcleo do Stênio.",
+                            "description": "Verifies SHA-256 cryptographic integrity and anti-tampering defenses of Stenio Sentinel core.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -140,7 +140,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         },
                         {
                             "name": "stenio_context",
-                            "description": "Retorna o contexto canônico de governança, arquitetura e infraestrutura do ecossistema SUMÆNIMÁ / Homelab.",
+                            "description": "Returns canonical governance, architecture, and homelab infrastructure context for the SUMÆNIMÁ / Homelab ecosystem.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -148,37 +148,37 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         },
                         {
                             "name": "stenio_explain",
-                            "description": "Explica detalhadamente o porquê de uma regra existir, fornecendo exemplos de código incorreto, código correto e remediação passo-a-passo para agentes e LLMs.",
+                            "description": "Explains rule rationale in detail with bad code examples, good code patterns, and step-by-step remediation guidance for agents and LLMs.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "rule_id": {
                                         "type": "string",
-                                        "description": "ID da regra (ex: SEC-SUDO, RUST-NO-UNWRAP, ARCH-RUST-TOOLS, VAULT-FRONTMATTER, HOMELAB-NAMING) ou vazio para listar todas"
+                                        "description": "Rule ID (e.g., SEC-SUDO, RUST-NO-UNWRAP, ARCH-RUST-TOOLS, VAULT-FRONTMATTER, HOMELAB-NAMING) or empty to list all"
                                     }
                                 }
                             }
                         },
                         {
                             "name": "stenio_dry",
-                            "description": "Audita duplicação de código usando o Princípio DRY Absoluto com Rolling Block Hash (<15ms). Detecta blocos clonados entre arquivos ou dentro do mesmo arquivo.",
+                            "description": "Audits code duplication using the Absolute DRY Principle with Rolling Block Hash (<15ms). Detects duplicate blocks across or within files.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "path": {
                                         "type": "string",
-                                        "description": "Caminho raiz a inspecionar (default: .)"
+                                        "description": "Root path to inspect (default: .)"
                                     },
                                     "min_lines": {
                                         "type": "number",
-                                        "description": "Número mínimo de linhas substantivas idênticas para flag de duplicação (default: 6)"
+                                        "description": "Minimum identical substantive lines required to trigger duplication (default: 6)"
                                     }
                                 }
                             }
                         },
                         {
                             "name": "stenio_gate",
-                            "description": "Quality Gate Pré-Entrega: executa uma auditoria rigorosa de tolerância zero (regras críticas, governança, artefatos e duplicação DRY). O agente DEVE chamar esta ferramenta antes de declarar conclusão da tarefa e garantir que retorne APROVADO.",
+                            "description": "Pre-Delivery Quality Gate: executes zero-tolerance audit (critical rules, governance, test artifacts, and DRY duplication). Agents MUST call this tool before declaring task completion and ensure it returns PASSED.",
                             "inputSchema": path_input_schema()
                         }
                     ]
@@ -215,7 +215,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                         if target_path.is_file() {
                             let violations = engine.scan_file(&target_path, tag, only);
                             if violations.is_empty() {
-                                format!("✨ Arquivo '{}' 100% conforme. Zero violações.", path_str)
+                                format!("✨ File '{}' 100% compliant. Zero violations.", path_str)
                             } else {
                                 let lines: Vec<String> =
                                     violations.iter().map(format_violation_line).collect();
@@ -227,13 +227,13 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                 Ok(report) => {
                                     if report.violations.is_empty() {
                                         format!(
-                                            "✨ Diretório '{}' 100% conforme. Zero violações em {} arquivos.",
+                                            "✨ Directory '{}' 100% compliant. Zero violations across {} files.",
                                             path_str, report.total_files_scanned
                                         )
                                     } else {
                                         let mut lines = Vec::new();
                                         lines.push(format!(
-                                            "Auditoria em '{}': {} erro(s), {} aviso(s) em {} arquivo(s)",
+                                            "Audit on '{}': {} error(s), {} warning(s) across {} file(s)",
                                             path_str, report.error_count, report.warning_count, report.total_files_scanned
                                         ));
                                         for v in report.violations.iter().take(30) {
@@ -241,14 +241,14 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                         }
                                         if report.violations.len() > 30 {
                                             lines.push(format!(
-                                                "... e mais {} violações.",
+                                                "... and {} more violation(s).",
                                                 report.violations.len() - 30
                                             ));
                                         }
                                         lines.join("\n")
                                     }
                                 }
-                                Err(e) => format!("Erro ao auditar diretório: {}", e),
+                                Err(e) => format!("Error auditing directory: {}", e),
                             }
                         }
                     }
@@ -258,13 +258,13 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             Ok(report) => {
                                 if report.violations.is_empty() {
                                     format!(
-                                        "✨ Scan cirúrgico limpo! Zero violações nos {} arquivos modificados.",
+                                        "✨ Clean surgical scan! Zero violations in {} modified files.",
                                         report.total_files_scanned
                                     )
                                 } else {
                                     let mut lines = Vec::new();
                                     lines.push(format!(
-                                        "Scan cirúrgico: {} erro(s), {} aviso(s) nos arquivos modificados:",
+                                        "Surgical scan: {} error(s), {} warning(s) in modified files:",
                                         report.error_count, report.warning_count
                                     ));
                                     for v in &report.violations {
@@ -273,31 +273,31 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                     lines.join("\n")
                                 }
                             }
-                            Err(e) => format!("Erro ao executar diff: {}", e),
+                            Err(e) => format!("Error executing diff: {}", e),
                         }
                     }
                     "stenio_guardian" => {
                         let rep = audit_stenio_integrity(repo_root);
                         if rep.is_intact {
                             format!(
-                                "🛡️ Guardian: Íntegro. Zero adulteração. Executável SHA-256: {}",
+                                "🛡️ Guardian: Intact. Zero tampering detected. Executable SHA-256: {}",
                                 rep.binary_hash
                             )
                         } else {
                             format!(
-                                "🚨 Guardian: ADULTERAÇÃO DETECTADA!\n{}",
+                                "🚨 Guardian: TAMPERING DETECTED!\n{}",
                                 rep.tamper_alerts.join("\n")
                             )
                         }
                     }
                     "stenio_context" => {
                         format!(
-                            "# Contexto Canônico StenioSentinel v3.1\n\n\
-                            - Plataforma: Monorepo / Vault Obsidian em /mnt/NVME_PCI/agentic-ai\n\
+                            "# Canonical Context StenioSentinel v4.0\n\n\
+                            - Platform: Monorepo / Obsidian Vault at /mnt/NVME_PCI/agentic-ai\n\
                             - Homelab Mnemocine: psicopompo (dev/gpu), ybyra (edge), kuaray (media), ybytu (cloud exit), kavure (services)\n\
-                            - GPU: RTX 5050 Blackwell com aceleração local CUDA\n\
-                            - Regras fundamentais: Proibido sudo puro (usar pkexec em scripts), proibido ferramentas GNU em Rust (usar xh, walkdir, regex), soft mount NFS obrigatório.\n\
-                            - Ferramentas CLI: use stenio --diff para scan rápido de alterações."
+                            - GPU: RTX 5050 Blackwell with local CUDA acceleration\n\
+                            - Core Rules: Raw sudo forbidden (use sudoers NOPASSWD or SOPS), GNU legacy tools forbidden in Rust (use xh, walkdir, regex), soft NFS mounts mandatory.\n\
+                            - CLI Tools: use stenio --diff for fast delta scans."
                         )
                     }
                     "stenio_explain" => {
@@ -311,7 +311,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                             crate::explain::format_explanation_plain(exp)
                         } else {
                             format!(
-                                "Nenhuma explicação encontrada para a regra '{}'.\n\n{}",
+                                "No explanation found for rule '{}'.\n\n{}",
                                 rule_id,
                                 crate::explain::list_all_explanations()
                             )
@@ -353,31 +353,31 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                                         dv.message,
                                         dv.suggestion
                                             .as_deref()
-                                            .unwrap_or("Abstraia a lógica duplicada.")
+                                            .unwrap_or("Extract and deduplicate common logic.")
                                     ));
                                 }
 
                                 if errors.is_empty() {
                                     format!(
-                                        "🎉 [GATE APROVADO] Parabéns! Zero erros impeditivos e zero duplicações em {} arquivos. Código 100% conforme. A tarefa está aprovada para entrega!",
+                                        "🎉 [GATE PASSED] Congratulations! Zero blocking errors and zero duplications across {} files. Code is 100% compliant. Task approved for delivery!",
                                         report.total_files_scanned
                                     )
                                 } else {
                                     format!(
-                                        "🛑 [GATE REJEITADO — BLOQUEIO MANDATÓRIO DE ENTREGA]\n\
-                                        A tarefa NÃO PODE ser declarada concluída. É ESTRITAMENTE PROIBIDO:\n\
-                                        1. Propor alterar o motor do Stênio ou criar novas crates de governança (Violação ARCH-SCOPE-ISOLATION).\n\
-                                        2. Alegar que erros ou duplicações DRY são 'problemas pré-existentes' para fugir da correção.\n\
-                                        3. Substituir unwrap() por expect() (Ambos violam RUST-NO-UNWRAP com erro fatal).\n\
-                                        4. Adicionar comentários // stenio-ignore (Violação AGENT-NO-SUPPRESSION-DIRECTIVES).\n\n\
-                                        O modelo DEVE corrigir as seguintes {} violações diretamente no código da aplicação antes de finalizar:\n\n{}\n\n\
-                                        Consulte 'stenio_explain' com o rule_id para ver a remediação oficial.",
+                                        "🛑 [GATE REJECTED — MANDATORY DELIVERY BLOCK]\n\
+                                        The task CANNOT be marked as complete. STRICTLY FORBIDDEN:\n\
+                                        1. Proposing changes to the Stenio governance engine or creating new governance crates (ARCH-SCOPE-ISOLATION violation).\n\
+                                        2. Claiming errors or DRY duplications are 'pre-existing issues' to avoid fixing them.\n\
+                                        3. Replacing unwrap() with expect() (Both violate RUST-NO-UNWRAP with fatal error).\n\
+                                        4. Adding // stenio-ignore comments or suppression directives (AGENT-NO-SUPPRESSION-DIRECTIVES violation).\n\n\
+                                        The model MUST resolve the following {} violation(s) directly in the application code before finishing:\n\n{}\n\n\
+                                        Consult 'stenio_explain' with the rule_id for official remediation instructions.",
                                         errors.len(),
                                         errors.join("\n")
                                     )
                                 }
                             }
-                            Err(e) => format!("Erro ao executar Quality Gate: {}", e),
+                            Err(e) => format!("Error executing Quality Gate: {}", e),
                         }
                     }
                     "stenio_dry" => {
@@ -395,32 +395,32 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
 
                         if dry_violations.is_empty() {
                             format!(
-                                "✨ [DRY APROVADO] Zero duplicações detectadas em {} arquivos (tempo: {:?}). Princípio DRY 100% cumprido!",
+                                "✨ [DRY PASSED] Zero duplications detected across {} files (duration: {:?}). Absolute DRY Principle 100% satisfied!",
                                 dry_count, dry_dur
                             )
                         } else {
                             let mut msg = format!(
-                                "⚠️ [DRY DETECTADO] {} bloco(s) de código duplicado(s) detectado(s) em {} arquivos (tempo: {:?}):\n\n",
+                                "⚠️ [DRY DETECTED] {} duplicate code block(s) detected across {} files (duration: {:?}):\n\n",
                                 dry_violations.len(),
                                 dry_count,
                                 dry_dur
                             );
                             for v in &dry_violations {
                                 msg.push_str(&format!(
-                                    "• {}:{} - {}\n  Snippet:\n{}\n  💡 Sugestão: {}\n\n",
+                                    "• {}:{} - {}\n  Snippet:\n{}\n  💡 Suggestion: {}\n\n",
                                     v.file_path,
                                     v.line_number,
                                     v.message,
                                     v.snippet,
                                     v.suggestion
                                         .as_deref()
-                                        .unwrap_or("Abstraia a lógica duplicada.")
+                                        .unwrap_or("Extract and deduplicate common logic.")
                                 ));
                             }
                             msg
                         }
                     }
-                    other => format!("Ferramenta desconhecida: '{}'", other),
+                    other => format!("Unknown tool: '{}'", other),
                 };
 
                 let resp = McpResponse {
@@ -447,7 +447,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
                     result: None,
                     error: Some(json!({
                         "code": -32601,
-                        "message": format!("Método '{}' não encontrado", other)
+                        "message": format!("Method '{}' not found", other)
                     })),
                 };
                 let out = serde_json::to_string(&resp)?;
@@ -482,7 +482,7 @@ fn path_input_schema() -> Value {
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Caminho raiz a inspecionar (default: .)"
+                "description": "Root path to inspect (default: .)"
             }
         }
     })

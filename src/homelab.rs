@@ -21,7 +21,7 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
     } else {
         return HomelabReport {
             total_files_scanned: 0,
-            messages: vec!["Diretório mnemocine/ não encontrado no escopo.".to_string()],
+            messages: vec!["Directory mnemocine/ not found in scope.".to_string()],
             violations: vec![],
         };
     };

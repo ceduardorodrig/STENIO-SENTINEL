@@ -47,7 +47,7 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
         return None;
     }
 
-    // Ignora pontuação pura e fechamentos estruturais
+    // Ignore bare punctuation and structural closures
     match trimmed {
         "{" | "}" | "};" | "});" | ");" | ")" | "(" | "]" | "];" | "]," | "[" | "else {"
         | "return;" | "return true;" | "return false;" | "return null;" | "return undefined;"
@@ -57,7 +57,7 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
         _ => {}
     }
 
-    // Ignora imports, exports, derives e decorators que são boilerplate inevitável
+    // Ignore imports, exports, derives, and decorators that are unavoidable boilerplate
     if trimmed.starts_with("import ")
         || trimmed.starts_with("export ")
         || trimmed.starts_with("from ")
@@ -134,9 +134,9 @@ pub fn parse_file_substantive(path: &Path, content: &str) -> FileRecord {
     }
 }
 
-/// Motor Universal de Detecção de Duplicação de Código (DRY).
-/// Utiliza janela deslizante de hashing combinatório (Rolling Block Hash) e extensão maximal
-/// para encontrar blocos duplicados idênticos em tempo <15ms.
+/// Universal Code Duplication Detection Engine (DRY).
+/// Employs a rolling combinatorial hash window (Rolling Block Hash) and maximal extension
+/// to identify identical duplicated blocks in <15ms.
 pub fn detect_dry_duplication(
     files: &[FileRecord],
     min_lines: usize,
@@ -147,7 +147,7 @@ pub fn detect_dry_duplication(
         return violations;
     }
 
-    // Mapa de hash -> lista de (file_idx, sub_idx)
+    // Map of hash -> list of (file_idx, sub_idx)
     let mut window_map: HashMap<u64, Vec<(usize, usize)>> = HashMap::new();
 
     for (f_idx, file) in files.iter().enumerate() {
@@ -167,8 +167,8 @@ pub fn detect_dry_duplication(
         }
     }
 
-    // Rastreia intervalos substantivos já cobertos por blocos maximalmente estendidos
-    // Chave: (file_idx, sub_idx)
+    // Track substantive ranges already covered by maximally extended blocks
+    // Key: (file_idx, sub_idx)
     let mut reported_positions: HashSet<(usize, usize)> = HashSet::new();
 
     for (_hash, occurrences) in window_map {
@@ -176,7 +176,7 @@ pub fn detect_dry_duplication(
             continue;
         }
 
-        // Compara cada par de ocorrências
+        // Compare each pair of occurrences
         for i in 0..occurrences.len() {
             let (f1, idx1) = occurrences[i];
 
@@ -302,7 +302,7 @@ pub fn scan_dry_directory(
     (violations, files_count, t0.elapsed())
 }
 
-/// Renderiza relatório formatado para o terminal.
+/// Renders formatted report to terminal.
 pub fn print_dry_report(
     violations: &[Violation],
     files_count: usize,
@@ -310,7 +310,7 @@ pub fn print_dry_report(
 ) {
     println!(
         "\n{}",
-        "═══ MOTOR DRY (Don't Repeat Yourself) ═══".cyan().bold()
+        "═══ DRY ENGINE (Don't Repeat Yourself) ═══".cyan().bold()
     );
     println!(
         "Files analyzed: {} | Duration: {:?}",

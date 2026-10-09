@@ -27,8 +27,8 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
     let pt_dir = cv_root.join("pt-br");
     let en_dir = cv_root.join("en-us");
 
-    // 1. Mapeamento de Paridade Bilíngue PT-BR <-> EN-US
-    // Correspondência esperada:
+    // 1. Bilingual Parity Mapping PT-BR <-> EN-US
+    // Expected correspondence:
     // 01-tech-pm-br.md           <-> 01-tech-pm-en.md
     // 01-tech-dados-negocios-br.md <-> 01-tech-business-data-en.md
     // 01-tech-produto-dados-br.md <-> 01-tech-product-data-en.md
@@ -87,7 +87,7 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
         }
     }
 
-    // Checagem de paridade
+    // Parity verification
     for (pt_file, en_file) in parity_pairs {
         let has_pt = pt_files.contains_key(pt_file);
         let has_en = en_files.contains_key(en_file);
@@ -95,41 +95,41 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
         if has_pt && !has_en {
             violations.push(Violation {
                 rule_id: "CV-BILINGUAL-PARITY".to_string(),
-                rule_name: "Paridade Bilíngue Ausente (Falta EN)".to_string(),
+                rule_name: "Missing Bilingual Parity (EN Missing)".to_string(),
                 severity: Severity::Error,
                 file_path: format!("en-us/{}", en_file),
                 line_number: 1,
                 snippet: "".to_string(),
                 message: format!(
-                    "Versão em inglês '{}' ausente para o correspondente em português '{}'.",
+                    "English version '{}' missing for Portuguese counterpart '{}'.",
                     en_file, pt_file
                 ),
                 suggestion: Some(format!(
-                    "Crie o arquivo 'en-us/{}' traduzindo o conteúdo de 'pt-br/{}'.",
+                    "Create 'en-us/{}' by translating content from 'pt-br/{}'.",
                     en_file, pt_file
                 )),
             });
         } else if !has_pt && has_en {
             violations.push(Violation {
                 rule_id: "CV-BILINGUAL-PARITY".to_string(),
-                rule_name: "Paridade Bilíngue Ausente (Falta PT)".to_string(),
+                rule_name: "Missing Bilingual Parity (PT Missing)".to_string(),
                 severity: Severity::Error,
                 file_path: format!("pt-br/{}", pt_file),
                 line_number: 1,
                 snippet: "".to_string(),
                 message: format!(
-                    "Versão em português '{}' ausente para o correspondente em inglês '{}'.",
+                    "Portuguese version '{}' missing for English counterpart '{}'.",
                     pt_file, en_file
                 ),
                 suggestion: Some(format!(
-                    "Crie o arquivo 'pt-br/{}' traduzindo o conteúdo de 'en-us/{}'.",
+                    "Create 'pt-br/{}' by translating content from 'en-us/{}'.",
                     pt_file, en_file
                 )),
             });
         }
     }
 
-    // 2. Validação da Narrativa do README ("O Fio da Meada" e "The Thread")
+    // 2. Continuous README Narrative Validation ("The Thread")
     let readme_path = cv_root.join("README.md");
     if readme_path.is_file() {
         scanned_count += 1;
@@ -141,13 +141,13 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
             if !has_thread_pt && !has_thread_en {
                 violations.push(Violation {
                     rule_id: "CV-README-THREAD".to_string(),
-                    rule_name: "Narrativa Contínua do README Ausente".to_string(),
+                    rule_name: "Missing README Continuous Narrative".to_string(),
                     severity: Severity::Warning,
                     file_path: "README.md".to_string(),
                     line_number: 1,
                     snippet: "".to_string(),
-                    message: "O README deve manter a narrativa contínua ('The Thread' ou 'O Fio da Meada').".to_string(),
-                    suggestion: Some("Atualize a seção 'The Thread' / 'O Fio da Meada' no README.md.".to_string()),
+                    message: "The CV README must maintain continuous career narrative ('The Thread').".to_string(),
+                    suggestion: Some("Update 'The Thread' section in README.md.".to_string()),
                 });
             }
         }

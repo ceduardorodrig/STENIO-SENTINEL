@@ -74,13 +74,13 @@ impl Engine {
         if has_stenio_engine_files && has_app_or_project_files {
             Some(Violation {
                 rule_id: "ARCH-SCOPE-ISOLATION".to_string(),
-                rule_name: "Violação de Isolamento de Escopo Monorepo".to_string(),
+                rule_name: "Monorepo Scope Isolation Violation".to_string(),
                 severity: Severity::Error,
                 file_path: "governance/stenio".to_string(),
                 line_number: 1,
-                snippet: "Diff misto contendo código de aplicação/projetos e motor de governança (governance/stenio/src/)".to_string(),
-                message: "Violação de Governança: É proibido alterar código da aplicação/projetos e o motor do Stênio no mesmo commit/tarefa.".to_string(),
-                suggestion: Some("Isole as tarefas: submeta primeiro a evolução do Stênio em commit isolado, ou desfaça a alteração de governança se o foco for a aplicação.".to_string()),
+                snippet: "Mixed diff containing application/project code and governance engine code (governance/stenio/src/)".to_string(),
+                message: "Governance Violation: Modifying application/project code and the Stenio engine in the same commit/task is strictly forbidden.".to_string(),
+                suggestion: Some("Isolate tasks: submit engine modifications in an isolated commit, or revert governance changes if the focus is application code.".to_string()),
             })
         } else {
             None
@@ -272,7 +272,7 @@ impl Engine {
             }
         }
 
-        // Se o diff estiver vazio e não foi passada revisão específica, tenta git status (untracked/staged/modified)
+        // If diff is empty and no specific revision was provided, fallback to git status (untracked/staged/modified)
         if files.is_empty()
             && diff_target.map_or(true, |t| t.is_empty() || t == "staged" || t == "cached")
         {
@@ -474,7 +474,7 @@ impl Engine {
                     }
 
                     if re.is_match(line) {
-                        // Se for regra exclusiva de código de produção Rust, ignora dentro de escopo de teste
+                        // If rule is exclusive to production Rust code, ignore within test scope
                         if in_test_scope
                             && (rule.id == "RUST-NO-UNWRAP"
                                 || rule.id == "BACKEND-NO-PANIC"

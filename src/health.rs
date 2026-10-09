@@ -267,9 +267,9 @@ fn find_matching_health_file(target_folder: &str) -> Option<std::time::SystemTim
     None
 }
 
-/// mtime do item mais recente dentro do diretório — proxy real de freshness
-/// (a raiz do espelho não muda no rsync, apenas os subdirs por host).
-/// Recursa até 4 níveis (espelhos têm payload aninhado: daily/prometheus/<ts>/chunks).
+/// mtime of the most recent item inside the directory — true freshness proxy
+/// (mirror root does not change in rsync, only subdirs per host).
+/// Recursively descends up to 4 levels (mirrors contain nested payloads: daily/prometheus/<ts>/chunks).
 fn most_recent_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
     let mut best: Option<std::time::SystemTime> = None;
     let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];

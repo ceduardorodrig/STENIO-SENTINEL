@@ -74,13 +74,13 @@ export interface SentinelReport {
     let target_file = out_dir.join("stenio.ts");
     fs::write(&target_file, stenio_ts)?;
 
-    crate::baseline::print_banner("StenioSentinel — Typegen Automático Rust → TypeScript (ts-rs)");
-    println!("   ✅ Definições TypeScript geradas com sucesso:");
+    crate::baseline::print_banner("StenioSentinel — Automated Typegen Rust → TypeScript (ts-rs)");
+    println!("   ✅ TypeScript type definitions successfully generated:");
     println!("      └── {}", target_file.display().to_string().green());
     println!();
-    println!("   📦 Tipos sincronizados:");
+    println!("   📦 Synchronized types:");
     println!("      ├── HomelabNode");
-    println!("      ├── NodeStatus (Malha Tailscale)");
+    println!("      ├── NodeStatus (Tailscale Mesh)");
     println!("      ├── SystemStats (CPU / RAM / GPU)");
     println!("      ├── TelemetryLog");
     println!("      └── SentinelReport & SentinelViolation");
