@@ -42,7 +42,7 @@ While autonomous AI agents accelerate software development, they exhibit predict
 | **Goodhart's Law & Bypasses** | Agent masks type errors with `// @ts-ignore`, `# type: ignore`, or `--no-verify`. | **Zero Suppression Tolerance:** Strictly flags and fails any suppression comments or git hook bypasses (`SEC-NO-BYPASS`). |
 | **Panic in Production** | Agent swaps `.unwrap()` for `.expect()` to silence the compiler, causing thread panics in production. | **Fatal Error on Unsafe Unwraps (`RUST-NO-UNWRAP`):** Blocks all unhandled `.unwrap()` / `.expect()` calls in production Rust. |
 | **Sycophancy & Blind Delivery** | Agent declares tasks "Complete!" while leaving broken links or failing tests. | **Rule 0 Quality Gate:** Tasks are physically not ready until `stenio` returns exit code 0. |
-| **Silent Code Duplication** | Agent re-implements utility functions across multiple files instead of refactoring. | **Zero Duplication (DRY Engine):** Multi-line sliding window token hashing detects and blocks duplicated code blocks. |
+| **Silent Code Duplication** | Agent re-implements utility functions across multiple files instead of refactoring. | **Two-Layer DRY Engine:** stable line/token hashing (all languages) + AST structural fingerprints (Rust) with **adaptive severity** — substantial logic duplication blocks (`ERROR`), low-density/idiomatic matches stay visible (`WARN`). |
 | **Documentation Rot** | Code evolves but docs and service catalogs point to dead files or broken anchors. | **Docs-as-Code Crawler:** Validates relative markdown links, tag taxonomies, and service references. |
 
 ---
@@ -173,7 +173,7 @@ Options:
 |---|:---:|:---:|---|
 | `RUST-NO-UNWRAP` | Rust | **ERROR** | Strictly forbids `.unwrap()` and `.expect()` in production code. |
 | `ARCH-NO-PYTHON` | Arch | **ERROR** | Enforces 100% native Rust backend sovereignty (ADR-036). |
-| `ARCH-DRY-DUPLICATION` | Code | **ERROR** | Blocks identical multi-line logic blocks duplicated across files. |
+| `ARCH-DRY-DUPLICATION` | Code | **ERROR/WARN** | Two-layer detection with adaptive severity: substantial logic duplication → ERROR; low-density or short structural matches → WARN. |
 | `DOC-VIBE-DISCLAIMER` | Docs | **ERROR** | Enforces the standardized human-AI governance disclaimer across all repositories. |
 | `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text API keys, GitHub tokens, and private keys. |
 | `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted environment files (`.enc.env`). |
