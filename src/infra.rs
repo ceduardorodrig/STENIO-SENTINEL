@@ -95,6 +95,35 @@ fn parse_mirror_path(path_str: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// One structural finding for a compose service, as
+/// `(rule_id, rule_name, severity, message, suggestion)`.
+type ComposeFinding = (&'static str, &'static str, Severity, String, Option<String>);
+
+/// Builds a Compose structural [`Violation`] with the fields shared by every
+/// rule in `check_compose_file` (`severity`, `file_path`, `line_number: 1`,
+/// `snippet`, `message`, `suggestion`). Centralizing the struct literal keeps
+/// the three call sites DRY (ARCH-DRY-DUPLICATION).
+fn compose_violation(
+    rule_id: &str,
+    rule_name: &str,
+    severity: Severity,
+    file_path: &str,
+    snippet: &str,
+    message: String,
+    suggestion: Option<String>,
+) -> Violation {
+    Violation {
+        rule_id: rule_id.to_string(),
+        rule_name: rule_name.to_string(),
+        severity,
+        file_path: file_path.to_string(),
+        line_number: 1,
+        snippet: snippet.to_string(),
+        message,
+        suggestion,
+    }
+}
+
 /// Structural checks for a Docker Compose file: YAML syntax, restart policy and
 /// healthcheck presence.
 ///
@@ -115,6 +144,8 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
             if let Some(services) = yaml_val.get("services").and_then(|s| s.as_mapping()) {
                 for (svc_key, svc_val) in services {
                     let svc_name = svc_key.as_str().unwrap_or("unknown");
+                    let snippet = format!("{}:", svc_name);
+                    let mut findings: Vec<ComposeFinding> = Vec::new();
 
                     // Restart policy
                     let has_restart = svc_val.get("restart").is_some()
@@ -141,16 +172,13 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                             )
                         };
 
-                        violations.push(Violation {
-                            rule_id: "INFRA-COMPOSE-RESTART".to_string(),
-                            rule_name: "Service Missing Restart Policy".to_string(),
-                            severity: Severity::Warning,
-                            file_path: display_path.clone(),
-                            line_number: 1,
-                            snippet: format!("{}:", svc_name),
+                        findings.push((
+                            "INFRA-COMPOSE-RESTART",
+                            "Service Missing Restart Policy",
+                            Severity::Warning,
                             message,
                             suggestion,
-                        });
+                        ));
                     }
 
                     // Healthcheck (or explicit exception label for distroless images).
@@ -196,16 +224,27 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                             )
                         };
 
-                        violations.push(Violation {
-                            rule_id: "INFRA-COMPOSE-HEALTHCHECK".to_string(),
-                            rule_name: "Service Missing Healthcheck".to_string(),
-                            severity: Severity::Warning,
-                            file_path: display_path.clone(),
-                            line_number: 1,
-                            snippet: format!("{}:", svc_name),
+                        findings.push((
+                            "INFRA-COMPOSE-HEALTHCHECK",
+                            "Service Missing Healthcheck",
+                            Severity::Warning,
                             message,
                             suggestion,
-                        });
+                        ));
+                    }
+
+                    // Single materialization point for every structural finding
+                    // of this service (keeps the emission DRY).
+                    for (rule_id, rule_name, severity, message, suggestion) in findings {
+                        violations.push(compose_violation(
+                            rule_id,
+                            rule_name,
+                            severity,
+                            &display_path,
+                            &snippet,
+                            message,
+                            suggestion,
+                        ));
                     }
                 }
             }
@@ -226,16 +265,15 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                 )
             };
 
-            violations.push(Violation {
-                rule_id: "INFRA-COMPOSE-SYNTAX".to_string(),
-                rule_name: "Docker Compose Syntax Error".to_string(),
-                severity: Severity::Error,
-                file_path: display_path,
-                line_number: 1,
-                snippet: e.to_string(),
+            violations.push(compose_violation(
+                "INFRA-COMPOSE-SYNTAX",
+                "Docker Compose Syntax Error",
+                Severity::Error,
+                &display_path,
+                &e.to_string(),
                 message,
                 suggestion,
-            });
+            ));
         }
     }
 
