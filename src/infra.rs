@@ -81,6 +81,20 @@ fn is_documentation_example(line: &str, value: &str) -> bool {
     value.len() < 12 && !has_symbol && (!has_digit || all_lower_alpha)
 }
 
+/// Detects whether a path belongs to an automated backup mirror (e.g. `/mnt/BACKUP/configs-homelab/`).
+/// Returns `Some((host_name, relative_path_on_host))` if matched.
+fn parse_mirror_path(path_str: &str) -> Option<(&str, &str)> {
+    if let Some(idx) = path_str.find("configs-homelab/") {
+        let after = &path_str[idx + "configs-homelab/".len()..];
+        let mut parts = after.splitn(2, '/');
+        let host = parts.next()?;
+        let rel_path = parts.next().unwrap_or(after);
+        Some((host, rel_path))
+    } else {
+        None
+    }
+}
+
 /// Structural checks for a Docker Compose file: YAML syntax, restart policy and
 /// healthcheck presence.
 ///
@@ -89,6 +103,12 @@ fn is_documentation_example(line: &str, value: &str) -> bool {
 /// (`audit_compose_dir`) — without duplicating the logic (ARCH-DRY-DUPLICATION).
 fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
     let mut violations = Vec::new();
+    let mirror_info = parse_mirror_path(path_str);
+    let display_path = if let Some((host, rel_path)) = mirror_info {
+        format!("[READ-ONLY MIRROR: host '{}'] {}", host, rel_path)
+    } else {
+        path_str.to_string()
+    };
 
     match serde_yaml::from_str::<serde_yaml::Value>(content) {
         Ok(yaml_val) => {
@@ -103,15 +123,33 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                             .and_then(|d| d.get("restart_policy"))
                             .is_some();
                     if !has_restart {
+                        let (message, suggestion) = if let Some((host, rel_path)) = mirror_info {
+                            (
+                                format!(
+                                    "Service '{}' on node '{}' (detected in automated backup mirror) does not define 'restart: unless-stopped' or 'restart: always'.",
+                                    svc_name, host
+                                ),
+                                Some(format!(
+                                    "⛔ [AUTOMATED READ-ONLY MIRROR — DO NOT EDIT DIRECTLY] This file is a backup replica. Log into '{}' via SSH, add 'restart: unless-stopped' to '~/{rel_path}', and run 'sudo /usr/local/bin/config-backup'.",
+                                    host
+                                )),
+                            )
+                        } else {
+                            (
+                                format!("Service '{}' does not define 'restart: unless-stopped' or 'restart: always'.", svc_name),
+                                Some("Add 'restart: unless-stopped' to the service in compose.yml.".to_string()),
+                            )
+                        };
+
                         violations.push(Violation {
                             rule_id: "INFRA-COMPOSE-RESTART".to_string(),
                             rule_name: "Service Missing Restart Policy".to_string(),
                             severity: Severity::Warning,
-                            file_path: path_str.to_string(),
+                            file_path: display_path.clone(),
                             line_number: 1,
                             snippet: format!("{}:", svc_name),
-                            message: format!("Service '{}' does not define 'restart: unless-stopped' or 'restart: always'.", svc_name),
-                            suggestion: Some("Add 'restart: unless-stopped' to the service in compose.yml.".to_string()),
+                            message,
+                            suggestion,
                         });
                     }
 
@@ -135,35 +173,68 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                         })
                         .unwrap_or(false);
                     if !has_healthcheck && !has_watchdog_label {
+                        let (message, suggestion) = if let Some((host, rel_path)) = mirror_info {
+                            (
+                                format!(
+                                    "Service '{}' on node '{}' (detected in automated backup mirror) does not define 'healthcheck' (nor the 'homelab.healthcheck: watchdog' exception label).",
+                                    svc_name, host
+                                ),
+                                Some(format!(
+                                    "⛔ [AUTOMATED READ-ONLY MIRROR — DO NOT EDIT DIRECTLY] This file is an automated backup mirror of host '{}'. Direct edits in /mnt/BACKUP/ will be erased at 05:00 by config-backup. To remediate: log into host '{}' via SSH, update the upstream compose file at '~/{rel_path}', validate with 'docker compose config -q', deploy with 'docker compose up -d', and run 'sudo /usr/local/bin/config-backup'.",
+                                    host, host
+                                )),
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "Service '{}' does not define 'healthcheck' (nor the 'homelab.healthcheck: watchdog' exception label).",
+                                    svc_name
+                                ),
+                                Some(
+                                    "Add 'healthcheck' to the service (see mnemocine/guides/docker-healthchecks.md) or label 'homelab.healthcheck: watchdog' for distroless images.".to_string(),
+                                ),
+                            )
+                        };
+
                         violations.push(Violation {
                             rule_id: "INFRA-COMPOSE-HEALTHCHECK".to_string(),
                             rule_name: "Service Missing Healthcheck".to_string(),
                             severity: Severity::Warning,
-                            file_path: path_str.to_string(),
+                            file_path: display_path.clone(),
                             line_number: 1,
                             snippet: format!("{}:", svc_name),
-                            message: format!(
-                                "Service '{}' does not define 'healthcheck' (nor the 'homelab.healthcheck: watchdog' exception label).",
-                                svc_name
-                            ),
-                            suggestion: Some(
-                                "Add 'healthcheck' to the service (see mnemocine/guides/docker-healthchecks.md) or label 'homelab.healthcheck: watchdog' for distroless images.".to_string(),
-                            ),
+                            message,
+                            suggestion,
                         });
                     }
                 }
             }
         }
         Err(e) => {
+            let (message, suggestion) = if let Some((host, rel_path)) = mirror_info {
+                (
+                    format!("Invalid syntax in compose file on host '{}': {}", host, e),
+                    Some(format!(
+                        "⛔ [AUTOMATED READ-ONLY MIRROR — DO NOT EDIT DIRECTLY] Log into '{}' via SSH to fix YAML formatting in '~/{rel_path}'.",
+                        host
+                    )),
+                )
+            } else {
+                (
+                    format!("Invalid syntax in compose file: {}", e),
+                    Some("Fix YAML formatting in the compose.yml file.".to_string()),
+                )
+            };
+
             violations.push(Violation {
                 rule_id: "INFRA-COMPOSE-SYNTAX".to_string(),
                 rule_name: "Docker Compose Syntax Error".to_string(),
                 severity: Severity::Error,
-                file_path: path_str.to_string(),
+                file_path: display_path,
                 line_number: 1,
                 snippet: e.to_string(),
-                message: format!("Invalid syntax in compose file: {}", e),
-                suggestion: Some("Fix YAML formatting in the compose.yml file.".to_string()),
+                message,
+                suggestion,
             });
         }
     }

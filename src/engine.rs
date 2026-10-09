@@ -87,6 +87,25 @@ impl Engine {
         }
     }
 
+    pub fn check_mirror_mutation(file_paths: &[PathBuf]) -> Option<Violation> {
+        for p in file_paths {
+            let s = p.to_string_lossy();
+            if s.contains("/configs-homelab/") || s.contains("/mnt/BACKUP/") || s.contains("configs-homelab") {
+                return Some(Violation {
+                    rule_id: "ARCH-NO-EDIT-MIRROR".to_string(),
+                    rule_name: "Prohibited Direct Modification of Automated Backup Mirror".to_string(),
+                    severity: Severity::Error,
+                    file_path: s.to_string(),
+                    line_number: 1,
+                    snippet: s.to_string(),
+                    message: "Governance Violation: Direct modification of automated backup mirror files (/mnt/BACKUP/) is strictly forbidden.".to_string(),
+                    suggestion: Some("Revert all changes in the backup mirror. Log into the source host via SSH to apply changes at the root source, then let config-backup mirror them to the NAS.".to_string()),
+                });
+            }
+        }
+        None
+    }
+
     pub fn scan_directory(
         &self,
         root: &Path,
@@ -125,6 +144,9 @@ impl Engine {
             if let Some(v) = Self::check_scope_isolation(&file_paths) {
                 violations.push(v);
             }
+            if let Some(v) = Self::check_mirror_mutation(&file_paths) {
+                violations.push(v);
+            }
         }
 
         let mut error_count = 0;
@@ -155,6 +177,11 @@ impl Engine {
     ) -> usize {
         let mut fixed_count = 0;
         for path in paths {
+            let path_str = path.to_string_lossy();
+            if path_str.contains("/configs-homelab/") || path_str.contains("/mnt/BACKUP/") || path_str.contains("configs-homelab") {
+                continue;
+            }
+
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())

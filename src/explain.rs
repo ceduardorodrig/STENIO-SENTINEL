@@ -279,6 +279,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Isolate responsibilities: revert governance engine changes (governance/stenio) if working on application code, or split into independent commits/PRs.",
     },
     RuleExplanation {
+        id: "ARCH-NO-EDIT-MIRROR",
+        name: "Prohibited Direct Modification of Automated Backup Mirror",
+        severity: "ERROR",
+        tag: "arch",
+        summary: "Prohibits editing files in automated backup mirror directories (/mnt/BACKUP/configs-homelab, /mnt/BACKUP/agentic-ai-server-psicopompo).",
+        rationale: "Backup mirrors are downstream replicas populated via rsync (config-backup) from individual homelab nodes. Editing mirror files directly does not update the runtime containers on the source hosts and is silently overwritten during the next backup run (05:00 BRT). Configuration changes must always be applied on the upstream source host.",
+        bad_example: "write_to_file /mnt/BACKUP/configs-homelab/kavure/data/pihole/compose.yml",
+        good_example: "ssh kavure 'nano /home/kavure/data/pihole/compose.yml && docker compose up -d'\n# Next, run config-backup or wait for nightly sync.",
+        remediation: "Revert edits in the mirror path. Connect to the upstream host via SSH, edit the source configuration file, test in container runtime, and run config-backup.",
+    },
+    RuleExplanation {
         id: "TEST-NO-SILENT-SKIP",
         name: "Prohibition of Silent Test Skipping or Commenting",
         severity: "ERROR",
