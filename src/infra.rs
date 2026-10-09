@@ -258,8 +258,8 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
 
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
-        // ── 1. Guarda Profunda de Segredos SOPS / Age (SEC-SOPS-UNENCRYPTED) ────
-        // Cobre 100% dos arquivos de texto e configuração de infraestrutura
+        // ── 1. SOPS / Age Deep Secret Guard (SEC-SOPS-UNENCRYPTED) ──────────────
+        // Covers 100% of infrastructure text and configuration files
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         let is_text_or_config = matches!(
             ext,
@@ -268,62 +268,56 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
 
         if is_text_or_config {
             if let Ok(content) = fs::read_to_string(&path) {
-                // Arquivo com extensão .enc.* DEVE conter armadura SOPS ou Age
+                // File with .enc.* extension MUST contain SOPS or Age armor
                 let is_sops_encrypted = content.contains("sops:") && content.contains("mac:");
                 let is_age_armored = content.contains("-----BEGIN AGE ENCRYPTED FILE-----");
 
                 if file_name.contains(".enc.") && !is_sops_encrypted && !is_age_armored {
                     violations.push(Violation {
                         rule_id: "SEC-SOPS-UNENCRYPTED".to_string(),
-                        rule_name: "Arquivo .enc Sem Criptografia SOPS/Age".to_string(),
+                        rule_name: ".enc File Missing SOPS/Age Encryption".to_string(),
                         severity: Severity::Error,
                         file_path: path_str.clone(),
                         line_number: 1,
                         snippet: content.lines().next().unwrap_or("").to_string(),
-                        message: "Arquivo com extensão .enc não possui cabeçalho criptografado do SOPS ou Age.".to_string(),
-                        suggestion: Some("Criptografe com: sops --encrypt --age <KEY> arquivo > arquivo.enc.yaml".to_string()),
+                        message: "File with .enc extension does not contain SOPS or Age encrypted header.".to_string(),
+                        suggestion: Some("Encrypt with: sops --encrypt --age <KEY> file > file.enc.yaml".to_string()),
                     });
                 }
 
-                // Detecta chaves privadas desprotegidas em texto claro
+                // Detects unprotected cleartext private keys
                 if content.contains("-----BEGIN")
                     && content.contains("PRIVATE KEY-----")
                     && !is_age_armored
                 {
                     violations.push(Violation {
                         rule_id: "SEC-PRIVATE-KEY-CLEARTEXT".to_string(),
-                        rule_name: "Chave Privada em Texto Claro Detectada".to_string(),
+                        rule_name: "Cleartext Private Key Detected".to_string(),
                         severity: Severity::Error,
                         file_path: path_str.clone(),
                         line_number: 1,
                         snippet: format!("{}-BEGIN PRIVATE KEY-{}", "----", "----"),
-                        message: "Chave privada SSH/TLS desprotegida encontrada no repositório.".to_string(),
-                        suggestion: Some("Mova para ~/.ssh/ ou armazene criptografado com sops/age em mnemocine/secrets.enc.env.".to_string()),
+                        message: "Unprotected SSH/TLS private key found in repository.".to_string(),
+                        suggestion: Some("Move to ~/.ssh/ or store encrypted with sops/age in mnemocine/secrets.enc.env.".to_string()),
                     });
                 }
 
-                // Detecta tokens e senhas literais em texto plano (fora de templates/exemplos)
+                // Detects literal tokens and passwords in plaintext (outside templates/examples)
                 if !path_str.contains(".template")
                     && !path_str.contains(".example")
                     && !path_str.contains("templates/")
                 {
                     for (line_idx, line) in content.lines().enumerate() {
                         let trimmed = line.trim();
-                        // Ignora comentários e linhas vazias
+                        // Ignore comments and empty lines
                         if trimmed.starts_with('#') || trimmed.starts_with("//") {
                             continue;
                         }
 
-                        // Reconhece o padrão mesmo com prefixos de YAML/Compose
-                        // (`- VAR=valor`), chaves JSON/YAML (`VAR: valor`), tabelas
-                        // Markdown e negrito (`**Password:** valor`) e sufixos
+                        // Matches pattern even with YAML/Compose prefixes
+                        // (`- VAR=value`), JSON/YAML keys (`VAR: value`), Markdown
+                        // tables and bold (`**Password:** value`), and suffixes
                         // (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
-                        //
-                        // O `**Password:**` é o caso traiçoeiro: os asteriscos põem
-                        // um `:` ANTES do separador real, então um split cru dividia
-                        // no lugar errado e o "valor" virava `"** (in .env — VAR)"`
-                        // — que disparava o alerta por conter o NOME da variável.
-                        // Limpar markdown primeiro resolve os dois lados.
                         let trimmed_no_prefix = trimmed
                             .trim_start_matches(['-', ' '])
                             .trim_start_matches("export ")
@@ -390,20 +384,19 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                             && !value.starts_with("(in ")
                             && !value.starts_with("(no ")
                             && !value.starts_with("(em ")
-                            // Nome de variável de ambiente em vez de valor: se o
-                            // "valor" é só MAIÚSCULAS/underscore, é o identificador
-                            // da variável (ex.: `PI_HOLE_ADMIN_PASSWORD`), não a
-                            // credencial. Valores reais quase sempre têm minúsculas,
-                            // dígitos ou símbolos.
+                            // Environment variable name instead of value: if the
+                            // "value" is uppercase/underscore only, it is the variable
+                            // identifier (e.g. `PI_HOLE_ADMIN_PASSWORD`), not the
+                            // credential. Real values almost always have lowercase,
+                            // digits, or symbols.
                             && !value
                                 .chars()
                                 .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-                            // Texto entre parênteses descreve a origem, não o valor.
-                            // Aceita parêntese não fechado na mesma linha (ex.:
-                            // `(in .env — NPM_ADMIN_PASSWORD / SOPS)`), que é uma
-                            // descrição que continua; um valor real não começa assim.
+                            // Parenthesized text describes the source, not the value.
+                            // Accepts open parenthesis on same line (e.g.
+                            // `(in .env — NPM_ADMIN_PASSWORD / SOPS)`).
                             && !value.starts_with('(')
-                            // Caminho de arquivo/config não é credencial.
+                            // File/config path is not a credential.
                             && !value.ends_with(".env")
                             && !value.ends_with(".yml")
                             && !value.ends_with(".yaml")
@@ -419,22 +412,22 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                         if is_leak && !is_sops_encrypted && !is_age_armored {
                             violations.push(Violation {
                                 rule_id: "SEC-PLAINTEXT-SECRET".to_string(),
-                                rule_name: "Segredo em Texto Claro Detectado".to_string(),
+                                rule_name: "Cleartext Secret Detected".to_string(),
                                 severity: Severity::Error,
                                 file_path: path_str.clone(),
                                 line_number: line_idx + 1,
                                 snippet: mask_snippet(trimmed),
-                                message: "Credencial ou token em texto claro encontrado em arquivo de infraestrutura.".to_string(),
-                                suggestion: Some("Substitua o valor por variável de ambiente ou criptografe via sops/age.".to_string()),
+                                message: "Cleartext credential or token found in infrastructure file.".to_string(),
+                                suggestion: Some("Replace value with environment variable or encrypt via sops/age.".to_string()),
                             });
-                            break; // 1 aviso por arquivo
+                            break; // 1 warning per file
                         }
                     }
                 }
             }
         }
 
-        // ── 2. Validação Estática de Docker Compose (INFRA-COMPOSE) ───────────
+        // ── 2. Static Docker Compose Validation (INFRA-COMPOSE) ───────────────
         let is_compose = file_name == "compose.yml"
             || file_name == "compose.yaml"
             || file_name == "docker-compose.yml"
@@ -447,7 +440,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
             }
         }
 
-        // ── 3. Validação Estática de Systemd Units (INFRA-SYSTEMD-SYNTAX) ─────
+        // ── 3. Static Systemd Units Validation (INFRA-SYSTEMD-SYNTAX) ─────────
         if file_name.ends_with(".service") || file_name.ends_with(".timer") {
             scanned_count += 1;
             if let Ok(content) = fs::read_to_string(&path) {
@@ -459,39 +452,39 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 if !has_unit || !has_service_or_timer || !has_install {
                     violations.push(Violation {
                         rule_id: "INFRA-SYSTEMD-SYNTAX".to_string(),
-                        rule_name: "Estrutura Incompleta de Systemd Unit".to_string(),
+                        rule_name: "Incomplete Systemd Unit Structure".to_string(),
                         severity: Severity::Warning,
                         file_path: path_str.clone(),
                         line_number: 1,
                         snippet: "".to_string(),
-                        message: "Arquivo unit do systemd deve conter seções [Unit], [Service]/[Timer] e [Install].".to_string(),
-                        suggestion: Some("Adicione as seções obrigatórias padrão do systemd.".to_string()),
+                        message: "Systemd unit file must contain [Unit], [Service]/[Timer], and [Install] sections.".to_string(),
+                        suggestion: Some("Add mandatory standard systemd sections.".to_string()),
                     });
                 }
             }
         }
 
-        // ── 4. Práticas Estritas de Scripts Bash (INFRA-BASH-STRICT) ───────────
+        // ── 4. Strict Bash Scripting Practices (INFRA-BASH-STRICT) ───────────
         if file_name.ends_with(".sh") {
             scanned_count += 1;
             if let Ok(content) = fs::read_to_string(&path) {
                 if !content.contains("set -euo pipefail") && !content.contains("set -e") {
                     violations.push(Violation {
                         rule_id: "INFRA-BASH-STRICT".to_string(),
-                        rule_name: "Script Bash Sem Modo Estrito (set -euo pipefail)".to_string(),
+                        rule_name: "Bash Script Missing Strict Mode (set -euo pipefail)".to_string(),
                         severity: Severity::Warning,
                         file_path: path_str.clone(),
                         line_number: 1,
                         snippet: content.lines().next().unwrap_or("").to_string(),
-                        message: "Scripts de automação no Homelab devem conter 'set -euo pipefail' para falhar rapidamente em caso de erro.".to_string(),
-                        suggestion: Some("Adicione 'set -euo pipefail' logo abaixo da shebang (#/bin/bash).".to_string()),
+                        message: "Automation scripts in Homelab must contain 'set -euo pipefail' for rapid fail-fast on error.".to_string(),
+                        suggestion: Some("Add 'set -euo pipefail' right below the shebang (#!/bin/bash).".to_string()),
                     });
                 }
             }
         }
 
-        // ── 5. Detecção de Débito Técnico: Python Solto (ARCH-LEGACY-PYTHON)
-        // Regra: scripts/archive/ é o lugar correto para scripts legados — silêncio total lá.
+        // ── 5. Technical Debt Detection: Loose Python (ARCH-LEGACY-PYTHON) ────
+        // Rule: scripts/archive/ is the proper place for legacy scripts — total silence there.
         // Projetos Rust dedicados (docx-extractor/, validador-roteiro/) têm seu próprio
         // steniocheck.toml, não auditamos aqui.
         // Só disparamos WARN para .py soltos fora do archive e fora de projeto próprio.

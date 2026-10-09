@@ -237,15 +237,15 @@ pub struct GuardianReport {
     pub tamper_alerts: Vec<String>,
 }
 
-/// O Guardian audita a integridade criptográfica do próprio binário e código-fonte do Stênio.
-/// Se um agente de IA ou script malicioso tentar adulterar as regras de governança,
-/// enfraquecer regexes ou desativar checagens, o Guardian detecta a discrepância no ato.
+/// Guardian audits the cryptographic integrity of the Stenio binary and source code.
+/// If an AI agent or malicious script attempts to tamper with governance rules,
+/// weaken regexes, or disable checks, Guardian immediately flags the tampering.
 pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
     let mut messages = Vec::new();
     let mut tamper_alerts = Vec::new();
     let mut files_checked = 0;
 
-    // 1. Hash do próprio executável em execução
+    // 1. Hash of running executable itself
     let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("stenio"));
     let mut binary_hash = String::new();
     if let Ok(bytes) = fs::read(&exe_path) {
@@ -259,8 +259,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         ));
     }
 
-    // 2. Auto-auditoria abrangente: cada módulo crítico tem strings obrigatórias.
-    //    Remoção de qualquer string dispara alerta imediato.
+    // 2. Comprehensive self-audit: each critical module has mandatory anchor strings.
+    //    Removal of any anchor immediately triggers a tamper alert.
     let critical_modules: &[(&str, &[&str])] = &[
         (
             "rule.rs",
@@ -386,8 +386,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &[
                 "stenio-ignore",
                 "nosemgrep",
-                "SEC-", // regras SEC-* nunca podem ser ignoráveis por nosemgrep
-                "starts_with(\"SEC-\")", // a guarda explícita de segurança deve existir
+                "SEC-", // SEC-* rules can never be suppressed by nosemgrep
+                "starts_with(\"SEC-\")", // explicit security guard must exist
             ],
         ),
         (

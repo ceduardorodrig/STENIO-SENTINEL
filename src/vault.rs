@@ -15,7 +15,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
     let mut messages = Vec::new();
     let mut violations = Vec::new();
 
-    // 1. Carregar taxonomia universal de tags de governance/_tags.md
+    // 1. Load universal tag taxonomy from governance/_tags.md
     let tags_file = vault_root.join("governance").join("_tags.md");
     let valid_tags = crate::baseline::parse_tags_file(&tags_file);
 
@@ -45,7 +45,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
             continue;
         };
 
-        // Validação 1: Frontmatter YAML nas notas do vault Obsidian
+        // Validation 1: YAML Frontmatter in Obsidian vault notes
         if !content.starts_with("---") {
             let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if ![
@@ -61,17 +61,17 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
             {
                 violations.push(Violation {
                     rule_id: "VAULT-FRONTMATTER".to_string(),
-                    rule_name: "Frontmatter YAML Obrigatório".to_string(),
+                    rule_name: "Mandatory YAML Frontmatter".to_string(),
                     severity: Severity::Warning,
                     file_path: path_str.clone(),
                     line_number: 1,
                     snippet: content.lines().next().unwrap_or("").to_string(),
-                    message: "Notas do vault devem conter frontmatter YAML com tags de governance/_tags.md".to_string(),
-                    suggestion: Some("Adicione '---\\ntags: [meta, ...]\\n---' no cabeçalho da nota.".to_string()),
+                    message: "Vault notes must contain YAML frontmatter with tags from governance/_tags.md".to_string(),
+                    suggestion: Some("Add '---\\ntags: [meta, ...]\\n---' to the note header.".to_string()),
                 });
             }
         } else {
-            // Validação 2: Auditoria de Tags válidas contra a taxonomia canônica
+            // Validation 2: Valid Tags Audit against canonical taxonomy
             if let Some(frontmatter_end) = content[3..].find("---") {
                 let fm = &content[3..3 + frontmatter_end];
                 if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(fm) {
@@ -82,13 +82,13 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                                 if !valid_tags.is_empty() && !valid_tags.contains(clean) {
                                     violations.push(Violation {
                                         rule_id: "VAULT-TAG-TAXONOMY".to_string(),
-                                        rule_name: "Tag Fora da Taxonomia Oficial".to_string(),
+                                        rule_name: "Tag Outside Official Taxonomy".to_string(),
                                         severity: Severity::Warning,
                                         file_path: path_str.clone(),
                                         line_number: 2,
                                         snippet: format!("tag: {}", clean),
-                                        message: format!("Tag '{}' não está catalogada em governance/_tags.md.", clean),
-                                        suggestion: Some("Utilize apenas tags aprovadas em governance/_tags.md ou adicione-a formalmente lá.".to_string()),
+                                        message: format!("Tag '{}' is not cataloged in governance/_tags.md.", clean),
+                                        suggestion: Some("Use only approved tags in governance/_tags.md or formally add it there.".to_string()),
                                     });
                                 }
                             }
@@ -98,7 +98,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
             }
         }
 
-        // Validação 3: Auditoria de Links Markdown Relativos Quebrados
+        // Validation 3: Broken Relative Markdown Links Audit
         for (line_idx, line) in content.lines().enumerate() {
             if line.contains("](")
                 && !line.contains("http://")
@@ -128,13 +128,13 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                             if !target_path.exists() {
                                 violations.push(Violation {
                                     rule_id: "VAULT-BROKEN-LINK".to_string(),
-                                    rule_name: "Link Quebrado no Markdown".to_string(),
+                                    rule_name: "Broken Link in Markdown".to_string(),
                                     severity: Severity::Warning,
                                     file_path: path_str.clone(),
                                     line_number: line_idx + 1,
                                     snippet: format!("[...](<{}>)", link_target),
-                                    message: format!("Link aponta para arquivo inexistente: '{}'", link_target),
-                                    suggestion: Some("Atualize o caminho relativo ou remova a referência ao arquivo deletado/movido.".to_string()),
+                                    message: format!("Link points to non-existent file: '{}'", link_target),
+                                    suggestion: Some("Update relative path or remove reference to deleted/moved file.".to_string()),
                                 });
                             }
                         }
@@ -146,12 +146,12 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
             }
         }
 
-        // Validação 3b: Segredos em claro (SEC-SECRETS) em notas e configs do vault.
-        // O vault é espelhado por Syncthing para celulares e abriga o cofre cifrado.
+        // Validation 3b: Cleartext secrets (SEC-SECRETS) in notes and configs.
+        // Syncthing mirrors vault to phones and houses the encrypted store.
         violations.extend(crate::guardian::scan_content_for_secrets(&path, &content));
     }
 
-    // Validação 4: Nomenclatura Estrita de Pastas em projects/ (AAMMDD-nome-contratante)
+    // Validation 4: Strict Directory Naming in projects/ (YYMMDD-contractor-name)
     let projects_dir = vault_root.join("projects");
     if projects_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&projects_dir) {
@@ -171,18 +171,18 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                     if !is_valid_project_name && !dir_name.starts_with('.') {
                         violations.push(Violation {
                             rule_id: "PROJECT-NAMING-CONVENTION".to_string(),
-                            rule_name: "Nomenclatura Canônica de Projetos (AAMMDD-...)".to_string(),
+                            rule_name: "Canonical Project Naming Convention (YYMMDD-...)".to_string(),
                             severity: Severity::Warning,
                             file_path: format!("projects/{}", dir_name),
                             line_number: 1,
                             snippet: dir_name.clone(),
-                            message: format!("Pasta de projeto 'projects/{}' desvia do padrão canônico AAMMDD-nome-contratante.", dir_name),
-                            suggestion: Some("Renomeie para o formato AAMMDD-nome-contratante em lowercase e com hífens.".to_string()),
+                            message: format!("Project directory 'projects/{}' deviates from canonical YYMMDD-contractor-name format.", dir_name),
+                            suggestion: Some("Rename to YYMMDD-contractor-name format in lowercase with hyphens.".to_string()),
                         });
                     }
 
-                    // Validação 5: Alerta de Inatividade > 30 Dias (PROJECT-AUTO-COLD-STORAGE)
-                    // Calcula a modificação mais recente recursivamente em todos os arquivos do projeto
+                    // Validation 5: Inactivity Alert > 30 Days (PROJECT-AUTO-COLD-STORAGE)
+                    // Calculates latest modification recursively across all project files
                     let mut latest_mod_time = entry.metadata().ok().and_then(|m| m.modified().ok());
                     let project_walker = WalkBuilder::new(entry.path())
                         .hidden(true)
@@ -206,13 +206,13 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                             if days > 30 {
                                 violations.push(Violation {
                                     rule_id: "PROJECT-AUTO-COLD-STORAGE".to_string(),
-                                    rule_name: "Projeto Inativo há mais de 30 dias".to_string(),
+                                    rule_name: "Project Inactive for More Than 30 Days".to_string(),
                                     severity: Severity::Warning,
                                     file_path: format!("projects/{}", dir_name),
                                     line_number: 1,
-                                    snippet: format!("Inativo há {} dias", days),
-                                    message: format!("O projeto 'projects/{}' não tem modificações há mais de {} dias.", dir_name, days),
-                                    suggestion: Some("Arquive para projects/cold-storage/ conforme governance/cold-storage.md e execute stenio --scope all para validar integridade.".to_string()),
+                                    snippet: format!("Inactive for {} days", days),
+                                    message: format!("Project 'projects/{}' has had no modifications for over {} days.", dir_name, days),
+                                    suggestion: Some("Archive to projects/cold-storage/ according to governance/cold-storage.md and run stenio --scope all to validate integrity.".to_string()),
                                 });
                             }
                         }

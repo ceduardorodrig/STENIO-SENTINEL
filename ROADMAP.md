@@ -79,7 +79,7 @@ To ensure semantic consistency across all subcommands, rules, and reports:
 - [x] Translate `src/gaming.rs`, `src/mesh.rs`, `src/deploy.rs`, and `src/gpu.rs`.
 
 ### Phase 4: Final Polish & Major Release (`v4.0.0`)
-- [ ] Translate remaining internal source comments and docstrings.
-- [ ] Verify clean compilation under `RUSTFLAGS="-D warnings"`.
-- [ ] Full ecosystem regression check across all active workspaces.
-- [ ] Tag and publish release `v4.0.0`.
+- [x] Translate remaining internal source comments and docstrings.
+- [x] Verify clean compilation under `RUSTFLAGS="-D warnings"`.
+- [x] Full ecosystem regression check across all active workspaces.
+- [x] Tag and publish release `v4.0.0`.

@@ -288,15 +288,14 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
         let path = entry.path();
         let path_str = path.to_string_lossy();
 
-        // Ignora diretórios legítimos de build, target, git, obsidian e caches
+        // Ignore legitimate build directories, target, git, obsidian, and caches
         if crate::baseline::is_common_ignored_path(&path_str)
             || path_str.contains("/.stversions/")
-            || path_str.contains("/temp/") // pasta temp/ canônica do Obsidian
-            || path_str.contains("/scratch/") // diretório de scratch autorizado
+            || path_str.contains("/temp/") // canonical Obsidian temp/ directory
+            || path_str.contains("/scratch/") // authorized scratch directory
             || path_str.contains("/brain/") // brain artifacts
-            || path_str.contains("/legado/") // histórico legado arquivado
-            || path_str.contains("/archive/")
-        // arquivos históricos arquivados
+            || path_str.contains("/legado/") // archived legacy history
+            || path_str.contains("/archive/") // archived historical files
         {
             continue;
         }
@@ -312,10 +311,10 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             .unwrap_or("")
             .to_lowercase();
 
-        // 1. Extensões de arquivos temporários/backup
+        // 1. Temporary/backup file extensions
         let is_temp_ext = matches!(ext.as_str(), "bak" | "tmp" | "orig" | "old" | "swp" | "rej");
 
-        // 2. Nomes de arquivos temporários soltos deixados por agentes
+        // 2. Loose temporary file names left behind by agents
         let is_scratch_name = file_name.starts_with("scratch_")
             || file_name.starts_with("temp_")
             || file_name.starts_with("tmp_")

@@ -12,16 +12,16 @@ pub struct MigrationAuditResult {
 pub fn check_sql_idempotency(sql: &str) -> Option<String> {
     let lower = sql.to_lowercase();
     if lower.contains("drop table ") && !lower.contains("drop table if exists ") {
-        return Some("possui DROP TABLE sem IF EXISTS (quebra rollback/re-execução)".to_string());
+        return Some("contains DROP TABLE without IF EXISTS (breaks rollback/re-execution)".to_string());
     }
     if lower.contains("drop index ") && !lower.contains("drop index if exists ") {
-        return Some("possui DROP INDEX sem IF EXISTS (não-idempotente)".to_string());
+        return Some("contains DROP INDEX without IF EXISTS (non-idempotent)".to_string());
     }
     if lower.contains("create table ") && !lower.contains("create table if not exists ") {
-        return Some("possui CREATE TABLE sem IF NOT EXISTS (falha ao re-executar)".to_string());
+        return Some("contains CREATE TABLE without IF NOT EXISTS (fails upon re-execution)".to_string());
     }
     if lower.contains("create index ") && !lower.contains("create index if not exists ") {
-        return Some("possui CREATE INDEX sem IF NOT EXISTS (falha ao re-executar)".to_string());
+        return Some("contains CREATE INDEX without IF NOT EXISTS (fails upon re-execution)".to_string());
     }
     None
 }
@@ -43,7 +43,7 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
         Ok(r) => r,
         Err(e) => {
             errors.push(format!(
-                "Falha interna ao compilar regex de migrações: {}",
+                "Internal failure compiling migrations regex: {}",
                 e
             ));
             return MigrationAuditResult {
@@ -57,7 +57,7 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
     let entries = match fs::read_dir(&mig_dir) {
         Ok(e) => e,
         Err(err) => {
-            errors.push(format!("Falha ao ler diretório migrations/: {}", err));
+            errors.push(format!("Failed to read migrations/ directory: {}", err));
             return MigrationAuditResult {
                 total_migrations: 0,
                 errors,
@@ -75,10 +75,10 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                 None => continue,
             };
 
-            // Rejeita arquivos não SQL em migrations/
+            // Reject non-SQL files in migrations/
             if !filename.ends_with(".sql") {
                 let err = format!(
-                    "Arquivo inválido em migrations/: '{}' (apenas .sql permitido)",
+                    "Invalid file in migrations/: '{}' (only .sql allowed)",
                     filename
                 );
                 errors.push(err.clone());
@@ -86,12 +86,12 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                 continue;
             }
 
-            // Valida convenção vX.Y_descricao.sql
+            // Validate vX.Y_description.sql convention
             let caps = match file_pattern.captures(&filename) {
                 Some(c) => c,
                 None => {
                     let err = format!(
-                        "Nomenclatura inválida em migrations/: '{}' (esperado: v<major>.<minor>_<desc>.sql)",
+                        "Invalid naming in migrations/: '{}' (expected: v<major>.<minor>_<desc>.sql)",
                         filename
                     );
                     errors.push(err.clone());
@@ -109,24 +109,24 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
                 .map(|m| m.as_str().parse().unwrap_or(0))
                 .unwrap_or(0);
 
-            // Valida integridade do conteúdo
+            // Validate content integrity
             match fs::read_to_string(&path) {
                 Ok(content) => {
                     if content.trim().is_empty() {
-                        let err = format!("Migração vazia detectada: {}", filename);
+                        let err = format!("Empty migration detected: {}", filename);
                         errors.push(err.clone());
                         messages.push(format!("❌ {}", err));
                     }
 
-                    // Checa por idempotência mandatória (IF NOT EXISTS / IF EXISTS)
+                    // Check for mandatory idempotency (IF NOT EXISTS / IF EXISTS)
                     if let Some(reason) = check_sql_idempotency(&content) {
-                        let err = format!("Migração {} {}", filename, reason);
+                        let err = format!("Migration {} {}", filename, reason);
                         errors.push(err.clone());
                         messages.push(format!("❌ {}", err));
                     }
                 }
                 Err(e) => {
-                    let err = format!("Falha ao ler migração {}: {}", filename, e);
+                    let err = format!("Failed to read migration {}: {}", filename, e);
                     errors.push(err.clone());
                     messages.push(format!("❌ {}", err));
                 }
@@ -136,7 +136,7 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
         }
     }
 
-    // Ordena por versão
+    // Sort by version
     sql_files.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
 
     let total = sql_files.len();
@@ -144,11 +144,11 @@ pub fn audit_migrations(root: &Path) -> MigrationAuditResult {
         if total > 0 {
             let last = &sql_files[total - 1].2;
             messages.push(format!(
-                "✅ {} migrações SQLx em migrations/ íntegras e sequenciais (topo: {})",
+                "✅ {} SQLx migrations in migrations/ valid and sequential (head: {})",
                 total, last
             ));
         } else {
-            messages.push("ℹ️ Nenhuma migração encontrada em migrations/".to_string());
+            messages.push("ℹ️ Zero migrations found in migrations/".to_string());
         }
     }
 

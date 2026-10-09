@@ -294,7 +294,7 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                 || line.contains(".offsetWidth")
                 || line.contains(".offsetHeight");
 
-            // Permite se houver checagem de hover/cache explícita na mesma linha ou arquivo
+            // Permitted if explicit hover/cache check exists on same line or in file
             let is_cached = line.contains("boundsRef")
                 || line.contains("isHoveredRef")
                 || line.contains("rectCache")
@@ -407,7 +407,7 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
             let is_bare_console_error =
                 line.contains("console.error(") || line.contains("console.warn(");
             if is_bare_console_error {
-                // Checa se o arquivo ou o contexto próximo provê feedback visual
+                // Checks whether the file or proximate context provides visual feedback
                 let has_visual_feedback = content.contains("toast.")
                     || content.contains("setErr")
                     || content.contains("isErr")

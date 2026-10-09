@@ -20,7 +20,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     let mut violations = Vec::new();
     let mut total_docs = 0;
 
-    // ── 1. Auditoria de Serviços do Homelab (Docs-as-Code & Service Catalog) ────
+    // ── 1. Homelab Service Audit (Docs-as-Code & Service Catalog) ─────────────
     let mnemocine_dir = repo_root.join("mnemocine");
     let services_dir = mnemocine_dir.join("services");
     let servers_dir = mnemocine_dir.join("servers");
@@ -85,7 +85,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     .to_string_lossy()
                     .to_string();
 
-                // Regra 1.1: Documentação de serviço deve referenciar o servidor/host onde opera
+                // Rule 1.1: Service documentation must reference the host/server where it runs
                 let is_subdoc = service_path.parent().map_or(false, |p| p != services_dir);
                 let has_server_field = is_subdoc
                     || content.lines().any(|l| {
@@ -105,7 +105,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                         suggestion: Some("Add at the top of document: '**Server:** psicopompo|kavure|kuaray|ybytu|ybyra|mesh'.".to_string()),
                     });
                 } else if !is_subdoc {
-                    // Validar se o servidor citado é um dos nós válidos
+                    // Validate whether cited server is one of valid homelab nodes
                     let mut found_valid = false;
                     for line in content.lines() {
                         let tl = line.trim().to_lowercase();
@@ -131,8 +131,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     }
                 }
 
-                // Regra 1.2: Detector de Documentação Órfã (Service Catalog Drift)
-                // O serviço deve estar indexado em mnemocine/README.md, homepage.md ou servers/*.md
+                // Rule 1.2: Orphan Documentation Detector (Service Catalog Drift)
+                // Service must be indexed in mnemocine/README.md, homepage.md, or servers/*.md
                 let service_stem = service_path
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -156,7 +156,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
-    // ── 2. Auditoria de Servidores (Integridade de Referências de Serviços) ───
+    // ── 2. Server Audit (Integrity of Service References) ─────────────────────
     if servers_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&servers_dir) {
             for entry in entries.flatten() {
@@ -205,7 +205,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
-    // ── 3. Auditoria de Integridade de Projetos em Cold Storage ──────────────
+    // ── 3. Cold Storage Project Integrity Audit ──────────────────────────────
     let cold_storage_dir = repo_root.join("projects").join("cold-storage");
     if cold_storage_dir.is_dir() {
         if let Ok(entries) = fs::read_dir(&cold_storage_dir) {
@@ -265,7 +265,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
-    // ── 4. Auditoria de Software, ADRs e Links Canônicos em docs/ ────────────
+    // ── 4. Software Documentation, ADRs, and Canonical Links in docs/ ─────────
     let docs_dirs = [
         repo_root.join("docs"),
         repo_root
@@ -294,7 +294,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 .to_string();
 
             if let Ok(content) = fs::read_to_string(&doc_path) {
-                // Checar ADRs
+                // Check ADRs
                 if doc_path.to_string_lossy().contains("/adr/") {
                     let has_status = content.contains("Status:")
                         || content.contains("## Status")
@@ -314,7 +314,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     }
                 }
 
-                // Checar links quebrados
+                // Check broken links
                 for (line_idx, line) in content.lines().enumerate() {
                     if line.contains("](")
                         && !line.contains("http://")
@@ -365,22 +365,22 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
-    // ── 5. Auditoria de Disclaimer de Governança Stênio (DOC-VIBE-DISCLAIMER) ────
+    // ── 5. Stenio Governance Disclaimer Audit (DOC-VIBE-DISCLAIMER) ──────────
     let mut check_targets = Vec::new();
 
-    // Alvo 1: README.md da raiz do escopo sendo auditado
+    // Target 1: README.md at root of scope being audited
     let root_readme = repo_root.join("README.md");
     if root_readme.is_file() {
         check_targets.push(root_readme);
     }
 
-    // Alvo 2: Se auditando o vault geral, auditar também curriculum-vitae/README.md
+    // Target 2: If auditing the general vault, audit curriculum-vitae/README.md as well
     let cv_readme = repo_root.join("curriculum-vitae").join("README.md");
     if cv_readme.is_file() && !check_targets.contains(&cv_readme) {
         check_targets.push(cv_readme);
     }
 
-    // Alvo 3: Repositórios gerenciados em /mnt/NVME_PCI/homelab e ~/homelab/
+    // Target 3: Repositories managed in /mnt/NVME_PCI/homelab and ~/homelab/
     for base_dir in &[
         PathBuf::from("/mnt/NVME_PCI/homelab"),
         PathBuf::from("/home/edu/homelab"),
@@ -390,7 +390,7 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 for entry in entries.flatten() {
                     let p = entry.path();
                     if !p.join(".git").exists() {
-                        // Também verificar subdiretórios de 1 nível (ex: sumaenimahub/sumaenima-hub)
+                        // Also inspect 1-level subdirectories (e.g. sumaenimahub/sumaenima-hub)
                         if let Ok(subentries) = fs::read_dir(&p) {
                             for sub in subentries.flatten() {
                                 let sub_p = sub.path();
@@ -489,8 +489,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
 
 fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    // Usa WalkBuilder (crate ignore) para respeitar .gitignore e .stignore do Syncthing.
-    // Isso evita auditar arquivos em .stversions/, .smart-env/ e outros diretórios ignorados.
+    // Uses WalkBuilder (ignore crate) to respect .gitignore and Syncthing's .stignore.
+    // Avoids auditing files in .stversions/, .smart-env/ and other ignored directories.
     let mut walker = WalkBuilder::new(dir);
     walker.hidden(true).git_ignore(true).parents(true);
 
@@ -501,7 +501,7 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
         let path = result.into_path();
         let path_str = path.to_string_lossy();
 
-        // Exclusões explícitas adicionais (proteção contra stversions, archives e external docs)
+        // Additional explicit exclusions (protection against stversions, archives, and external docs)
         if path_str.contains("/.stversions/")
             || path_str.contains("/.smart-env/")
             || path_str.contains("/target/")

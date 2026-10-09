@@ -1,43 +1,30 @@
-//! Audita as ferramentas de operação contra o que o repositório versiona.
+//! Audits operational tools against what the repository versions.
 //!
-//! # Por que existe (29/09/2026)
+//! # Why it exists
 //!
-//! As ferramentas de operação (`config-backup`, `zomboid-*`, `smart-metrics`, …)
-//! existiam **apenas** em `/usr/local/bin`, fora de qualquer repositório. O motor
-//! audita arquivos do repositório — nunca o sistema de arquivos — então ele não
-//! tinha como vê-las. Três custos reais e medidos desse ponto cego:
+//! Operational tools (`config-backup`, `zomboid-*`, `smart-metrics`, …)
+//! previously existed **only** in `/usr/local/bin`, outside any repository.
+//! The governance engine audits repository files — never the live filesystem —
+//! so it was unable to see them.
 //!
-//! 1. `smart-metrics.py` violou `ARCH-NO-PYTHON` em 3 hosts por semanas, sem que
-//!    nenhum gate acusasse (o arquivo não estava no repo).
-//! 2. `scryfall-prefetch` vivia em `/tmp`, evaporou num reboot e a população do
-//!    mirror ficou congelada em ~62% por quase um mês.
-//! 3. Um `scryfall-prefetch` instalado estava **corrompido** (variáveis apagadas)
-//!    e ninguém percebeu — não havia versão anterior para comparar.
+//! # How it works
 //!
-//! # Como funciona
+//! The source of truth is the repository itself: `provisioning/scripts/` (operational tools)
+//! and `provisioning/<crate>/` (Rust tools). The installer `install-homelab-tools.sh`
+//! maintains the map of known tools — which this auditor reads to ensure parity.
 //!
-//! A fonte da verdade é o próprio repositório: `provisioning/scripts/` (ferramentas
-//! de operação) e `provisioning/<crate>/` (ferramentas Rust). O instalador
-//! `install-homelab-tools.sh` mantém o mapa do que é conhecido — é dele que este
-//! auditor lê, para que não existam duas listas divergindo.
-//!
-//! O veredito por ferramenta:
-//!
-//! | Situação | Veredito |
+//! | State | Verdict |
 //! |---|---|
-//! | Está no host E no repo | ✅ conforme |
-//! | Está no host e NÃO no repo | ⚠️ **órfã** — candidata a migração |
-//! | Binário de terceiro / pacote do sistema | ignorado por allowlist |
-//!
-//! Não tenta ser esperto com heurística: prefere uma allowlist explícita, que é
-//! auditável e não gera ruído.
+//! | Present on host AND repo | ✅ compliant |
+//! | Present on host and NOT in repo | ⚠️ **orphan** — migration candidate |
+//! | Third-party binary / system package | ignored by allowlist |
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-/// Binários de terceiros e pacotes do sistema que legitimamente vivem em
-/// `/usr/local/bin` sem serem código deste ecossistema.
+/// Third-party binaries and system packages that legitimately reside in
+/// `/usr/local/bin` without belonging to this ecosystem codebase.
 const ALLOWLIST: &[&str] = &[
     "bat",
     "fd",
@@ -51,8 +38,8 @@ const ALLOWLIST: &[&str] = &[
     "remove-nvidia",
 ];
 
-/// Binários Rust cujo crate é versionado em OUTRO lugar do repositório (não em
-/// `provisioning/scripts/`, porque não são scripts).
+/// Rust binaries whose crates are versioned in OTHER repository paths (not in
+/// `provisioning/scripts/` because they are compiled binaries).
 const KNOWN_ELSEWHERE: &[&str] = &["gpu-supervisor", "with-smooth-motion"];
 
 struct Report {
@@ -61,16 +48,16 @@ struct Report {
 
 struct HostResult {
     host: String,
-    /// Ferramentas presentes no host.
+    /// Tools present on the host.
     present: BTreeSet<String>,
-    /// Ferramentas que o repositório versiona.
+    /// Tools declared and versioned in the repository.
     declared: BTreeSet<String>,
-    /// Erro de acesso ao host, quando houver.
+    /// Error accessing the host, if any.
     error: Option<String>,
 }
 
 impl HostResult {
-    /// Ferramentas no host que o repositório não conhece — o achado que importa.
+    /// Tools on the host unknown to the repository — the primary audit finding.
     fn orphans(&self) -> Vec<&String> {
         self.present
             .iter()
@@ -78,7 +65,7 @@ impl HostResult {
             .collect()
     }
 
-    /// Ferramentas declaradas que não estão no host.
+    /// Declared tools missing on the host.
     fn missing(&self) -> Vec<&String> {
         self.declared
             .iter()
@@ -90,25 +77,25 @@ impl HostResult {
 pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
     println!();
     println!("══════════════════════════════════════════════════════════════════════════════");
-    println!("  🧰 StênioKernel — Ferramentas de Operação (--tools)");
+    println!("  🧰 StenioKernel — Operation Tools Audit (--tools)");
     println!("══════════════════════════════════════════════════════════════════════════════");
-    println!("  Cruza /usr/local/bin de cada host com o que `provisioning/` versiona.");
-    println!("  Órfã = existe no host mas não no repositório (sem diff, sem revisão).");
+    println!("  Cross-checks /usr/local/bin of each host with repository `provisioning/`.");
+    println!("  Orphan = exists on host but not in repository (untracked, unreviewed).");
     println!();
 
     let declared = read_declared_tools(repo_root);
     if declared.is_empty() {
-        println!("  ⚠️  nenhuma ferramenta declarada encontrada.");
+        println!("  ⚠️  No declared tools found.");
         println!(
-            "     Esperado: {}/provisioning/scripts/install-homelab-tools.sh",
+            "     Expected: {}/provisioning/scripts/install-homelab-tools.sh",
             repo_root.display()
         );
-        println!("     Sem essa lista não há como cruzar host × repositório.");
+        println!("     Without this catalog, host × repository cross-checking is impossible.");
         println!();
         return Ok(());
     }
     println!(
-        "  Fonte da verdade: provisioning/ ({} ferramentas declaradas)",
+        "  Source of truth: provisioning/ ({} declared tools)",
         declared.len()
     );
     println!();
@@ -138,15 +125,15 @@ pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
 
     println!("──────────────────────────────────────────────────────────────────────────────");
     if total_orphans == 0 {
-        println!("  ✅ Nenhuma ferramenta órfã: todo o operacional está versionado.");
-        println!("     O que roda em /usr/local/bin também existe em provisioning/,");
-        println!("     então passa por gate, revisão e histórico como o resto do código.");
+        println!("  ✅ Zero orphan tools: entire operational suite is version-controlled.");
+        println!("     Everything running in /usr/local/bin exists in provisioning/,");
+        println!("     enforcing automated gates, reviews, and git history.");
     } else {
         println!(
-            "  ⚠️  {total_orphans} ferramenta(s) órfã(s) — sem diff, sem revisão, invisível ao gate."
+            "  ⚠️  {total_orphans} orphan tool(s) detected — untracked, unreviewed, invisible to gate."
         );
-        println!("     Migrar para provisioning/scripts/ e instalar via");
-        println!("     `install-homelab-tools.sh` (ver mnemocine/guides/stenio-ci-unificado.md).");
+        println!("     Migrate to provisioning/scripts/ and install via");
+        println!("     `install-homelab-tools.sh` (see mnemocine/guides/stenio-ci-unificado.md).");
     }
     println!();
 
@@ -154,38 +141,38 @@ pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
 }
 
 fn print_host(h: &HostResult) {
-    println!("  [NÓ] {}", h.host);
+    println!("  [NODE] {}", h.host);
     if let Some(err) = &h.error {
-        println!("       ✗ inacessível: {err}");
+        println!("       ✗ unreachable: {err}");
         return;
     }
 
     let orphans = h.orphans();
     if orphans.is_empty() {
-        println!("       ✅ todas as ferramentas presentes estão versionadas");
+        println!("       ✅ all present tools are version-controlled");
     } else {
         for o in orphans {
-            println!("       ⚠️  {o} — NÃO versionada (candidata a migração)");
+            println!("       ⚠️  {o} — NOT versioned (migration candidate)");
         }
     }
 
-    // Ferramentas declaradas mas ausentes no host: pode ser normal (cada host tem
-    // o seu papel), então é informativo e não alarme.
+    // Declared tools missing on host: can be normal (each host has a distinct role),
+    // so this is informative and not an alert.
     let missing = h.missing();
     if !missing.is_empty() {
         println!(
-            "       ℹ️  {} declarada(s) e ausente(s) neste nó (normal: papel do host)",
+            "       ℹ️  {} declared and absent on this node (normal: host role)",
             missing.len()
         );
     }
 }
 
-/// Lista as ferramentas em `/usr/local/bin`, filtrando allowlist e backups.
+/// Lists tools in `/usr/local/bin`, filtering allowlist and backups.
 ///
-/// Localmente usa `std::fs`; remotamente usa o driver canônico
-/// `crate::remote::run_ssh` — obrigatório pela regra `RUST-CANONICAL-REMOTE`,
-/// que existe para garantir isolamento de timeout, `BatchMode` e detecção de
-/// re-auth do Tailscale SSH num único lugar.
+/// Locally uses `std::fs`; remotely uses the canonical driver
+/// `crate::remote::run_ssh` — mandatory by rule `RUST-CANONICAL-REMOTE`,
+/// which exists to enforce timeout isolation, `BatchMode`, and Tailscale SSH
+/// re-auth detection in a single place.
 fn list_host_tools(host: &str) -> Result<BTreeSet<String>, String> {
     let is_local = host_matches_local(host);
 
@@ -200,16 +187,16 @@ fn list_host_tools(host: &str) -> Result<BTreeSet<String>, String> {
         match crate::remote::run_ssh(host, "ls -1 /usr/local/bin 2>/dev/null", 8) {
             crate::remote::RemoteOutcome::Success(out) => out,
             crate::remote::RemoteOutcome::AuthRequired { .. } => {
-                return Err("SSH exige re-autenticação (Tailscale check mode)".to_string());
+                return Err("SSH requires re-authentication (Tailscale check mode)".to_string());
             }
             crate::remote::RemoteOutcome::Timeout { timeout_secs, .. } => {
-                return Err(format!("ssh: timeout após {timeout_secs}s"));
+                return Err(format!("ssh: timeout after {timeout_secs}s"));
             }
             crate::remote::RemoteOutcome::Unreachable { reason, .. } => {
-                return Err(format!("ssh inacessível: {reason}"));
+                return Err(format!("ssh unreachable: {reason}"));
             }
             crate::remote::RemoteOutcome::Failed { exit_code, .. } => {
-                return Err(format!("ssh falhou (exit={exit_code:?})"));
+                return Err(format!("ssh failed (exit={exit_code:?})"));
             }
         }
     };
@@ -228,24 +215,24 @@ fn list_host_tools(host: &str) -> Result<BTreeSet<String>, String> {
     Ok(tools)
 }
 
-/// Decide se um arquivo em `/usr/local/bin` deve ser ignorado na auditoria.
+/// Decides whether a file in `/usr/local/bin` should be ignored in the audit.
 fn is_ignored(name: &str) -> bool {
-    // Backups deixados deliberadamente por migrações (documentados no commit).
+    // Backups deliberately left behind by migrations (documented in commit).
     if name.contains(".bak-") || name.ends_with(".disabled") {
         return true;
     }
-    // Binários de terceiros / pacotes do sistema.
+    // Third-party binaries / system packages.
     if ALLOWLIST.contains(&name) {
         return true;
     }
-    // Crates versionados em outros pontos do repositório.
+    // Crates versioned in other parts of the repository.
     if KNOWN_ELSEWHERE.contains(&name) {
         return true;
     }
     false
 }
 
-/// Compara o hostname com o nó local, tolerando a capitalização do psicopompo.
+/// Compares hostname with local node, tolerando casing differences.
 fn host_matches_local(host: &str) -> bool {
     let local = std::env::var("HOSTNAME")
         .ok()

@@ -332,9 +332,9 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "#[tokio::main] async fn main() { std::thread::sleep(std::time::Duration::from_millis(100)); }", // stenio-ignore: RUST-ASYNC-SLEEP
         true
     );
-    // RUST-ASYNC-SLEEP é context-dependente: Error em arquivo async, Warning em
-    // síncrono (visível, sem bloquear). A amostra usa `concat!` para não plantar
-    // o literal da regra neste próprio arquivo.
+    // RUST-ASYNC-SLEEP is context-dependent: Error in async files, Warning in
+    // sync code (visible without blocking). The probe uses `concat!` to avoid planting
+    // the rule literal in this file itself.
     if let Some(rule) = rules.iter().find(|r| r.id == "RUST-ASYNC-SLEEP") {
         total += 1;
         let probe = concat!("std::thread::", "sleep(x);");
@@ -955,7 +955,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 
     let mut blocker_errors = Vec::new();
 
-    // 1. Violações de regras de severidade Error
+    // 1. Violations with severity Error
     for v in &report.violations {
         if v.severity == Severity::Error {
             blocker_errors.push(format!(
@@ -1140,19 +1140,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Ferramentas de Operação (--tools) ──────────────────────────────
+    // ── Operation Tools Mode (--tools) ──────────────────────────────────────
     //
-    // POR QUE EXISTE (29/09/2026): as ferramentas de operação viviam APENAS em
-    // `/usr/local/bin`, fora do repositório. O gate audita arquivos do repo, não
-    // o sistema de arquivos — então ele nunca as via. Custou caro:
-    //   - `smart-metrics.py` violou ARCH-NO-PYTHON em 3 hosts, invisível;
-    //   - `scryfall-prefetch` morreu em /tmp e ninguém soube (cobertura do mirror
-    //     congelada em 62% por um mês);
-    //   - um script instalado estava CORROMPIDO e ninguém tinha diff para ver.
-    //
-    // Este modo cruza o que o host tem com o que `provisioning/` declara. A
-    // fonte da verdade é o instalador (`install-homelab-tools.sh`), que lista as
-    // ferramentas conhecidas.
+    // Cross-checks tools installed in `/usr/local/bin` across homelab hosts
+    // with versioned scripts in `provisioning/`. Source of truth is
+    // `install-homelab-tools.sh`.
     if args.tools {
         tools::run_tools_audit(&args.path)?;
         return Ok(());
@@ -1273,24 +1265,11 @@ fn main() -> Result<()> {
         rules.retain(|r| allowed_prefixes.iter().any(|p| r.id.starts_with(p)));
     }
 
-    // ── Escopo `mirror`: repositório GERADO (espelho de configs) ───────────
+    // ── Scope `mirror`: GENERATED repository (config snapshot mirror) ──────
     //
-    // POR QUE EXISTE (29/09/2026): o `MNEMOCINE-CONFIGS` é um espelho automático
-    // do estado dos 5 hosts (4718 arquivos, 38 extensões). Aplicar leis de código
-    // nele dá 29.266 erros de `ARCH-NO-PYTHON` — mas o `.py` não é código do
-    // repositório, é conteúdo DOS HOSTS que o espelho capturou (inclui 72 do Home
-    // Assistant, que nem é nosso). Auditar "Python proibido" num snapshot de host
-    // é erro de categoria.
-    //
-    // O que IMPORTA num espelho, e é o que este escopo mantém:
-    //   SEC-*    segredos — o espelho é PRIVADO e vai para o git, então um
-    //            token em claro aqui é vazamento em versionamento. É o achado
-    //            que o escopo existe para encontrar (provou-se real: achou o
-    //            token OAuth do rclone e as credenciais da API do CrowdSec).
-    //   INFRA-*  sintaxe de compose/systemd espelhados.
-    //
-    // Removido: ARCH-*, RUST-*, GOV-*, FRONT-*, BACKEND-*, TEST-*, DB-*, CV-*,
-    // VAULT-*, HOMELAB-*, DOC-* — nada disso descreve um repositório gerado.
+    // For automated config mirrors of live homelab hosts (e.g. MNEMOCINE-CONFIGS).
+    // Filters out code laws (ARCH-*, RUST-*, FRONT-*) while strictly enforcing
+    // cleartext secret detection (SEC-*) and compose/systemd syntax (INFRA-*).
     if scope_opt.eq_ignore_ascii_case("mirror")
         || scope_opt.eq_ignore_ascii_case("snapshot")
         || scope_opt.eq_ignore_ascii_case("generated")
@@ -1299,13 +1278,13 @@ fn main() -> Result<()> {
         rules.retain(|r| allowed_prefixes.iter().any(|p| r.id.starts_with(p)));
     }
 
-    // ── Modo Quality Gate Pré-Entrega (--gate) ─────────────────────────────
+    // ── Pre-Delivery Quality Gate Mode (--gate) ─────────────────────────────
     if args.gate {
         run_quality_gate(&args, &rules, &whitelist)?;
         return Ok(());
     }
 
-    // ── Modo DRY Detector (--dry) ──────────────────────────────────────────
+    // ── DRY Principle Detector Mode (--dry) ─────────────────────────────────
     if args.dry {
         let (violations, files_count, duration) = scan_dry_directory(&args.path, 6, &whitelist);
         print_dry_report(&violations, files_count, duration);
@@ -1533,41 +1512,16 @@ fn main() -> Result<()> {
                         || {
                             // ⚠️ CORREÇÃO DE SEGURANÇA (29/09/2026): o
                             // `audit_infrastructure` roda agora também no escopo
-                            // `fork`/`derived` e no futuro `mirror`.
-                            //
-                            // BUG CORRIGIDO: ele só rodava com `is_homelab_active`,
-                            // mas é ele quem contém as regras de segurança que vivem
-                            // FORA de `get_rules_from_config`:
-                            //   SEC-PLAINTEXT-SECRET, SEC-PRIVATE-KEY-CLEARTEXT,
-                            //   SEC-PERM-LEAK, SEC-SOPS-UNENCRYPTED
-                            //
-                            // Efeito medido: um `DATABASE_PASSWORD` em claro num
-                            // `.env` plantado num repositório auditado com
-                            // `--scope fork` NÃO era detectado. O escopo parecia
-                            // auditado e tinha um falso senso de segurança —
-                            // exatamente o pior modo de falha de um gate.
-                            //
-                            // O filtro por prefixo do escopo trata as regras de
-                            // ARQUIVO (código). Segurança de infraestrutura não é
-                            // negociável por escopo: segredo em claro é segredo em
-                            // claro em qualquer repositório.
+                            // Security infrastructure checks run across homelab, fork, derived, and mirror scopes.
+                            // Evaluates: SEC-PLAINTEXT-SECRET, SEC-PRIVATE-KEY-CLEARTEXT, SEC-PERM-LEAK, SEC-SOPS-UNENCRYPTED.
                             let runs_infra_audit = is_homelab_active
                                 || scope_opt.eq_ignore_ascii_case("fork")
                                 || scope_opt.eq_ignore_ascii_case("derived")
                                 || scope_opt.eq_ignore_ascii_case("mirror");
 
                             let (h, inf) = if is_homelab_active {
-                                // O escopo `homelab` audita a árvore do vault **e** o
-                                // espelho dos composes dos hosts (`/mnt/BACKUP/configs-homelab`,
-                                // mantido pelo `config-backup`). Sem o espelho, as regras
-                                // INFRA-COMPOSE-* não veriam nenhum compose real: o vault
-                                // tem 0 composes (os serviços vivem em `/srv/data` nos hosts).
-                                // Só as checagens estruturais de compose rodam no espelho —
-                                // as regras `SEC-*` não se aplicam a conteúdo capturado.
+                                // Homelab scope audits vault tree AND host compose mirror (/mnt/BACKUP/configs-homelab).
                                 let mut infra = audit_infrastructure(&args.path, true);
-                                // O espelho só entra quando o alvo é o vault real (layout
-                                // `mnemocine/`) — um `--path` apontando para outro diretório
-                                // não deve arrastar o NAS para dentro do resultado.
                                 let mirror = Path::new("/mnt/BACKUP/configs-homelab");
                                 if args.path.join("mnemocine").is_dir() && mirror.is_dir() {
                                     let mirror_report = audit_compose_dir(mirror);
@@ -1578,11 +1532,7 @@ fn main() -> Result<()> {
                                 }
                                 (Some(audit_homelab(&args.path)), Some(infra))
                             } else if runs_infra_audit {
-                                // Sem a auditoria de documentação do homelab (não se
-                                // aplica a um fork ou espelho), mas COM a de
-                                // infraestrutura, que traz as regras de segurança.
-                                // `code_debt: false` — o `.py` aqui é de terceiros
-                                // ou conteúdo capturado dos hosts.
+                                // Runs infrastructure security audits without homelab-specific documentation constraints.
                                 (None, Some(audit_infrastructure(&args.path, false)))
                             } else {
                                 (None, None)

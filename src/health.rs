@@ -240,8 +240,8 @@ fn check_backup_chain() {
     );
 }
 
-/// casa a pasta de backup com o health file do job correspondente (/srv/health/)
-/// — padrão: health file = {prefixo}-last-ok ; o Grafana já usa estes como fonte da verdade.
+/// Matches backup target directory with corresponding job health file (/srv/health/)
+/// — standard: health file = {prefix}-last-ok; Grafana relies on these as source of truth.
 fn find_matching_health_file(target_folder: &str) -> Option<std::time::SystemTime> {
     let prefix = match target_folder {
         "configs-homelab" => "config-backup-psicopompo",

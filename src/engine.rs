@@ -113,14 +113,14 @@ impl Engine {
             total_fixed = self.apply_auto_fixes(&file_paths, tag_filter, only_rule);
         }
 
-        // Processa todos os arquivos em paralelo com Rayon
+        // Process all files in parallel with Rayon
         let mut violations: Vec<Violation> = file_paths
             .par_iter()
             .flat_map(|path| self.scan_file(path, tag_filter, only_rule))
             .collect();
 
-        // Verificação Automática de Isolamento de Escopo (Single Responsibility Worktree)
-        // Impede que uma LLM misture alterações de aplicação com adulterações no motor do Stênio em diffs/commits
+        // Automatic Scope Isolation Check (Single Responsibility Worktree)
+        // Prevents an LLM from mixing application changes with Stenio engine modifications in diffs/commits
         if diff_target.is_some() || fast_mode {
             if let Some(v) = Self::check_scope_isolation(&file_paths) {
                 violations.push(v);
@@ -328,8 +328,8 @@ impl Engine {
         };
 
         let path_str = path.to_string_lossy().to_string();
-        // Arquivos internos de definição de regras e testes sintéticos do motor do Stênio
-        // não devem ser sancionados pelas regras que eles próprios definem e testam
+        // Internal rule definitions and synthetic self-test files of the Stenio engine
+        // must not be sanctioned by the very rules they define and test
         if path_str.ends_with("/rule.rs")
             || path_str.ends_with("/frontend.rs")
             || path_str.ends_with("/explain.rs")
@@ -339,7 +339,7 @@ impl Engine {
         }
         let mut file_violations = Vec::new();
 
-        // 1. Auditoria especializada de Leis de Frontend e SEO
+        // 1. Specialized Frontend and SEO Rules Audit
         if (tag_filter.is_none() || tag_filter == Some("frontend") || tag_filter == Some("seo"))
             && only_rule.map_or(true, |r| r.starts_with("FRONT-") || r.starts_with("PERF-") || r.starts_with("SEO-"))
         {
@@ -354,7 +354,7 @@ impl Engine {
             }
         }
 
-        // 2. Auditoria por autômato de regras
+        // 2. Rule Automaton Audit
         for (idx, rule) in self.rules.iter().enumerate() {
             if !rule.matches_filter(tag_filter, only_rule, &ext) {
                 continue;
@@ -372,12 +372,12 @@ impl Engine {
                 continue;
             }
 
-            // Pula regras com marcador avaliadas exclusivamente por subsistemas dedicados
+            // Skip marked rules evaluated exclusively by dedicated subsystems
             if rule.pattern.contains("stenio-") && rule.pattern.contains("-marker") {
                 continue;
             }
 
-            // Regras exclusivas de runtime assíncrono do servidor (Axum/Tokio)
+            // Server async runtime rules (Axum/Tokio)
             if rule.id == "RUST-STRUCTURED-LOGGING"
                 || rule.id == "RUST-ASYNC-BLOCKING-CMD"
                 || rule.id == "RUST-NO-SYNC-MUTEX-AWAIT"
@@ -395,7 +395,7 @@ impl Engine {
                 }
             }
 
-            // Regras de boas práticas Rust que não se aplicam a testes ou build scripts
+            // Rust best-practice rules that do not apply to tests or build scripts
             if rule.id == "RUST-NO-UNWRAP"
                 || rule.id == "RUST-NO-UNBOUNDED-CHANNEL"
                 || rule.id == "RUST-IDIOMATIC-SLICES"
@@ -428,9 +428,9 @@ impl Engine {
 
             let re = &self.compiled_regexes[idx];
 
-            // Contexto opcional: `RUST-ASYNC-SLEEP` é Error apenas em arquivo
-            // realmente assíncrono; em código síncrono fica Warning (visível, sem
-            // bloquear). Sem contexto configurado, a severidade é a da regra.
+            // Optional context: `RUST-ASYNC-SLEEP` is Error only in truly
+            // async files; in sync code it remains Warning (visible without blocking).
+            // Without configured requires-context, severity defaults to rule's standard severity.
             let severity = match (&self.compiled_requires[idx], rule.severity_without_requires) {
                 (Some(req), without) => {
                     if req.is_match(&content) {
@@ -461,7 +461,7 @@ impl Engine {
                     }
                 }
             } else {
-                // Fast-reject: se o buffer inteiro não contém o padrão, pula a iteração linha a linha
+                // Fast-reject: if the entire buffer does not contain the pattern, skip line-by-line iteration
                 if !re.is_match(&content) {
                     continue;
                 }

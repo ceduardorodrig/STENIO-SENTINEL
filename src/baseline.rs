@@ -25,8 +25,8 @@ impl Whitelist {
     }
 
     pub fn is_ignored(&self, file_path: &str, rule_id: &str, line_content: &str) -> bool {
-        // Regras Canônicas Invioláveis: NUNCA podem ser ignoradas por comentário inline,
-        // nem por IAs, nem por humanos. Tentativas de supressão são rejeitadas.
+        // Inviolable Canonical Rules: NEVER suppressed via inline comments,
+        // neither by AI agents nor by humans. Tampering attempts are rejected.
         let is_inviolable = rule_id.starts_with("SEC-")
             || rule_id.starts_with("AGENT-")
             || rule_id.starts_with("ARCH-")
@@ -38,10 +38,10 @@ impl Whitelist {
             return false;
         }
 
-        // 1. Suporte a comentário inline com regra específica: # stenio-ignore: RULE_ID
-        // NOTA DE SEGURANÇA: 'stenio-ignore: all' é expressamente PROIBIDO e não tem efeito.
+        // 1. Support for inline comment with specific rule: # stenio-ignore: RULE_ID
+        // SECURITY NOTE: 'stenio-ignore: all' is strictly FORBIDDEN and has no effect.
         if line_content.contains("# stenio-ignore") || line_content.contains("// stenio-ignore") {
-            // Proibição estrita de bypass global 'all'
+            // Strict prohibition of global 'all' bypass
             if line_content.contains("stenio-ignore: all")
                 || line_content.contains("stenio-ignore:all")
             {
@@ -52,15 +52,15 @@ impl Whitelist {
             }
         }
 
-        // 2. nosemgrep: compatível com semgrep CLI (apenas regras específicas não-críticas)
+        // 2. nosemgrep: compatible with semgrep CLI (specific non-critical rules only)
         if line_content.contains("# nosemgrep") || line_content.contains("// nosemgrep") {
             if let Some(after) = line_content.split("nosemgrep").nth(1) {
                 let trimmed_after = after.trim();
                 if trimmed_after.is_empty() || !trimmed_after.starts_with(':') {
-                    // nosemgrep genérico é proibido para evitar supressão cega por IAs
+                    // Generic nosemgrep is prohibited to prevent blind suppression by AI agents
                     return false;
                 }
-                // nosemgrep: RULE_ID — ignora apenas se rule_id bater
+                // nosemgrep: RULE_ID — ignores only if rule_id matches
                 if trimmed_after.contains(rule_id) {
                     return true;
                 }
@@ -69,7 +69,7 @@ impl Whitelist {
             return false;
         }
 
-        // 3. Checa whitelist de arquivo (.steniocheck-whitelist-registry.json)
+        // 3. Check file whitelist (.steniocheck-whitelist-registry.json)
         for pattern in &self.ignored_patterns {
             if file_path.contains(pattern) {
                 return true;

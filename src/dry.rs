@@ -22,15 +22,15 @@ pub struct FileRecord {
     pub substantive: Vec<SubstantiveLine>,
 }
 
-/// Normaliza uma linha de código, ignorando ruído de sintaxe trivial, comentários e imports.
-/// Retorna `Some(linha_normalizada)` se a linha contiver lógica substantiva, ou `None` caso contrário.
+/// Normalizes a line of code, ignoring trivial syntax noise, comments, and imports.
+/// Returns `Some(normalized_line)` if the line contains substantive logic, or `None` otherwise.
 pub fn normalize_substantive_line(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    // Ignora comentários (linha única e blocos comuns)
+    // Ignore comments (single line and common block markers)
     if trimmed.starts_with("//")
         || trimmed.starts_with("/*")
         || trimmed.starts_with('*')
@@ -41,7 +41,7 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
         return None;
     }
 
-    // Ignora divisores e molduras visuais de terminal
+    // Ignore dividers and visual terminal borders
     if trimmed.contains("═════") || trimmed.contains("─────") || trimmed.contains("-----")
     {
         return None;
@@ -72,11 +72,11 @@ pub fn normalize_substantive_line(line: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-/// Verifica se um arquivo deve participar da análise DRY.
+/// Checks whether a file should participate in DRY analysis.
 pub fn is_dry_eligible(path: &Path) -> bool {
     let path_str = path.to_string_lossy();
 
-    // Ignora pastas de build, cache, dependências e lockfiles
+    // Ignore build directories, caches, dependencies, and lockfiles
     if crate::baseline::is_common_ignored_path(&path_str)
         || path_str.contains("/build/")
         || path_str.contains("/llm_model_cache/")
@@ -89,7 +89,7 @@ pub fn is_dry_eligible(path: &Path) -> bool {
         return false;
     }
 
-    // Ignora arquivos de teste onde repetições de setup/fixtures são padrão aceitável
+    // Ignore test files where setup/fixtures repetition is an acceptable standard pattern
     if path_str.contains("/tests/")
         || path_str.ends_with("_test.rs")
         || path_str.ends_with(".test.ts")
@@ -112,10 +112,10 @@ pub fn is_dry_eligible(path: &Path) -> bool {
     )
 }
 
-/// Extrai linhas substantivas de um arquivo de texto.
+/// Extracts substantive lines from a text file.
 pub fn parse_file_substantive(path: &Path, content: &str) -> FileRecord {
     let mut substantive = Vec::new();
-    let has_ignore = false; // Princípio DRY é inviolável: não pode ser ignorado por comentário inline
+    let has_ignore = false; // DRY principle is inviolable: cannot be suppressed via inline comments
 
     for (idx, line) in content.lines().enumerate() {
         if let Some(norm) = normalize_substantive_line(line) {
@@ -183,19 +183,19 @@ pub fn detect_dry_duplication(
             for j in (i + 1)..occurrences.len() {
                 let (f2, idx2) = occurrences[j];
 
-                // Se for no mesmo arquivo, não pode haver auto-sobreposição do bloco
+                // If within the same file, block cannot self-overlap
                 if f1 == f2 && idx2 < idx1 + min_lines {
                     continue;
                 }
 
-                // Se ambos os inícios já foram relatados em um bloco maximal anterior, pula
+                // If both start positions were already reported in an earlier maximal block, skip
                 if reported_positions.contains(&(f1, idx1))
                     && reported_positions.contains(&(f2, idx2))
                 {
                     continue;
                 }
 
-                // Validação de paridade estrita do bloco base de tamanho `min_lines`
+                // Strict parity check for base block of size `min_lines`
                 let matches_base = (0..min_lines).all(|k| {
                     files[f1].substantive[idx1 + k].text == files[f2].substantive[idx2 + k].text
                 });
@@ -204,7 +204,7 @@ pub fn detect_dry_duplication(
                     continue;
                 }
 
-                // Extensão maximal para a frente: expande o bloco duplicado enquanto as linhas forem iguais
+                // Maximal forward extension: expand duplicate block while lines remain identical
                 let mut ext_len = min_lines;
                 while (idx1 + ext_len < files[f1].substantive.len())
                     && (idx2 + ext_len < files[f2].substantive.len())
@@ -217,7 +217,7 @@ pub fn detect_dry_duplication(
                     ext_len += 1;
                 }
 
-                // Registra posições cobertas para evitar violações redundantes
+                // Record covered positions to avoid redundant violation reports
                 for k in 0..ext_len {
                     reported_positions.insert((f1, idx1 + k));
                     reported_positions.insert((f2, idx2 + k));
@@ -235,7 +235,7 @@ pub fn detect_dry_duplication(
                     continue;
                 }
 
-                // Snippet representativo (primeiras 3 linhas do bloco)
+                // Representative snippet (first 3 lines of block)
                 let preview_count = 3.min(ext_len);
                 let snippet = files[f1].substantive[idx1..(idx1 + preview_count)]
                     .iter()
@@ -275,7 +275,7 @@ pub fn detect_dry_duplication(
     violations
 }
 
-/// Executa a varredura DRY em um diretório ou árvore de arquivos.
+/// Executes DRY scan across a directory or file tree.
 pub fn scan_dry_directory(
     root: &Path,
     min_lines: usize,
