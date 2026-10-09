@@ -45,10 +45,11 @@ fn fnv(bytes: &[u8]) -> u64 {
 }
 
 /// Serializes a token stream into a formatting-invariant byte buffer, returning
-/// the token count. Groups keep their delimiter; identifiers/literals keep their
-/// spelling; punctuation keeps its char.
-fn normalize_ts(ts: TokenStream, out: &mut Vec<u8>) -> usize {
+/// `(token_count, bytes)`. Groups keep their delimiter; identifiers/literals keep
+/// their spelling; punctuation keeps its char.
+fn normalize_ts(ts: TokenStream) -> (usize, Vec<u8>) {
     let mut count = 0;
+    let mut out = Vec::new();
     for tt in ts {
         count += 1;
         match tt {
@@ -60,7 +61,9 @@ fn normalize_ts(ts: TokenStream, out: &mut Vec<u8>) -> usize {
                     Delimiter::Parenthesis => b'(',
                     Delimiter::None => b'_',
                 });
-                count += normalize_ts(g.stream(), out);
+                let (inner_count, inner) = normalize_ts(g.stream());
+                count += inner_count;
+                out.extend_from_slice(&inner);
                 out.push(0x02);
             }
             TokenTree::Ident(i) => {
@@ -79,7 +82,7 @@ fn normalize_ts(ts: TokenStream, out: &mut Vec<u8>) -> usize {
             }
         }
     }
-    count
+    (count, out)
 }
 
 struct Collector<'a> {
@@ -89,8 +92,7 @@ struct Collector<'a> {
 
 impl<'ast> Visit<'ast> for Collector<'_> {
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        let mut buf = Vec::new();
-        let tokens = normalize_ts(stmt.to_token_stream(), &mut buf);
+        let (tokens, buf) = normalize_ts(stmt.to_token_stream());
         if tokens >= self.min_tokens {
             let span = stmt.span();
             self.units.push(AstUnit {
