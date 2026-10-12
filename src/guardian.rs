@@ -382,6 +382,14 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             ],
         ),
         (
+            "backlog.rs",
+            &[
+                "DOC-BACKLOG-DRIFT",
+                "HOMELAB-BACKLOG-MALFORMED",
+                "HOMELAB-BACKLOG-LIFECYCLE",
+            ],
+        ),
+        (
             "baseline.rs",
             &[
                 "stenio-ignore",

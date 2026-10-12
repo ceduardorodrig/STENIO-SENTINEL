@@ -57,3 +57,22 @@ The DRY engine runs in **two layers** and grades severity (it never silences):
 `run_quality_gate` blocks **only** on `Error` DRY findings; `Warning` findings are counted and surfaced without rejecting delivery.
 
 See the vault runbook [`../stenio-troubleshooting.md`](../stenio-troubleshooting.md) §6 for the "single emission point" remediation recipe and the multi-language (Fase 4) decision.
+
+## Backlog traceability coverage (`DOC-BACKLOG-*`, 2026-10-12)
+
+`src/backlog.rs` cross-checks the homelab's single source of pending work
+(`mnemocine/backlog.md`) against the per-document `pending: [HB-xxx]` frontmatter field, in
+**both** directions — the same "drift by cross-reference" pattern as `DOC-SERVICE-UNINDEXED`.
+
+- **`DOC-BACKLOG-DRIFT`** — a `Ref` points to a missing document, a referenced document does
+  not declare the item, or a document declares an ID the index never opened.
+  **Adaptive severity**: the drift inherits the item's severity — 🔴 is an `Error` (blocks
+  `run_quality_gate` and `--scope homelab`), everything else stays a `Warning`.
+- **`HOMELAB-BACKLOG-MALFORMED`** — a row missing its `Ref`, or carrying an unknown severity
+  or an invalid state.
+- **`HOMELAB-BACKLOG-LIFECYCLE`** — a `resolved` item with no closing date (`YYYY-MM-DD`).
+
+The state/severity vocabulary is read from the rows themselves, so evolving the backlog
+header needs no engine change. The audit is inert when the scope has no mnemocine tree or no
+adopted index. The three IDs are pinned as Guardian anchors in `src/guardian.rs`, so deleting
+them trips the tamper alert. Runbook: `mnemocine/guides/backlog-routine.md`.

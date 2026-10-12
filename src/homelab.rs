@@ -147,6 +147,12 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
         }
     }
 
+    // Validation E: Backlog traceability ("single source of pending work").
+    // Cross-checks mnemocine/backlog.md against the per-document `pending:` field.
+    let backlog = crate::backlog::audit_backlog(repo_root);
+    violations.extend(backlog.violations);
+    messages.extend(backlog.messages);
+
     if violations.is_empty() {
         messages.push(format!(
             "✅ {} notes and infrastructure configs in mnemocine/ 100% compliant.",

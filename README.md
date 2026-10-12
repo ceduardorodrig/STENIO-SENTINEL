@@ -175,6 +175,7 @@ Options:
 | `ARCH-NO-PYTHON` | Arch | **ERROR** | Enforces 100% native Rust backend sovereignty (ADR-036). |
 | `ARCH-DRY-DUPLICATION` | Code | **ERROR/WARN** | Two-layer detection with adaptive severity: substantial logic duplication → ERROR; low-density or short structural matches → WARN. |
 | `DOC-VIBE-DISCLAIMER` | Docs | **ERROR** | Enforces the standardized human-AI governance disclaimer across all repositories. |
+| `DOC-BACKLOG-DRIFT` | Docs | **ERROR/WARN** | Backlog traceability: the pending-work index (`mnemocine/backlog.md`) and each document's `pending:` frontmatter must agree bidirectionally. Adaptive severity — a drift on a 🔴 item blocks; any other drift warns. |
 | `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text API keys, GitHub tokens, and private keys. |
 | `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted environment files (`.enc.env`). |
 | `GOV-AGENT-LAWS` | Gov | **ERROR** | Validates agent constitution and governance rules in `AGENTS.md`. |

@@ -4,6 +4,7 @@ use colored::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod backlog;
 mod baseline;
 mod clean;
 mod config;
@@ -38,6 +39,7 @@ mod watch;
 
 use guardian::audit_stenio_integrity;
 
+use backlog::audit_backlog;
 use baseline::Whitelist;
 use config::SteniocheckConfig;
 use cv::audit_curriculum_vitae;
@@ -1070,6 +1072,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 
     let gov_result = audit_governance(&args.path);
     let doc_result = audit_documentation(&args.path);
+    let backlog_result = audit_backlog(&args.path);
     let guardian_report =
         audit_stenio_integrity(&PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio"));
 
@@ -1100,6 +1103,21 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
             blocker_errors.push(format!(
                 "[DOC-ERROR] {}:{}: {}",
                 v.file_path, v.line_number, v.message
+            ));
+        }
+    }
+
+    // 3b. Backlog traceability (single source of pending work). Adaptive severity:
+    //     a drift on a 🔴 item blocks delivery; every other finding is a Warning.
+    for v in &backlog_result.violations {
+        if v.severity == Severity::Error {
+            blocker_errors.push(format!(
+                "[{}] {}:{}: {} (💡 {})",
+                v.rule_id.red().bold(),
+                v.file_path,
+                v.line_number,
+                v.message,
+                v.suggestion.as_deref().unwrap_or("See --explain")
             ));
         }
     }
