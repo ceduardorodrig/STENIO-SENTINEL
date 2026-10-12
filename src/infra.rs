@@ -166,24 +166,77 @@ fn env_mentions_gpu(environment: &serde_yaml::Value) -> bool {
     }
 }
 
-/// Services allowed to hold the GPU: the gateway itself and the fleet's
-/// documented consumers (see mnemocine/services/hl-infer.md). A NEW service that
-/// claims the device is the drift this rule exists to catch.
-fn is_registered_gpu_consumer(service_name: &str) -> bool {
-    const ALLOWED: [&str; 7] = [
-        "hl-infer",
-        "steniorec",
-        "stenio-server",
-        "steniobot",
-        "sae-core",
-        "ollama",
-        "transcribe",
-    ];
-    let name = service_name.to_lowercase();
-    ALLOWED.iter().any(|allowed| name.contains(allowed))
+/// Built-in fallback allowlist of GPU consumers, used when the data file is
+/// missing, unreadable or empty. It MUST stay in sync with the seed of
+/// `mnemocine/network/gpu-consumers.txt`; the file is the source of truth.
+const FALLBACK_GPU_CONSUMERS: [&str; 7] = [
+    "hl-infer",
+    "steniorec",
+    "stenio-server",
+    "steniobot",
+    "sae-core",
+    "ollama",
+    "transcribe",
+];
+
+/// Location of the GPU consumer allowlist, relative to the audit root.
+const GPU_CONSUMERS_REL_PATH: &str = "mnemocine/network/gpu-consumers.txt";
+
+/// Parses the GPU consumer data file: one consumer per line, lowercase,
+/// `#` comments and blank lines ignored, surrounding whitespace trimmed.
+///
+/// Pure (no filesystem access) so it is unit-testable in isolation.
+fn parse_gpu_consumers(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.to_lowercase())
+        .collect()
 }
 
-fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
+/// The built-in list as owned strings, ready to be threaded into the audit.
+fn fallback_gpu_consumers() -> Vec<String> {
+    FALLBACK_GPU_CONSUMERS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Resolves the GPU consumer allowlist **once per audit** from the data file,
+/// falling back to the built-in list when the file is missing, unreadable or
+/// empty.
+///
+/// Registering a new consumer is a data edit in
+/// `mnemocine/network/gpu-consumers.txt`; the engine never needs to change. The
+/// audit never fails on a missing or malformed file.
+fn load_gpu_consumers(repo_root: &Path) -> Vec<String> {
+    let path = repo_root.join(GPU_CONSUMERS_REL_PATH);
+    match fs::read_to_string(&path) {
+        Ok(content) => {
+            let parsed = parse_gpu_consumers(&content);
+            if parsed.is_empty() {
+                fallback_gpu_consumers()
+            } else {
+                parsed
+            }
+        }
+        Err(_) => fallback_gpu_consumers(),
+    }
+}
+
+/// A service may hold the GPU only if it is a registered consumer (see
+/// mnemocine/services/hl-infer.md). Matching stays case-insensitive substring,
+/// now against the resolved allowlist rather than a hardcoded constant. A NEW
+/// service that claims the device is the drift this rule exists to catch.
+fn is_registered_gpu_consumer(service_name: &str, allowed: &[String]) -> bool {
+    let name = service_name.to_lowercase();
+    allowed
+        .iter()
+        .any(|allowed_name| name.contains(allowed_name.as_str()))
+}
+
+fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mirror_info = parse_mirror_path(path_str);
     let display_path = if let Some((host, rel_path)) = mirror_info {
@@ -295,7 +348,9 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                     // GPU centralization: a compose service that claims the GPU
                     // must be a registered consumer of the gateway (hl-infer).
                     // Otherwise inference bypasses VRAM arbitration entirely.
-                    if service_claims_gpu(svc_val) && !is_registered_gpu_consumer(svc_name) {
+                    if service_claims_gpu(svc_val)
+                        && !is_registered_gpu_consumer(svc_name, gpu_consumers)
+                    {
                         findings.push((
                             "HOMELAB-GPU-UNIFIED",
                             "GPU Claim Outside the Centralized Gateway",
@@ -374,6 +429,9 @@ pub fn audit_compose_dir(root: &Path) -> InfraReport {
         return report;
     }
 
+    // Resolved once for the whole audit and threaded into every compose check.
+    let gpu_consumers = load_gpu_consumers(root);
+
     let mut walker = WalkBuilder::new(root);
     walker.hidden(false).git_ignore(false);
 
@@ -404,7 +462,7 @@ pub fn audit_compose_dir(root: &Path) -> InfraReport {
         report.total_files_scanned += 1;
         report
             .violations
-            .extend(check_compose_file(&path_str, &content));
+            .extend(check_compose_file(&path_str, &content, &gpu_consumers));
     }
 
     report
@@ -422,6 +480,9 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
     let mut messages = Vec::new();
     let mut violations = Vec::new();
     let mut scanned_count = 0;
+
+    // Resolved once for the whole audit and threaded into every compose check.
+    let gpu_consumers = load_gpu_consumers(root);
 
     let mut walker = WalkBuilder::new(root);
     walker.hidden(false).git_ignore(true);
@@ -617,7 +678,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         if is_compose {
             scanned_count += 1;
             if let Ok(content) = fs::read_to_string(&path) {
-                violations.extend(check_compose_file(&path_str, &content));
+                violations.extend(check_compose_file(&path_str, &content, &gpu_consumers));
             }
         }
 
@@ -855,29 +916,55 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
 "#;
 
+    const CUSTOM_CONSUMER: &str = r#"
+services:
+  custom-worker:
+    image: custom-worker:latest
+    restart: unless-stopped
+    runtime: nvidia
+"#;
+
     fn gpu_unified(violations: &[Violation]) -> bool {
         violations
             .iter()
             .any(|violation| violation.rule_id == "HOMELAB-GPU-UNIFIED")
     }
 
+    /// The built-in allowlist, threaded into the compose check like a real audit.
+    fn allowed() -> Vec<String> {
+        fallback_gpu_consumers()
+    }
+
     #[test]
     fn flags_a_new_gpu_claim() {
-        assert!(gpu_unified(&check_compose_file("compose.yml", ROGUE)));
+        assert!(gpu_unified(&check_compose_file(
+            "compose.yml",
+            ROGUE,
+            &allowed()
+        )));
     }
 
     #[test]
     fn does_not_flag_a_registered_consumer() {
-        assert!(!gpu_unified(&check_compose_file("compose.yml", REGISTERED)));
+        assert!(!gpu_unified(&check_compose_file(
+            "compose.yml",
+            REGISTERED,
+            &allowed()
+        )));
     }
 
     #[test]
     fn flags_deploy_device_reservations_and_env_claims() {
         assert!(gpu_unified(&check_compose_file(
             "compose.yml",
-            DEPLOY_DEVICES
+            DEPLOY_DEVICES,
+            &allowed()
         )));
-        assert!(gpu_unified(&check_compose_file("compose.yml", ENV_CLAIM)));
+        assert!(gpu_unified(&check_compose_file(
+            "compose.yml",
+            ENV_CLAIM,
+            &allowed()
+        )));
     }
 
     #[test]
@@ -888,6 +975,78 @@ services:
     image: redis:7
     restart: unless-stopped
 "#;
-        assert!(!gpu_unified(&check_compose_file("compose.yml", plain)));
+        assert!(!gpu_unified(&check_compose_file(
+            "compose.yml",
+            plain,
+            &allowed()
+        )));
+    }
+
+    #[test]
+    fn parses_comments_blank_lines_and_whitespace() {
+        let raw = "\
+# GPU consumers — data, not engine code.
+hl-infer
+
+  steniorec
+# trailing comment
+	ollama
+";
+        assert_eq!(
+            parse_gpu_consumers(raw),
+            vec![
+                "hl-infer".to_string(),
+                "steniorec".to_string(),
+                "ollama".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn data_file_consumer_is_not_flagged_and_unknown_claim_is() {
+        // A list parsed from the data file (not the built-in fallback) governs
+        // the rule exactly like the resolved audit list would.
+        let consumers = parse_gpu_consumers("# custom\ncustom-worker\n");
+        assert!(!gpu_unified(&check_compose_file(
+            "compose.yml",
+            CUSTOM_CONSUMER,
+            &consumers
+        )));
+        assert!(gpu_unified(&check_compose_file(
+            "compose.yml",
+            ROGUE,
+            &consumers
+        )));
+    }
+
+    #[test]
+    fn missing_file_falls_back_to_the_builtin_list() {
+        let missing = Path::new("/nonexistent/stenio-gpu-consumers-do-not-create");
+        assert_eq!(load_gpu_consumers(missing), fallback_gpu_consumers());
+    }
+
+    #[test]
+    fn reads_the_data_file_from_the_repo_root_and_cleans_up() {
+        let root =
+            std::env::temp_dir().join(format!("stenio-gpu-consumers-{}", std::process::id()));
+        let dir = root.join("mnemocine/network");
+        if fs::create_dir_all(&dir).is_err() {
+            return; // no writable temp dir in this environment: nothing to verify
+        }
+        let file = dir.join("gpu-consumers.txt");
+        if fs::write(&file, "# seed\nhl-infer\ndata-only-consumer\n").is_err() {
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+
+        let resolved = load_gpu_consumers(&root);
+
+        // Clean up before asserting so the artifact never survives a panic.
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(
+            resolved,
+            vec!["hl-infer".to_string(), "data-only-consumer".to_string()]
+        );
     }
 }
