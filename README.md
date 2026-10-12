@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v4.3.0) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel (v4.4.0) — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -144,7 +144,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v4.3.0 — Universal AI Governance & Static Sentinel
+StenioSentinel v4.4.0 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 
@@ -175,7 +175,9 @@ Options:
 | `ARCH-NO-PYTHON` | Arch | **ERROR** | Enforces 100% native Rust backend sovereignty (ADR-036). |
 | `ARCH-DRY-DUPLICATION` | Code | **ERROR/WARN** | Two-layer detection with adaptive severity: substantial logic duplication → ERROR; low-density or short structural matches → WARN. |
 | `DOC-VIBE-DISCLAIMER` | Docs | **ERROR** | Enforces the standardized human-AI governance disclaimer across all repositories. |
-| `DOC-BACKLOG-DRIFT` | Docs | **ERROR/WARN** | Backlog traceability: the pending-work index (`mnemocine/backlog.md`) and each document's `pending:` frontmatter must agree bidirectionally. Adaptive severity — a drift on a 🔴 item blocks; any other drift warns. |
+| `DOC-BACKLOG-DRIFT` | Docs | **ERROR/WARN** | Backlog traceability: the active queue (`mnemocine/backlog.md`) and each document's `pending:` frontmatter must agree bidirectionally. Adaptive severity — a drift on a 🔴 item blocks; any other drift warns. |
+| `DOC-BACKLOG-RECURRENCE` | Docs | **ERROR/WARN** | Backlog recurrence: a `Recurrence` / `Recurred-by` pair must agree — a recurring item points at an *archived* item, and that archived item points back. Adaptive severity. |
+| `HOMELAB-BACKLOG-STATE` | Homelab | **WARN** | Backlog split: an id must live in exactly one file, and its state must match (a closed state in the queue, an active state in the archive). |
 | `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text API keys, GitHub tokens, and private keys. |
 | `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted environment files (`.enc.env`). |
 | `GOV-AGENT-LAWS` | Gov | **ERROR** | Validates agent constitution and governance rules in `AGENTS.md`. |

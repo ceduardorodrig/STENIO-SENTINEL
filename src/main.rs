@@ -234,6 +234,18 @@ struct Args {
         help = "Automated deployment for Sumænimá ecosystem (e.g. --deploy front, --deploy sync)"
     )]
     deploy: Option<String>,
+
+    #[arg(
+        long,
+        help = "Show the homelab backlog: the active queue and the archive size. Combine with --search <term> to grep both files"
+    )]
+    backlog: bool,
+
+    #[arg(
+        long,
+        help = "Search the backlog queue and the archive for a term (find recurrences); implies --backlog"
+    )]
+    search: Option<String>,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -1343,6 +1355,15 @@ fn main() -> Result<()> {
             }
         }
         println!();
+        return Ok(());
+    }
+
+    // ── Backlog Mode (--backlog [--search <term>]) ──────────────────────────
+    //
+    // Prints the active queue; with --search it greps the queue **and** the archive, so a
+    // recurring problem is visible before it becomes a new item.
+    if args.backlog || args.search.is_some() {
+        backlog::run_backlog_report(&args.path, args.search.as_deref());
         return Ok(());
     }
 

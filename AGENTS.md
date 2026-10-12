@@ -4,7 +4,7 @@ tags: [meta, agents, governance, rust, engine]
 
 # AGENTS.md — StenioSentinel Engine Governance Rules
 
-This directory contains **StenioSentinel (Rust Engine v4.3.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
+This directory contains **StenioSentinel (Rust Engine v4.4.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
 
 When modifying any file in this repository, follow these mandatory governance rules:
 
@@ -58,24 +58,37 @@ The DRY engine runs in **two layers** and grades severity (it never silences):
 
 See the vault runbook [`../stenio-troubleshooting.md`](../stenio-troubleshooting.md) §6 for the "single emission point" remediation recipe and the multi-language (Fase 4) decision.
 
-## Backlog traceability coverage (`DOC-BACKLOG-*`, 2026-10-12)
+## Backlog traceability coverage (`DOC-BACKLOG-*`, v4.4.0 — 2026-10-12)
 
-`src/backlog.rs` cross-checks the homelab's single source of pending work
-(`mnemocine/backlog.md`) against the per-document `pending: [HB-xxx]` frontmatter field, in
-**both** directions — the same "drift by cross-reference" pattern as `DOC-SERVICE-UNINDEXED`.
+`src/backlog.rs` cross-checks the homelab backlog against the per-document
+`pending: [HB-xxx]` frontmatter field, in **both** directions — the same "drift by
+cross-reference" pattern as `DOC-SERVICE-UNINDEXED`. Since v4.4.0 the backlog is **two files**:
+the **active queue** (`mnemocine/backlog.md`, states `open`/`in progress`/`blocked`) and the
+**history** (`mnemocine/backlog-archive.md`, `resolved`/`discarded` with a date). An id lives
+in exactly one of them; a closed item leaves the document's `pending:` list.
 
-- **`DOC-BACKLOG-DRIFT`** — a `Ref` points to a missing document, a referenced document does
-  not declare the item, or a document declares an ID the index never opened.
+- **`DOC-BACKLOG-DRIFT`** — a `Ref` points to a missing document, an **active** item's
+  document does not declare it, or a document declares an id the queue lacks (or declares an
+  **archived** id).
   **Adaptive severity**: the drift inherits the item's severity — 🔴 is an `Error` (blocks
   `run_quality_gate` and `--scope homelab`), everything else stays a `Warning`.
-- **`HOMELAB-BACKLOG-MALFORMED`** — a row missing its `Ref`, or carrying an unknown severity
-  or an invalid state.
-- **`HOMELAB-BACKLOG-LIFECYCLE`** — a `resolved` item with no closing date (`YYYY-MM-DD`).
+- **`HOMELAB-BACKLOG-MALFORMED`** — a row missing its `Ref`, carrying an unknown severity or an
+  invalid state, or a table with no recognizable header (a header-less table is **not** a silent
+  "zero items" pass).
+- **`HOMELAB-BACKLOG-LIFECYCLE`** — a closed item (`resolved`/`discarded`) with no closing date
+  (`YYYY-MM-DD`).
+- **`HOMELAB-BACKLOG-STATE`** — an id in **both** files, or a state that does not match its file
+  (a closed state in the queue, an active state in the archive).
+- **`DOC-BACKLOG-RECURRENCE`** — a `Recurrence` / `Recurred-by` pair that does not agree (a
+  recurring item must point at an *archived* item, and that archived item must point back).
 
-The state/severity vocabulary is read from the rows themselves, so evolving the backlog
-header needs no engine change. The audit is inert when the scope has no mnemocine tree or no
-adopted index. The three IDs are pinned as Guardian anchors in `src/guardian.rs`, so deleting
-them trips the tamper alert. Runbook: `mnemocine/guides/backlog-routine.md`.
+The **columns are read from the table header**, so the layout can grow (e.g. the `Recurrence`
+column) with no engine change. The audit is inert when the scope has no mnemocine tree or no
+adopted index. Three IDs are pinned as Guardian anchors in `src/guardian.rs`
+(`DOC-BACKLOG-DRIFT`, `HOMELAB-BACKLOG-MALFORMED`, `HOMELAB-BACKLOG-LIFECYCLE`), so deleting
+them trips the tamper alert. CLI: `stenio --backlog` (queue) and
+`stenio --backlog --search <term>` (queue + archive). Runbook:
+`mnemocine/guides/backlog-routine.md`.
 
 ## Tools catalog discovery (`--tools`, 2026-10-12)
 
