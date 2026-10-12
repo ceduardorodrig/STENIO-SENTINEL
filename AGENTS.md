@@ -4,7 +4,7 @@ tags: [meta, agents, governance, rust, engine]
 
 # AGENTS.md — StenioSentinel Engine Governance Rules
 
-This directory contains **StenioSentinel (Rust Engine v4.4.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
+This directory contains **StenioSentinel (Rust Engine v4.5.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
 
 When modifying any file in this repository, follow these mandatory governance rules:
 
@@ -102,3 +102,30 @@ parent). This lets the operational tooling live in a dedicated repository
 
 `src/tools.rs` carries **no Guardian anchors**, so the change is tamper-neutral
 (verified with `stenio --guardian`: 13 modules, zero tampering).
+
+## GPU unification coverage (`HOMELAB-GPU-UNIFIED`, v4.5.0 — 2026-10-12)
+
+The RTX 5050 is a single, scarce device arbitrated by the `hl-infer` gateway (ADR-020, no
+CPU fallback). Two independent audits now keep GPU work inside that gateway:
+
+- **Static rule** (`src/infra.rs`) — `HOMELAB-GPU-UNIFIED`: a compose service that claims the
+  GPU (`runtime: nvidia`, `gpus:`, `deploy` device reservations or `NVIDIA_VISIBLE_DEVICES`)
+  must be a **registered consumer** of the gateway. It is emitted from `check_compose_file()`
+  (the same single materialization point shared by `audit_infrastructure()` and
+  `audit_compose_dir()`), so it also covers the NAS compose mirror. Severity is **Warning**
+  during rollout — promote after a fleet audit with zero false positives.
+- **Consumer allowlist is data, not code** — the fleet's known consumers live in
+  `mnemocine/network/gpu-consumers.txt` (one per line, lowercase, `#` comments). The engine
+  resolves it once per audit and falls back to a built-in list when the file is absent, so
+  registering a new consumer is a **data edit** that never needs an engine change.
+- **Live drift audit** (`src/gpu.rs`, surfaced through `--health`) — queries the gateway at
+  `HL_INFER_URL` (default `http://127.0.0.1:9095`) for `/v1/ready`, `/v1/gpu/consumers` and
+  `/v1/queue`, and reports who holds VRAM. Any process classified **`unmanaged`** (holding
+  VRAM with no lease) becomes an audit error carrying its pid, name, MiB and a remediation
+  pointer to `mnemocine/guides/gpu-centralization.md`. An absent gateway degrades to
+  "at rest" and never fails the audit.
+
+HTTP is reused from the existing Rust `xh` client via the shared
+`crate::health::http_get_body` helper and parsed with the already-present `serde_json`; no new
+dependency is introduced. `src/gpu.rs` and `src/infra.rs` carry **no new Guardian anchors**.
+
