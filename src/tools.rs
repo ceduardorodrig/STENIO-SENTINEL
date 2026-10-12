@@ -100,7 +100,12 @@ pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
     let root_label = find_tools_catalog(repo_root)
-        .and_then(|p| tools_root(&p).strip_prefix(repo_root).ok().map(|r| r.display().to_string()))
+        .and_then(|p| {
+            tools_root(&p)
+                .strip_prefix(repo_root)
+                .ok()
+                .map(|r| r.display().to_string())
+        })
         .unwrap_or_else(|| ".".to_string());
     println!(
         "  Source of truth: {}/ ({} declared tools)",
@@ -405,7 +410,9 @@ mod tests {
     #[test]
     fn test_tools_root_strips_scripts() {
         assert_eq!(
-            tools_root(Path::new("/repo/provisioning/scripts/install-homelab-tools.sh")),
+            tools_root(Path::new(
+                "/repo/provisioning/scripts/install-homelab-tools.sh"
+            )),
             PathBuf::from("/repo/provisioning")
         );
         assert_eq!(
