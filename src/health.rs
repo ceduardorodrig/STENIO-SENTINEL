@@ -476,22 +476,32 @@ fn check_tcp_service(name: &str, host: &str, port: u16, role: &str) {
     }
 }
 
-pub fn http_get_health(url: &str) -> Option<(bool, u128)> {
-    let t0 = Instant::now();
-    let health_url = format!("{}/v1/health", url);
+/// Fetches a URL body with the `xh` HTTP client — the Rust client already used
+/// for the service probes — with a 1s timeout. `None` means the request could
+/// not be completed (client missing, connection refused, timeout, or an HTTP
+/// error status, since `xh` runs with `--check-status`). Callers therefore
+/// degrade gracefully instead of failing their whole audit.
+pub fn http_get_body(url: &str) -> Option<String> {
     let output = Command::new("xh")
-        .args(["get", &health_url, "-b", "--timeout=1"])
+        .args(["get", url, "-b", "--timeout=1"])
         .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
-
-    let elapsed = t0.elapsed().as_millis();
     if output.status.success() {
-        let s = String::from_utf8_lossy(&output.stdout);
-        Some((s.contains("\"status\"") && s.contains("\"ok\""), elapsed))
+        Some(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         None
     }
+}
+
+pub fn http_get_health(url: &str) -> Option<(bool, u128)> {
+    let t0 = Instant::now();
+    let body = http_get_body(&format!("{}/v1/health", url))?;
+    let elapsed = t0.elapsed().as_millis();
+    Some((
+        body.contains("\"status\"") && body.contains("\"ok\""),
+        elapsed,
+    ))
 }
 
 fn check_http_service(name: &str, url: &str, role: &str) {
