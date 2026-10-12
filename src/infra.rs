@@ -130,6 +130,59 @@ fn compose_violation(
 /// Extracted into its own function so the exact same rules run both on the vault
 /// tree (`audit_infrastructure`) and on the NAS mirror of the hosts' composes
 /// (`audit_compose_dir`) — without duplicating the logic (ARCH-DRY-DUPLICATION).
+/// Does the compose service claim the GPU device?
+fn service_claims_gpu(service: &serde_yaml::Value) -> bool {
+    let runtime_nvidia = service.get("runtime").and_then(|value| value.as_str()) == Some("nvidia");
+    let gpus_key = service.get("gpus").is_some();
+    let deploy_devices = service
+        .get("deploy")
+        .and_then(|deploy| deploy.get("resources"))
+        .and_then(|resources| resources.get("reservations"))
+        .and_then(|reservations| reservations.get("devices"))
+        .and_then(|devices| devices.as_sequence())
+        .is_some_and(|devices| {
+            devices.iter().any(|device| {
+                device.get("driver").and_then(|driver| driver.as_str()) == Some("nvidia")
+                    || device.get("capabilities").is_some()
+            })
+        });
+    let env_gpu = service.get("environment").is_some_and(env_mentions_gpu);
+
+    runtime_nvidia || gpus_key || deploy_devices || env_gpu
+}
+
+fn env_mentions_gpu(environment: &serde_yaml::Value) -> bool {
+    const KEYS: [&str; 2] = ["NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"];
+    match environment {
+        serde_yaml::Value::Mapping(map) => map
+            .keys()
+            .any(|key| key.as_str().is_some_and(|name| KEYS.contains(&name))),
+        serde_yaml::Value::Sequence(entries) => entries.iter().any(|entry| {
+            entry
+                .as_str()
+                .is_some_and(|text| KEYS.iter().any(|key| text.starts_with(key)))
+        }),
+        _ => false,
+    }
+}
+
+/// Services allowed to hold the GPU: the gateway itself and the fleet's
+/// documented consumers (see mnemocine/services/hl-infer.md). A NEW service that
+/// claims the device is the drift this rule exists to catch.
+fn is_registered_gpu_consumer(service_name: &str) -> bool {
+    const ALLOWED: [&str; 7] = [
+        "hl-infer",
+        "steniorec",
+        "stenio-server",
+        "steniobot",
+        "sae-core",
+        "ollama",
+        "transcribe",
+    ];
+    let name = service_name.to_lowercase();
+    ALLOWED.iter().any(|allowed| name.contains(allowed))
+}
+
 fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mirror_info = parse_mirror_path(path_str);
@@ -236,6 +289,24 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                             Severity::Warning,
                             message,
                             suggestion,
+                        ));
+                    }
+
+                    // GPU centralization: a compose service that claims the GPU
+                    // must be a registered consumer of the gateway (hl-infer).
+                    // Otherwise inference bypasses VRAM arbitration entirely.
+                    if service_claims_gpu(svc_val) && !is_registered_gpu_consumer(svc_name) {
+                        findings.push((
+                            "HOMELAB-GPU-UNIFIED",
+                            "GPU Claim Outside the Centralized Gateway",
+                            Severity::Warning,
+                            format!(
+                                "Service '{}' claims the GPU but is not a registered consumer of the gateway (hl-infer). GPU work must be arbitrated centrally (ADR-020, no CPU fallback).",
+                                svc_name
+                            ),
+                            Some(
+                                "Route the workload through hl-infer (POST /v1/jobs to obtain a VRAM lease) instead of claiming the device directly, or document the service as a consumer in mnemocine/services/hl-infer.md.".to_string(),
+                            ),
                         ));
                     }
 
@@ -739,5 +810,84 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         total_files_scanned: scanned_count,
         messages,
         violations,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROGUE: &str = r#"
+services:
+  whisper-rogue:
+    image: someone/whisper:latest
+    restart: unless-stopped
+    runtime: nvidia
+"#;
+
+    const REGISTERED: &str = r#"
+services:
+  steniorec:
+    image: sumaenima-server:cuda
+    restart: unless-stopped
+    runtime: nvidia
+"#;
+
+    const DEPLOY_DEVICES: &str = r#"
+services:
+  comfyui:
+    image: comfyui:latest
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+"#;
+
+    const ENV_CLAIM: &str = r#"
+services:
+  arbitrary:
+    image: arbitrary:latest
+    restart: unless-stopped
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+"#;
+
+    fn gpu_unified(violations: &[Violation]) -> bool {
+        violations
+            .iter()
+            .any(|violation| violation.rule_id == "HOMELAB-GPU-UNIFIED")
+    }
+
+    #[test]
+    fn flags_a_new_gpu_claim() {
+        assert!(gpu_unified(&check_compose_file("compose.yml", ROGUE)));
+    }
+
+    #[test]
+    fn does_not_flag_a_registered_consumer() {
+        assert!(!gpu_unified(&check_compose_file("compose.yml", REGISTERED)));
+    }
+
+    #[test]
+    fn flags_deploy_device_reservations_and_env_claims() {
+        assert!(gpu_unified(&check_compose_file(
+            "compose.yml",
+            DEPLOY_DEVICES
+        )));
+        assert!(gpu_unified(&check_compose_file("compose.yml", ENV_CLAIM)));
+    }
+
+    #[test]
+    fn a_service_without_gpu_claims_is_never_flagged() {
+        let plain = r#"
+services:
+  redis:
+    image: redis:7
+    restart: unless-stopped
+"#;
+        assert!(!gpu_unified(&check_compose_file("compose.yml", plain)));
     }
 }

@@ -213,6 +213,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Replace 'hard' with 'soft,timeo=50,retrans=2' in mount options inside /etc/fstab or systemd mount units.",
     },
     RuleExplanation {
+        id: "HOMELAB-GPU-UNIFIED",
+        name: "GPU Claim Outside the Centralized Gateway",
+        severity: "WARN",
+        tag: "homelab",
+        summary: "A compose service that claims the GPU (runtime nvidia, gpus, deploy device reservations or NVIDIA_VISIBLE_DEVICES) must be a registered consumer of the centralized gateway (hl-infer).",
+        rationale: "The RTX 5050 is a single, scarce device. When several services manage it independently, VRAM is double-allocated, jobs are admitted that do not fit, and the owner's fixed windows are lost. hl-infer arbitrates with a dynamic VRAM ledger, a priority queue that waits (never a CPU fallback — ADR-020) and a lease TTL that reclaims dead VRAM.",
+        bad_example: "services:\n  whisper-rogue:\n    runtime: nvidia\n    image: someone/whisper:latest",
+        good_example: "services:\n  hl-infer:\n    image: hl-infer:local   # owns the device\n  steniorec:\n    runtime: nvidia        # registered consumer, requests a lease from hl-infer",
+        remediation: "Route the workload through hl-infer (POST /v1/jobs for a VRAM lease, POST /v1/jobs/{id}/release when done) instead of claiming the device directly, or document the service as a consumer in mnemocine/services/hl-infer.md.",
+    },
+    RuleExplanation {
         id: "DOC-BACKLOG-DRIFT",
         name: "Backlog Traceability Drift",
         severity: "WARN",
