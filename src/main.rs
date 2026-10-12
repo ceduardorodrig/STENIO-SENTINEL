@@ -1059,6 +1059,25 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     Ok(())
 }
 
+/// Formats a blocking violation for the gate report: `[RULE] file:line: msg (💡 hint)`.
+fn format_blocking(v: &Violation, fallback: &str) -> String {
+    format!(
+        "[{}] {}:{}: {} (💡 {})",
+        v.rule_id.red().bold(),
+        v.file_path,
+        v.line_number,
+        v.message,
+        v.suggestion.as_deref().unwrap_or(fallback)
+    )
+}
+
+/// Appends every `Error`-severity violation to the gate's blocker list.
+fn collect_blocking(out: &mut Vec<String>, violations: &[Violation]) {
+    for v in violations.iter().filter(|v| v.severity == Severity::Error) {
+        out.push(format_blocking(v, "See --explain"));
+    }
+}
+
 fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Result<()> {
     baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Rigorous Pre-Delivery Inspection");
     println!(
@@ -1079,18 +1098,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     let mut blocker_errors = Vec::new();
 
     // 1. Violations with severity Error
-    for v in &report.violations {
-        if v.severity == Severity::Error {
-            blocker_errors.push(format!(
-                "[{}] {}:{}: {} (💡 {})",
-                v.rule_id.red().bold(),
-                v.file_path,
-                v.line_number,
-                v.message,
-                v.suggestion.as_deref().unwrap_or("See --explain")
-            ));
-        }
-    }
+    collect_blocking(&mut blocker_errors, &report.violations);
 
     // 2. Governance errors (including GOV-LEFTOVER-TEST-ARTIFACTS)
     for err in &gov_result.errors {
@@ -1109,18 +1117,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 
     // 3b. Backlog traceability (single source of pending work). Adaptive severity:
     //     a drift on a 🔴 item blocks delivery; every other finding is a Warning.
-    for v in &backlog_result.violations {
-        if v.severity == Severity::Error {
-            blocker_errors.push(format!(
-                "[{}] {}:{}: {} (💡 {})",
-                v.rule_id.red().bold(),
-                v.file_path,
-                v.line_number,
-                v.message,
-                v.suggestion.as_deref().unwrap_or("See --explain")
-            ));
-        }
-    }
+    collect_blocking(&mut blocker_errors, &backlog_result.violations);
 
     // 4. Guardian anti-tampering
     for alert in &guardian_report.tamper_alerts {
@@ -1137,16 +1134,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
             dry_warnings += 1;
             continue;
         }
-        blocker_errors.push(format!(
-            "[{}] {}:{}: {} (💡 {})",
-            dv.rule_id.red().bold(),
-            dv.file_path,
-            dv.line_number,
-            dv.message,
-            dv.suggestion
-                .as_deref()
-                .unwrap_or("Abstract duplicated logic")
-        ));
+        blocker_errors.push(format_blocking(dv, "Abstract duplicated logic"));
     }
 
     if blocker_errors.is_empty() {
