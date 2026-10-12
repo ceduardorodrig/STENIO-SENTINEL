@@ -1,4 +1,4 @@
-use crate::baseline::{is_common_ignored_path, Whitelist};
+use crate::baseline::{Whitelist, is_common_ignored_path};
 use crate::engine::Violation;
 use crate::rule::Severity;
 use std::path::Path;
@@ -486,8 +486,8 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
 
         // 18.2 Required meta description
-        let has_meta_description = content.contains("name=\"description\"")
-            || content.contains("name='description'");
+        let has_meta_description =
+            content.contains("name=\"description\"") || content.contains("name='description'");
         if !has_meta_description {
             if !whitelist.is_ignored(&path_str, "SEO-INDEX-METADATA", "meta description") {
                 violations.push(Violation {
@@ -504,8 +504,8 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
 
         // 18.3 Canonical URL tag
-        let has_canonical = content.contains("rel=\"canonical\"")
-            || content.contains("rel='canonical'");
+        let has_canonical =
+            content.contains("rel=\"canonical\"") || content.contains("rel='canonical'");
         if !has_canonical && !whitelist.is_ignored(&path_str, "SEO-INDEX-METADATA", "canonical") {
             violations.push(Violation {
                 rule_id: "SEO-INDEX-METADATA".to_string(),
@@ -520,14 +520,14 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
 
         // 18.4 Social Graph Open Graph & Twitter Cards
-        let has_og_title = content.contains("property=\"og:title\"")
-            || content.contains("property='og:title'");
+        let has_og_title =
+            content.contains("property=\"og:title\"") || content.contains("property='og:title'");
         let has_og_desc = content.contains("property=\"og:description\"")
             || content.contains("property='og:description'");
-        let has_og_image = content.contains("property=\"og:image\"")
-            || content.contains("property='og:image'");
-        let has_twitter_card = content.contains("name=\"twitter:card\"")
-            || content.contains("name='twitter:card'");
+        let has_og_image =
+            content.contains("property=\"og:image\"") || content.contains("property='og:image'");
+        let has_twitter_card =
+            content.contains("name=\"twitter:card\"") || content.contains("name='twitter:card'");
 
         if (!has_og_title || !has_og_desc || !has_og_image || !has_twitter_card)
             && !whitelist.is_ignored(&path_str, "SEO-SOCIAL-GRAPH", "social graph")
@@ -628,7 +628,8 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                 // If img is multi-line, check adjacent lines up to closure '>'
                 let mut full_tag = line.to_string();
                 if !line.contains('>') {
-                    let subsequent_lines: Vec<&str> = content.lines().skip(line_idx + 1).take(5).collect();
+                    let subsequent_lines: Vec<&str> =
+                        content.lines().skip(line_idx + 1).take(5).collect();
                     for sub in subsequent_lines {
                         full_tag.push(' ');
                         full_tag.push_str(sub);

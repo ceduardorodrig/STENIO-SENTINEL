@@ -206,7 +206,10 @@ fn check_dmemcg_stack(_session: &str) {
         "active (max ~{:.1} GB protected VRAM)",
         max_low as f64 / 1e9
     );
-    let fail_msg = format!("INACTIVE (max {} B — booster did not raise dmem.low)", max_low);
+    let fail_msg = format!(
+        "INACTIVE (max {} B — booster did not raise dmem.low)",
+        max_low
+    );
     check_status(
         "Functional Boost (focused window dmem.low)",
         boosted,
@@ -480,7 +483,11 @@ fn check_game_performance() {
         "game-performance (in games)",
         in_all_games >= 36,
         format!("present in launch line of {} games", in_all_games).as_str(),
-        format!("only in {} games — not all games have wrapper", in_all_games).as_str(),
+        format!(
+            "only in {} games — not all games have wrapper",
+            in_all_games
+        )
+        .as_str(),
     );
 
     let ppd = Command::new("sh")

@@ -188,8 +188,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                             bytes: sz,
                                             is_dir: true,
                                             category: CleanCategory::RustTarget,
-                                            description: "Debug compilation artifacts"
-                                                .to_string(),
+                                            description: "Debug compilation artifacts".to_string(),
                                         });
                                     }
                                 }
@@ -366,8 +365,7 @@ pub fn run_clean(root: &Path, mode: &str, dry_run: bool) -> Result<CleanReport> 
                                         bytes,
                                         is_dir: false,
                                         category: CleanCategory::Docker,
-                                        description: "Intermediate Docker build cache"
-                                            .to_string(),
+                                        description: "Intermediate Docker build cache".to_string(),
                                     });
                                 }
                                 _ => {}
@@ -456,10 +454,7 @@ pub fn print_clean_report(report: &CleanReport) {
         return;
     }
 
-    println!(
-        "{}",
-        "Cataloged items for hygiene (sorted by size):".bold()
-    );
+    println!("{}", "Cataloged items for hygiene (sorted by size):".bold());
     let mut sorted_items = report.items.clone();
     sorted_items.sort_by(|a, b| b.bytes.cmp(&a.bytes));
 

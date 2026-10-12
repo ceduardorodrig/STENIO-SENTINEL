@@ -12,16 +12,22 @@ pub struct MigrationAuditResult {
 pub fn check_sql_idempotency(sql: &str) -> Option<String> {
     let lower = sql.to_lowercase();
     if lower.contains("drop table ") && !lower.contains("drop table if exists ") {
-        return Some("contains DROP TABLE without IF EXISTS (breaks rollback/re-execution)".to_string());
+        return Some(
+            "contains DROP TABLE without IF EXISTS (breaks rollback/re-execution)".to_string(),
+        );
     }
     if lower.contains("drop index ") && !lower.contains("drop index if exists ") {
         return Some("contains DROP INDEX without IF EXISTS (non-idempotent)".to_string());
     }
     if lower.contains("create table ") && !lower.contains("create table if not exists ") {
-        return Some("contains CREATE TABLE without IF NOT EXISTS (fails upon re-execution)".to_string());
+        return Some(
+            "contains CREATE TABLE without IF NOT EXISTS (fails upon re-execution)".to_string(),
+        );
     }
     if lower.contains("create index ") && !lower.contains("create index if not exists ") {
-        return Some("contains CREATE INDEX without IF NOT EXISTS (fails upon re-execution)".to_string());
+        return Some(
+            "contains CREATE INDEX without IF NOT EXISTS (fails upon re-execution)".to_string(),
+        );
     }
     None
 }

@@ -394,7 +394,8 @@ mod tests {
 
     #[test]
     fn reads_pending_from_frontmatter_only() {
-        let doc = "---\ntags: [homelab]\npending: [HB-001, HB-009]\n---\n\n# Body\npending: [HB-999]\n";
+        let doc =
+            "---\ntags: [homelab]\npending: [HB-001, HB-009]\n---\n\n# Body\npending: [HB-999]\n";
         assert_eq!(
             parse_pending(doc),
             vec!["HB-001".to_string(), "HB-009".to_string()]
@@ -403,8 +404,12 @@ mod tests {
 
     #[test]
     fn lifecycle_date_is_detected() {
-        assert!(has_iso_date("| **HB-003** | x | y | 🔵 | resolved | 2026-10-12 — done |"));
-        assert!(!has_iso_date("| **HB-003** | x | y | 🔵 | resolved | later |"));
+        assert!(has_iso_date(
+            "| **HB-003** | x | y | 🔵 | resolved | 2026-10-12 — done |"
+        ));
+        assert!(!has_iso_date(
+            "| **HB-003** | x | y | 🔵 | resolved | later |"
+        ));
     }
 
     #[test]

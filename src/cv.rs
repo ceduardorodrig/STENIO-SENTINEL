@@ -146,7 +146,9 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
                     file_path: "README.md".to_string(),
                     line_number: 1,
                     snippet: "".to_string(),
-                    message: "The CV README must maintain continuous career narrative ('The Thread').".to_string(),
+                    message:
+                        "The CV README must maintain continuous career narrative ('The Thread')."
+                            .to_string(),
                     suggestion: Some("Update 'The Thread' section in README.md.".to_string()),
                 });
             }
@@ -158,8 +160,7 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
             "✅ {} bilingual CVs audited with 100% PT↔EN parity.",
             scanned_count
         ));
-        messages
-            .push("✅ 'The Thread' / 'O Fio da Meada' narrative intact in README.".to_string());
+        messages.push("✅ 'The Thread' / 'O Fio da Meada' narrative intact in README.".to_string());
     } else {
         messages.push(format!(
             "ℹ️ {} deviation(s) found across curriculum vitae documents.",

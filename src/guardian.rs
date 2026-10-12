@@ -394,7 +394,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &[
                 "stenio-ignore",
                 "nosemgrep",
-                "SEC-", // SEC-* rules can never be suppressed by nosemgrep
+                "SEC-",                  // SEC-* rules can never be suppressed by nosemgrep
                 "starts_with(\"SEC-\")", // explicit security guard must exist
             ],
         ),

@@ -76,15 +76,12 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                             "✅ Universal AGENTS.md intact and aligned with governance conventions"
                                 .to_string(),
                         );
-                        messages.push(
-                            "✅ Rust tools and system privilege rules preserved"
-                                .to_string(),
-                        );
+                        messages
+                            .push("✅ Rust tools and system privilege rules preserved".to_string());
                         laws_count = 14;
                     } else {
-                        let err =
-                            "❌ Universal AGENTS.md missing essential conventions or rules"
-                                .to_string();
+                        let err = "❌ Universal AGENTS.md missing essential conventions or rules"
+                            .to_string();
                         messages.push(err.clone());
                         errors.push(err);
                     }
@@ -154,7 +151,9 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                         errors.push(err);
                     }
 
-                    if content.contains("HERANÇA DE CONTEXTO") || content.contains("CONTEXT INHERITANCE") {
+                    if content.contains("HERANÇA DE CONTEXTO")
+                        || content.contains("CONTEXT INHERITANCE")
+                    {
                         messages.push("✅ Context Inheritance clause present".to_string());
                     } else {
                         let err =
@@ -196,8 +195,7 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
                     total_skills += 1;
                     let skill_md = path.join("SKILL.md");
                     if !skill_md.is_file() {
-                        skill_errors
-                            .push(format!("❌ Skill '{}': SKILL.md not found", dir_name));
+                        skill_errors.push(format!("❌ Skill '{}': SKILL.md not found", dir_name));
                         continue;
                     }
 
@@ -236,9 +234,8 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     // Leftover Test Artifact Audit (AGENTS.md Rule 3)
     let leftover_artifacts = audit_leftover_test_artifacts(repo_root);
     if leftover_artifacts.is_empty() {
-        messages.push(
-            "✅ Zero leftover test artifacts (*.bak, *.tmp, scratch_*) detected".to_string(),
-        );
+        messages
+            .push("✅ Zero leftover test artifacts (*.bak, *.tmp, scratch_*) detected".to_string());
     } else {
         for err in &leftover_artifacts {
             messages.push(err.clone());
@@ -295,7 +292,8 @@ pub fn audit_leftover_test_artifacts(repo_root: &Path) -> Vec<String> {
             || path_str.contains("/scratch/") // authorized scratch directory
             || path_str.contains("/brain/") // brain artifacts
             || path_str.contains("/legado/") // archived legacy history
-            || path_str.contains("/archive/") // archived historical files
+            || path_str.contains("/archive/")
+        // archived historical files
         {
             continue;
         }

@@ -17,9 +17,7 @@ pub fn start_watch_mode(
         "   👀 Watching for changes in: {}",
         root.display().to_string().green().bold()
     );
-    println!(
-        "   ⚡ Any file save made by OpenCode, IDEs, or agents will be audited in <5ms."
-    );
+    println!("   ⚡ Any file save made by OpenCode, IDEs, or agents will be audited in <5ms.");
     println!("   🛑 Press Ctrl+C to terminate.");
     println!();
 

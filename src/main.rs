@@ -76,11 +76,7 @@ struct Args {
     )]
     tag: Option<String>,
 
-    #[arg(
-        short,
-        long,
-        help = "Fast mode: scan only Git-modified files"
-    )]
+    #[arg(short, long, help = "Fast mode: scan only Git-modified files")]
     fast: bool,
 
     #[arg(long, help = "Root path for scanning", default_value = ".")]
@@ -104,16 +100,10 @@ struct Args {
     #[arg(long, help = "List all active rules and automata")]
     list: bool,
 
-    #[arg(
-        long,
-        help = "Execute only a specific rule (e.g. --only FRONT-HEX)"
-    )]
+    #[arg(long, help = "Execute only a specific rule (e.g. --only FRONT-HEX)")]
     only: Option<String>,
 
-    #[arg(
-        long,
-        help = "Run synthetic self-test suite of engine rules"
-    )]
+    #[arg(long, help = "Run synthetic self-test suite of engine rules")]
     self_test: bool,
 
     #[arg(
@@ -722,7 +712,10 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "not a valid xml sitemap",
         &Whitelist::default(),
     );
-    if v_sitemap_bad.iter().any(|v| v.rule_id == "SEO-ROBOTS-SITEMAP") {
+    if v_sitemap_bad
+        .iter()
+        .any(|v| v.rule_id == "SEO-ROBOTS-SITEMAP")
+    {
         passed += 1;
         println!(
             "   ✅ Test {:<24} [{}] - OK",
@@ -1082,8 +1075,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Rigorous Pre-Delivery Inspection");
     println!(
         "{}",
-        "🛡️  Executing holistic zero-tolerance audit for task release...\n"
-            .white()
+        "🛡️  Executing holistic zero-tolerance audit for task release...\n".white()
     );
 
     let engine = Engine::new(rules.to_vec(), whitelist.clone())?;
@@ -1186,14 +1178,10 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     println!();
     println!(
         "{}",
-        "💡 MANDATORY INSTRUCTIONS FOR AI AGENT:"
-            .yellow()
-            .bold()
+        "💡 MANDATORY INSTRUCTIONS FOR AI AGENT:".yellow().bold()
     );
     println!("   1. You MUST fix every violation listed above before finishing.");
-    println!(
-        "   2. Run 'stenio --explain <RULE_ID>' to view compliant code and remediation."
-    );
+    println!("   2. Run 'stenio --explain <RULE_ID>' to view compliant code and remediation.");
     println!(
         "   3. It is STRICTLY FORBIDDEN to bypass errors by disabling tests, adding stubs, or suppressing rules."
     );
@@ -1387,7 +1375,11 @@ fn main() -> Result<()> {
     // See `governance/agent-conventions.md` §2b and
     // `governance/stenio-troubleshooting.md` §3.
     // `--scope` is optional (default `all`); compare without `unwrap` (RUST-NO-UNWRAP).
-    let cfg_scope_val = steniocheck_cfg.general.as_ref().and_then(|g| g.scope.as_deref()).unwrap_or("");
+    let cfg_scope_val = steniocheck_cfg
+        .general
+        .as_ref()
+        .and_then(|g| g.scope.as_deref())
+        .unwrap_or("");
     let scope_opt = if !args.scope.as_deref().unwrap_or("").is_empty() {
         args.scope.as_deref().unwrap_or("")
     } else {
@@ -1665,8 +1657,7 @@ fn main() -> Result<()> {
                                 let mirror = Path::new("/mnt/BACKUP/configs-homelab");
                                 if args.path.join("mnemocine").is_dir() && mirror.is_dir() {
                                     let mirror_report = audit_compose_dir(mirror);
-                                    infra.total_files_scanned +=
-                                        mirror_report.total_files_scanned;
+                                    infra.total_files_scanned += mirror_report.total_files_scanned;
                                     infra.violations.extend(mirror_report.violations);
                                     infra.messages.extend(mirror_report.messages);
                                 }

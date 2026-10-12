@@ -570,4 +570,3 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
 
     Ok(())
 }
-

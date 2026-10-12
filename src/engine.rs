@@ -90,7 +90,10 @@ impl Engine {
     pub fn check_mirror_mutation(file_paths: &[PathBuf]) -> Option<Violation> {
         for p in file_paths {
             let s = p.to_string_lossy();
-            if s.contains("/configs-homelab/") || s.contains("/mnt/BACKUP/") || s.contains("configs-homelab") {
+            if s.contains("/configs-homelab/")
+                || s.contains("/mnt/BACKUP/")
+                || s.contains("configs-homelab")
+            {
                 return Some(Violation {
                     rule_id: "ARCH-NO-EDIT-MIRROR".to_string(),
                     rule_name: "Prohibited Direct Modification of Automated Backup Mirror".to_string(),
@@ -178,7 +181,10 @@ impl Engine {
         let mut fixed_count = 0;
         for path in paths {
             let path_str = path.to_string_lossy();
-            if path_str.contains("/configs-homelab/") || path_str.contains("/mnt/BACKUP/") || path_str.contains("configs-homelab") {
+            if path_str.contains("/configs-homelab/")
+                || path_str.contains("/mnt/BACKUP/")
+                || path_str.contains("configs-homelab")
+            {
                 continue;
             }
 
@@ -364,7 +370,9 @@ impl Engine {
 
         // 1. Specialized Frontend and SEO Rules Audit
         if (tag_filter.is_none() || tag_filter == Some("frontend") || tag_filter == Some("seo"))
-            && only_rule.map_or(true, |r| r.starts_with("FRONT-") || r.starts_with("PERF-") || r.starts_with("SEO-"))
+            && only_rule.map_or(true, |r| {
+                r.starts_with("FRONT-") || r.starts_with("PERF-") || r.starts_with("SEO-")
+            })
         {
             let fv = audit_frontend_file(path, &content, &self.whitelist);
             if let Some(target) = only_rule {

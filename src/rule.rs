@@ -127,7 +127,10 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
             "sec",
             Severity::Error,
             &format!("Banned Dependency: {}", pkg),
-            &format!("Use of '{}' is prohibited following the migration to native Rust.", pkg),
+            &format!(
+                "Use of '{}' is prohibited following the migration to native Rust.",
+                pkg
+            ),
             &pattern,
             &["py"],
             Some(&format!(
@@ -236,7 +239,9 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "Except blocks must catch specific Exception types (avoid 'except:').",
         r"(?m)^\s*except\s*:",
         &["py"],
-        Some("Specify the exception class (e.g. 'except Exception as err:' or specific error type)."),
+        Some(
+            "Specify the exception class (e.g. 'except Exception as err:' or specific error type).",
+        ),
     ));
 
     // ── 7. Frontend: Zustand Selector Stability (Infinite Loop Prevention) ─

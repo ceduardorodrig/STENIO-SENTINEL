@@ -159,8 +159,7 @@ pub fn audit_homelab(repo_root: &Path) -> HomelabReport {
             scanned_count
         ));
         messages.push("✅ Tag taxonomy and YAML frontmatter intact.".to_string());
-        messages
-            .push("✅ No hard NFS mounts detected (Tailscale resilience OK).".to_string());
+        messages.push("✅ No hard NFS mounts detected (Tailscale resilience OK).".to_string());
     } else {
         messages.push(format!(
             "⚠️ {} file(s) with deviations in mnemocine/.",

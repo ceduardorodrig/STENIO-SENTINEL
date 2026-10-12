@@ -167,8 +167,14 @@ fn check_compose_file(path_str: &str, content: &str) -> Vec<Violation> {
                             )
                         } else {
                             (
-                                format!("Service '{}' does not define 'restart: unless-stopped' or 'restart: always'.", svc_name),
-                                Some("Add 'restart: unless-stopped' to the service in compose.yml.".to_string()),
+                                format!(
+                                    "Service '{}' does not define 'restart: unless-stopped' or 'restart: always'.",
+                                    svc_name
+                                ),
+                                Some(
+                                    "Add 'restart: unless-stopped' to the service in compose.yml."
+                                        .to_string(),
+                                ),
                             )
                         };
 
@@ -633,8 +639,14 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                             file_path: path_str.clone(),
                             line_number: 1,
                             snippet: format!("Current mode: 0{:o}", mode),
-                            message: format!("Sensitive file '{}' has permissions 0{:o} (must be 0600 or 0400).", file_name, mode),
-                            suggestion: Some("Remediate immediately by executing: chmod 0600 <file>.".to_string()),
+                            message: format!(
+                                "Sensitive file '{}' has permissions 0{:o} (must be 0600 or 0400).",
+                                file_name, mode
+                            ),
+                            suggestion: Some(
+                                "Remediate immediately by executing: chmod 0600 <file>."
+                                    .to_string(),
+                            ),
                         });
                     }
                 }

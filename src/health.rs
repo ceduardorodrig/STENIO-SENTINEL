@@ -41,12 +41,7 @@ pub fn run_system_health() -> Result<()> {
         "── 🔌 Hub Services & Network Ports ─────────────────────────────────────".dimmed()
     );
     check_tcp_service("PostgreSQL", "127.0.0.1", 5432, "Relational Database SQLx");
-    check_tcp_service(
-        "Valkey / Redis",
-        "127.0.0.1",
-        6379,
-        "Event Bus & Cache",
-    );
+    check_tcp_service("Valkey / Redis", "127.0.0.1", 6379, "Event Bus & Cache");
     check_http_service(
         "stenio-server",
         "http://127.0.0.1:9090",
@@ -176,7 +171,9 @@ fn check_backup_chain() {
                 if hours < 24 {
                     format!("Intact (updated {}h ago)", hours).green().bold()
                 } else {
-                    format!("Warning (>{}h without update)", hours).yellow().bold()
+                    format!("Warning (>{}h without update)", hours)
+                        .yellow()
+                        .bold()
                 }
             } else {
                 "Present".green().bold()

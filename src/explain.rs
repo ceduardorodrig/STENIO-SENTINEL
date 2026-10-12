@@ -803,6 +803,8 @@ pub fn list_all_explanations() -> String {
             exp.id, exp.tag, exp.severity, exp.name
         ));
     }
-    s.push_str("\nUse 'stenio --explain <RULE_ID>' for details, violations, and compliant examples.\n");
+    s.push_str(
+        "\nUse 'stenio --explain <RULE_ID>' for details, violations, and compliant examples.\n",
+    );
     s
 }
