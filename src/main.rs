@@ -1677,7 +1677,10 @@ fn main() -> Result<()> {
                                 let mut infra = audit_infrastructure(&args.path, true);
                                 let mirror = Path::new("/mnt/BACKUP/configs-homelab");
                                 if args.path.join("mnemocine").is_dir() && mirror.is_dir() {
-                                    let mirror_report = audit_compose_dir(mirror);
+                                    // The mirror holds the real composes, so it must be
+                                    // governed by the vault's data file, not the fallback.
+                                    let gpu_consumers = infra::load_gpu_consumers(&args.path);
+                                    let mirror_report = audit_compose_dir(mirror, &gpu_consumers);
                                     infra.total_files_scanned += mirror_report.total_files_scanned;
                                     infra.violations.extend(mirror_report.violations);
                                     infra.messages.extend(mirror_report.messages);

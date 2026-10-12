@@ -210,7 +210,10 @@ fn fallback_gpu_consumers() -> Vec<String> {
 /// Registering a new consumer is a data edit in
 /// `mnemocine/network/gpu-consumers.txt`; the engine never needs to change. The
 /// audit never fails on a missing or malformed file.
-fn load_gpu_consumers(repo_root: &Path) -> Vec<String> {
+/// Resolve the GPU consumer allowlist from the vault data file, falling back to
+/// the built-in list. Public so callers auditing a different root (e.g. the NAS
+/// compose mirror) can resolve it from the vault and pass it down.
+pub fn load_gpu_consumers(repo_root: &Path) -> Vec<String> {
     let path = repo_root.join(GPU_CONSUMERS_REL_PATH);
     match fs::read_to_string(&path) {
         Ok(content) => {
@@ -418,7 +421,7 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
 /// where the compose hygiene rules matter but the `SEC-*` rules do not: the mirror
 /// is captured content, not our authored tree (see `audit_infrastructure` for the
 /// `code_debt` rationale).
-pub fn audit_compose_dir(root: &Path) -> InfraReport {
+pub fn audit_compose_dir(root: &Path, gpu_consumers: &[String]) -> InfraReport {
     let mut report = InfraReport {
         total_files_scanned: 0,
         messages: Vec::new(),
@@ -428,9 +431,6 @@ pub fn audit_compose_dir(root: &Path) -> InfraReport {
     if !root.is_dir() {
         return report;
     }
-
-    // Resolved once for the whole audit and threaded into every compose check.
-    let gpu_consumers = load_gpu_consumers(root);
 
     let mut walker = WalkBuilder::new(root);
     walker.hidden(false).git_ignore(false);
