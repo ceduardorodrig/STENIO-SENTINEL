@@ -4,7 +4,7 @@ tags: [meta, agents, governance, rust, engine]
 
 # AGENTS.md — StenioSentinel Engine Governance Rules
 
-This directory contains **StenioSentinel (Rust Engine v4.2.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
+This directory contains **StenioSentinel (Rust Engine v4.3.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
 
 When modifying any file in this repository, follow these mandatory governance rules:
 
@@ -45,7 +45,7 @@ The `INFRA-COMPOSE-*` checks (YAML syntax, restart policy, **healthcheck presenc
 
 - The mirror scan skips `golden/` (duplicate copies) and only runs when the target is the **real vault layout** (an external `--path` does not drag the NAS in).
 - `SEC-*` rules are deliberately **not** run on the mirror: it is captured content, not our authored tree.
-- A service may declare the documented exception for **distroless** images instead of a healthcheck: `labels: {homelab.healthcheck: watchdog}` (covered by an external watchdog — see `scripts/dns-watchdog`).
+- A service may declare the documented exception for **distroless** images instead of a healthcheck: `labels: {homelab.healthcheck: watchdog}` (covered by an external watchdog — the `dns-watchdog` crate in `MNEMOCINE-OPS/provisioning/`).
 
 ## DRY engine coverage (`ARCH-DRY-DUPLICATION`, v4.1 — 2026-10-09)
 
@@ -76,3 +76,16 @@ The state/severity vocabulary is read from the rows themselves, so evolving the 
 header needs no engine change. The audit is inert when the scope has no mnemocine tree or no
 adopted index. The three IDs are pinned as Guardian anchors in `src/guardian.rs`, so deleting
 them trips the tamper alert. Runbook: `mnemocine/guides/backlog-routine.md`.
+
+## Tools catalog discovery (`--tools`, 2026-10-12)
+
+`--tools` no longer assumes a fixed `provisioning/` layout. The catalog
+(`install-homelab-tools.sh`) is resolved by, in order: the **`STENIO_TOOLS_CATALOG`**
+environment variable (installer path, or the tools root that contains `scripts/`),
+then a **bounded (depth ≤ 4), gitignore-aware discovery** of the installer anywhere
+in the tree. The tools root is derived from the installer's location (its `scripts/`
+parent). This lets the operational tooling live in a dedicated repository
+(`MNEMOCINE-OPS`) — or move again — **without an engine change**.
+
+`src/tools.rs` carries **no Guardian anchors**, so the change is tamper-neutral
+(verified with `stenio --guardian`: 13 modules, zero tampering).

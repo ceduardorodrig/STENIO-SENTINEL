@@ -9,9 +9,15 @@
 //!
 //! # How it works
 //!
-//! The source of truth is the repository itself: `provisioning/scripts/` (operational tools)
-//! and `provisioning/<crate>/` (Rust tools). The installer `install-homelab-tools.sh`
-//! maintains the map of known tools — which this auditor reads to ensure parity.
+//! The source of truth is the repository itself: the operational tools live under a
+//! tools root (e.g. `provisioning/`) with `scripts/` (operational tools) and
+//! `<crate>/` (Rust tools). The installer `install-homelab-tools.sh` maintains the
+//! map of known tools — which this auditor reads to ensure parity.
+//!
+//! The catalog is **discovered, never hardcoded**: the installer is located by an
+//! explicit `STENIO_TOOLS_CATALOG` override or by a bounded, gitignore-aware search
+//! of the repository tree, so the layout can change (or move to another repository)
+//! without an engine change.
 //!
 //! | State | Verdict |
 //! |---|---|
@@ -21,7 +27,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Third-party binaries and system packages that legitimately reside in
 /// `/usr/local/bin` without belonging to this ecosystem codebase.
@@ -79,23 +85,26 @@ pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
     println!("══════════════════════════════════════════════════════════════════════════════");
     println!("  🧰 StenioKernel — Operation Tools Audit (--tools)");
     println!("══════════════════════════════════════════════════════════════════════════════");
-    println!("  Cross-checks /usr/local/bin of each host with repository `provisioning/`.");
+    println!("  Cross-checks /usr/local/bin of each host with the repository tools catalog.");
     println!("  Orphan = exists on host but not in repository (untracked, unreviewed).");
     println!();
 
     let declared = read_declared_tools(repo_root);
     if declared.is_empty() {
-        println!("  ⚠️  No declared tools found.");
-        println!(
-            "     Expected: {}/provisioning/scripts/install-homelab-tools.sh",
-            repo_root.display()
-        );
+        println!("  ⚠️  No declared tools found — no tools catalog in this repository.");
+        println!("     Expected: an `install-homelab-tools.sh` somewhere in the tree, or set");
+        println!("     the `STENIO_TOOLS_CATALOG` environment variable to its path (file or");
+        println!("     the tools root that contains `scripts/`).");
         println!("     Without this catalog, host × repository cross-checking is impossible.");
         println!();
         return Ok(());
     }
+    let root_label = find_tools_catalog(repo_root)
+        .and_then(|p| tools_root(&p).strip_prefix(repo_root).ok().map(|r| r.display().to_string()))
+        .unwrap_or_else(|| ".".to_string());
     println!(
-        "  Source of truth: provisioning/ ({} declared tools)",
+        "  Source of truth: {}/ ({} declared tools)",
+        root_label.trim_end_matches('/'),
         declared.len()
     );
     println!();
@@ -126,13 +135,13 @@ pub fn run_tools_audit(repo_root: &Path) -> anyhow::Result<()> {
     println!("──────────────────────────────────────────────────────────────────────────────");
     if total_orphans == 0 {
         println!("  ✅ Zero orphan tools: entire operational suite is version-controlled.");
-        println!("     Everything running in /usr/local/bin exists in provisioning/,");
+        println!("     Everything running in /usr/local/bin exists in the tools catalog,");
         println!("     enforcing automated gates, reviews, and git history.");
     } else {
         println!(
             "  ⚠️  {total_orphans} orphan tool(s) detected — untracked, unreviewed, invisible to gate."
         );
-        println!("     Migrate to provisioning/scripts/ and install via");
+        println!("     Migrate it into the tools catalog and install via");
         println!("     `install-homelab-tools.sh` (see mnemocine/guides/stenio-ci-unificado.md).");
     }
     println!();
@@ -252,9 +261,11 @@ fn host_matches_local(host: &str) -> bool {
 /// rather than maintaining a parallel list in Rust — guarantees that audit and install
 /// never diverge. This is simple line parsing, not a full bash interpreter.
 fn read_declared_tools(repo_root: &Path) -> BTreeSet<String> {
-    let installer = repo_root.join("provisioning/scripts/install-homelab-tools.sh");
     let mut set = BTreeSet::new();
 
+    let Some(installer) = find_tools_catalog(repo_root) else {
+        return set;
+    };
     let Ok(content) = fs::read_to_string(&installer) else {
         return set;
     };
@@ -275,8 +286,8 @@ fn read_declared_tools(repo_root: &Path) -> BTreeSet<String> {
     }
 
     // Rust tools also have their crate directory as declaration, even if
-    // the bash map uses another name. Scan `provisioning/*/Cargo.toml`.
-    if let Ok(entries) = fs::read_dir(repo_root.join("provisioning")) {
+    // the bash map uses another name. Scan `<tools_root>/*/Cargo.toml`.
+    if let Ok(entries) = fs::read_dir(tools_root(&installer)) {
         for e in entries.flatten() {
             let p = e.path();
             if p.join("Cargo.toml").is_file()
@@ -288,6 +299,55 @@ fn read_declared_tools(repo_root: &Path) -> BTreeSet<String> {
     }
 
     set
+}
+
+/// Locates the operational-tools catalog (the installer) **without** assuming a
+/// fixed directory layout, so the tools can live under any tools root or in a
+/// dedicated repository.
+///
+/// Resolution order:
+///   1. `STENIO_TOOLS_CATALOG` — path to the installer **or** to the tools root
+///      (the directory that contains `scripts/`).
+///   2. Bounded (depth ≤ 4), gitignore-aware discovery of `install-homelab-tools.sh`
+///      anywhere in the repository tree.
+fn find_tools_catalog(repo_root: &Path) -> Option<PathBuf> {
+    const INSTALLER: &str = "install-homelab-tools.sh";
+
+    if let Some(raw) = std::env::var_os("STENIO_TOOLS_CATALOG") {
+        let base = PathBuf::from(raw);
+        if base.is_file() {
+            return Some(base);
+        }
+        for rel in [format!("scripts/{INSTALLER}"), INSTALLER.to_string()] {
+            let candidate = base.join(rel);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    let walker = ignore::WalkBuilder::new(repo_root)
+        .max_depth(Some(4))
+        .build();
+    for entry in walker.flatten() {
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false)
+            && entry.file_name().to_str() == Some(INSTALLER)
+        {
+            return Some(entry.into_path());
+        }
+    }
+    None
+}
+
+/// The tools root = the directory that holds the `scripts/` folder, or the
+/// installer's own directory when it is not nested under `scripts/`.
+fn tools_root(installer: &Path) -> PathBuf {
+    let dir = installer.parent().unwrap_or(Path::new("."));
+    if dir.file_name().and_then(|n| n.to_str()) == Some("scripts") {
+        dir.parent().unwrap_or(dir).to_path_buf()
+    } else {
+        dir.to_path_buf()
+    }
 }
 
 #[cfg(test)]
@@ -313,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_reads_installer_maps() {
-        let dir = std::env::temp_dir().join("stenio-tools-test");
+        let dir = std::env::temp_dir().join("stenio-tools-test-nested");
         let scripts = dir.join("provisioning/scripts");
         let _ = fs::create_dir_all(&scripts);
         let _ = fs::write(
@@ -324,6 +384,34 @@ mod tests {
         assert!(got.contains("config-backup"));
         assert!(got.contains("zomboid-backup"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_discovers_flat_layout() {
+        // The catalog must be found regardless of the directory layout
+        // (e.g. a dedicated repository with `scripts/` at the root).
+        let dir = std::env::temp_dir().join("stenio-tools-test-flat");
+        let scripts = dir.join("scripts");
+        let _ = fs::create_dir_all(&scripts);
+        let _ = fs::write(
+            scripts.join("install-homelab-tools.sh"),
+            "declare -A SHELL_TOOLS=(\n    [netwatch-metrics.sh]=netwatch-metrics.sh\n)\n",
+        );
+        let got = read_declared_tools(&dir);
+        assert!(got.contains("netwatch-metrics.sh"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_tools_root_strips_scripts() {
+        assert_eq!(
+            tools_root(Path::new("/repo/provisioning/scripts/install-homelab-tools.sh")),
+            PathBuf::from("/repo/provisioning")
+        );
+        assert_eq!(
+            tools_root(Path::new("/repo/scripts/install-homelab-tools.sh")),
+            PathBuf::from("/repo")
+        );
     }
 
     #[test]
