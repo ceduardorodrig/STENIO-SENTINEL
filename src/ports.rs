@@ -18,6 +18,36 @@ pub struct PortEntry {
     pub service: String,
     pub justification: String,
     pub doc_link: String,
+    /// True when §2 marks this row as a live `0.0.0.0` defect (`⚠️ defect`).
+    ///
+    /// This is the document's own reality-audit marker (§2 preamble): a socket
+    /// that is genuinely exposed is a defect, so a §4 exception must not excuse
+    /// it on that host. Reading the marker keeps the engine data-driven — adding
+    /// or fixing a host row in `ports.md` changes the verdict with no code edit.
+    pub defect: bool,
+}
+
+/// Accepted wildcard-bind exceptions declared by §4 of the canonical matrix.
+///
+/// The set is parsed from `mnemocine/network/ports.md` (§4 "Legitimate `0.0.0.0`
+/// Exceptions"), never hardcoded: registering or revoking an exception is a
+/// documentation edit, not an engine change.
+#[derive(Debug, Clone, Default)]
+pub struct PortExceptions {
+    keys: std::collections::HashSet<(u16, String)>,
+}
+
+impl PortExceptions {
+    /// Registers `(port, proto)` as an accepted `0.0.0.0` exception.
+    pub fn insert(&mut self, port: u16, proto: &str) {
+        self.keys.insert((port, proto.trim().to_ascii_lowercase()));
+    }
+
+    /// True when §4 declares `(port, proto)` an accepted `0.0.0.0` exception.
+    pub fn contains(&self, port: u16, proto: &str) -> bool {
+        self.keys
+            .contains(&(port, proto.trim().to_ascii_lowercase()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -38,25 +68,132 @@ pub enum PortClassification {
     SecurityExposureWarning,
 }
 
-/// Loads the Canonical Port Catalog from mnemocine/network/ports.md
-pub fn load_port_catalog(root: &Path) -> Vec<PortEntry> {
+/// Resolves and reads the canonical port matrix (`mnemocine/network/ports.md`),
+/// falling back to the absolute vault path when run from another directory.
+fn read_port_matrix(root: &Path) -> Option<String> {
     let candidates = [
         root.join("mnemocine/network/ports.md"),
         Path::new("/mnt/NVME_PCI/agentic-ai/mnemocine/network/ports.md").to_path_buf(),
     ];
 
-    for path in &candidates {
-        if path.is_file() {
-            if let Ok(content) = fs::read_to_string(path) {
-                let entries = parse_markdown_catalog(&content);
-                if !entries.is_empty() {
-                    return entries;
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .and_then(|path| fs::read_to_string(path).ok())
+}
+
+/// Loads the Canonical Port Catalog from mnemocine/network/ports.md
+pub fn load_port_catalog(root: &Path) -> Vec<PortEntry> {
+    if let Some(content) = read_port_matrix(root) {
+        let entries = parse_markdown_catalog(&content);
+        if !entries.is_empty() {
+            return entries;
+        }
+    }
+
+    fallback_catalog()
+}
+
+/// Loads the accepted `0.0.0.0` exceptions from §4 of the canonical matrix.
+///
+/// Returns an empty set when the matrix (or its §4 table) is unavailable, which
+/// only makes the audit stricter — no exception is silently invented.
+pub fn load_port_exceptions(root: &Path) -> PortExceptions {
+    read_port_matrix(root)
+        .map(|content| parse_exception_table(&content))
+        .unwrap_or_default()
+}
+
+/// Parses §4 ("Legitimate `0.0.0.0` Exceptions") from the canonical matrix.
+///
+/// The table is located by its heading and read until the next `##` heading.
+/// Only the first (Port) column is consumed, so the free-text justification —
+/// which itself contains backticked port numbers — can never leak into the set.
+/// Each token is a `port[,port…]/proto[,proto…]` spec and every combination is
+/// registered, covering rows such as `` `47992/47993/tcp` `` and
+/// `` `7946/tcp,udp` `` without hardcoding a single port or service name.
+pub fn parse_exception_table(content: &str) -> PortExceptions {
+    let mut exceptions = PortExceptions::default();
+    let mut in_section = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            // Enter §4 on its own heading and leave on the next section.
+            in_section = trimmed.contains("Exception");
+            continue;
+        }
+        if !in_section || !trimmed.starts_with('|') {
+            continue;
+        }
+
+        let cells: Vec<&str> = trimmed.split('|').collect();
+        let Some(port_cell) = cells.get(1) else {
+            continue;
+        };
+        for token in backticked_tokens(port_cell) {
+            for (port, proto) in parse_port_token(&token) {
+                exceptions.insert(port, &proto);
+            }
+        }
+    }
+
+    exceptions
+}
+
+/// Extracts every backtick-delimited token from a table cell.
+fn backticked_tokens(cell: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut open = false;
+
+    for ch in cell.chars() {
+        match ch {
+            '`' => {
+                if open {
+                    tokens.push(std::mem::take(&mut current));
+                    open = false;
+                } else {
+                    current.clear();
+                    open = true;
+                }
+            }
+            _ if open => current.push(ch),
+            _ => {}
+        }
+    }
+
+    tokens
+}
+
+/// Expands a `port[,port…]/proto[,proto…]` token into `(port, proto)` pairs.
+///
+/// Examples: `9777/udp` → one pair; `7946/tcp,udp` → two; `47992/47993/tcp` →
+/// two. A malformed token yields nothing rather than a panic.
+fn parse_port_token(token: &str) -> Vec<(u16, String)> {
+    let parts: Vec<&str> = token.split('/').collect();
+    if parts.len() < 2 {
+        return Vec::new();
+    }
+
+    let protos: Vec<String> = parts[parts.len() - 1]
+        .split(',')
+        .map(|proto| proto.trim().to_ascii_lowercase())
+        .filter(|proto| !proto.is_empty())
+        .collect();
+
+    let mut pairs = Vec::new();
+    for segment in &parts[..parts.len() - 1] {
+        for raw_port in segment.split(',') {
+            if let Ok(port) = raw_port.trim().parse::<u16>() {
+                for proto in &protos {
+                    pairs.push((port, proto.clone()));
                 }
             }
         }
     }
 
-    fallback_catalog()
+    pairs
 }
 
 /// Parses the Markdown ports table
@@ -86,6 +223,10 @@ fn parse_markdown_catalog(content: &str) -> Vec<PortEntry> {
                 let service = cols[3].replace(['*', '`'], "");
                 let justification = cols[4].to_string();
                 let doc_link = cols[5].to_string();
+                // §2 marks a genuinely exposed socket with `⚠️ defect`; that
+                // marker survives a §4 exception (the exception is not valid on
+                // a host whose own row is a known defect).
+                let defect = justification.contains("⚠️ defect");
 
                 let (port_str, proto) = if raw_port_proto.contains('/') {
                     let mut parts = raw_port_proto.splitn(2, '/');
@@ -105,6 +246,7 @@ fn parse_markdown_catalog(content: &str) -> Vec<PortEntry> {
                             service: service.clone(),
                             justification: justification.clone(),
                             doc_link: doc_link.clone(),
+                            defect,
                         });
                     }
                 }
@@ -126,6 +268,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "steniorec (Axum/Whisper)".into(),
             justification: "GPU inference for audio and STT streaming".into(),
             doc_link: "mnemocine/network/service-topology.md".into(),
+            defect: false,
         },
         PortEntry {
             host: "psicopompo".into(),
@@ -135,6 +278,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "Syncthing Web GUI".into(),
             justification: "Syncthing administrative web interface".into(),
             doc_link: "mnemocine/backups/".into(),
+            defect: false,
         },
         PortEntry {
             host: "psicopompo".into(),
@@ -144,6 +288,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "Syncthing Sync".into(),
             justification: "Node-to-node data synchronization".into(),
             doc_link: "mnemocine/backups/".into(),
+            defect: false,
         },
         PortEntry {
             host: "psicopompo".into(),
@@ -153,6 +298,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "NFSv4 Server".into(),
             justification: "NAS file sharing".into(),
             doc_link: "mnemocine/network/nfs.md".into(),
+            defect: false,
         },
         PortEntry {
             host: "psicopompo".into(),
@@ -162,6 +308,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "Glances".into(),
             justification: "Resource telemetry".into(),
             doc_link: "mnemocine/network/service-topology.md".into(),
+            defect: false,
         },
         PortEntry {
             host: "psicopompo".into(),
@@ -171,6 +318,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "Node Exporter".into(),
             justification: "Prometheus metrics".into(),
             doc_link: "mnemocine/services/".into(),
+            defect: false,
         },
         PortEntry {
             host: "kavure".into(),
@@ -180,6 +328,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "PostgreSQL (sae-core_db)".into(),
             justification: "Relational database".into(),
             doc_link: "mnemocine/services/database.md".into(),
+            defect: false,
         },
         PortEntry {
             host: "kavure".into(),
@@ -189,6 +338,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "Valkey (sae-core_valkey)".into(),
             justification: "Cache and event messaging".into(),
             doc_link: "mnemocine/services/valkey.md".into(),
+            defect: false,
         },
         PortEntry {
             host: "kavure".into(),
@@ -198,6 +348,7 @@ fn fallback_catalog() -> Vec<PortEntry> {
             service: "sae-core_api".into(),
             justification: "Sumænimá Hub Core API".into(),
             doc_link: "mnemocine/services/core-api.md".into(),
+            defect: false,
         },
     ]
 }
@@ -272,6 +423,31 @@ fn parse_addr(addr: &str) -> (String, u16) {
     }
 }
 
+/// True when an observed bind listens on every interface.
+///
+/// `ss` renders a wildcard IPv4 bind as `0.0.0.0`, a wildcard IPv6 bind as `::`
+/// and some kernels/tools as `*`; all three are the same exposure.
+pub fn is_wildcard_bind(ip: &str) -> bool {
+    matches!(ip, "0.0.0.0" | "::" | "*")
+}
+
+/// Decides whether a *catalogued* listening socket is an unauthorized bind.
+///
+/// The verdict follows the **observed** bind, never the catalog wording: a socket
+/// actually listening on `0.0.0.0`/`::`/`*` is a defect unless §4 of the matrix
+/// declares its `(port, proto)` an accepted exception **and** the host's own §2
+/// row is not itself flagged as a `⚠️ defect`. Because §4 is host-agnostic data
+/// and the defect marker is per host, an exception accepted locally (psicopompo)
+/// is also accepted remotely (kavure/ybyra/ybytu) — while a host that the matrix
+/// marks exposed (e.g. kavure's Swarm ports) is never excused.
+pub fn is_unauthorized_wildcard_bind(
+    sock: &ActiveSocket,
+    entry: &PortEntry,
+    exceptions: &PortExceptions,
+) -> bool {
+    is_wildcard_bind(&sock.ip) && !(exceptions.contains(sock.port, &sock.proto) && !entry.defect)
+}
+
 fn print_port_table_row(
     indent: &str,
     port_proto: impl std::fmt::Display,
@@ -291,6 +467,7 @@ fn render_active_socket(
     sock: &ActiveSocket,
     node_name: &str,
     catalog_map: &HashMap<u16, Vec<&PortEntry>>,
+    exceptions: &PortExceptions,
     alerts_count: &mut usize,
 ) {
     let proc_label = sock.process.as_deref().unwrap_or("system / docker").cyan();
@@ -298,24 +475,7 @@ fn render_active_socket(
     let node_entry = entries_for_port.and_then(|v| v.iter().find(|e| e.host == node_name));
 
     if let Some(entry) = node_entry {
-        let is_wide_open = sock.ip == "0.0.0.0" || sock.ip == "::";
-        let is_unauthorized = if node_name == "psicopompo" {
-            let should_be_restricted = entry.bind.contains("127.0.0.1")
-                || entry.bind.contains("tailscale0")
-                || entry.bind.contains("100.");
-            let is_lan_authorized = entry.bind.contains("LAN")
-                || entry.bind.contains("Swarm Ingress")
-                || entry.port == 7946;
-            is_wide_open && should_be_restricted && !is_lan_authorized
-        } else {
-            let is_wan_allowed = (node_name == "ybyra" && (sock.port == 80 || sock.port == 443))
-                || entry.bind.contains("LAN")
-                || entry.bind.contains("Swarm Ingress")
-                || sock.port == 7946;
-            is_wide_open && !is_wan_allowed
-        };
-
-        if is_unauthorized {
+        if is_unauthorized_wildcard_bind(sock, entry, exceptions) {
             *alerts_count += 1;
             print_port_table_row(
                 indent,
@@ -409,6 +569,7 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     );
 
     let catalog = load_port_catalog(root);
+    let exceptions = load_port_exceptions(root);
     let local_sockets = scan_local_active_sockets();
 
     let mut catalog_map: HashMap<u16, Vec<&PortEntry>> = HashMap::new();
@@ -432,7 +593,14 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
         }
         active_ports_found.insert(sock.port, sock);
 
-        render_active_socket("   ", sock, "psicopompo", &catalog_map, &mut alerts_count);
+        render_active_socket(
+            "   ",
+            sock,
+            "psicopompo",
+            &catalog_map,
+            &exceptions,
+            &mut alerts_count,
+        );
     }
 
     // List cataloged ports that are idle (offline)
@@ -486,6 +654,7 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
                             sock,
                             node_name,
                             &catalog_map,
+                            &exceptions,
                             &mut alerts_count,
                         );
                     }
@@ -569,4 +738,173 @@ pub async fn run_ports_audit(root: &Path) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a catalog row; `defect` mirrors the document's `⚠️ defect` marker.
+    fn entry(host: &str, port: u16, proto: &str, bind: &str, defect: bool) -> PortEntry {
+        PortEntry {
+            host: host.into(),
+            port,
+            proto: proto.into(),
+            bind: bind.into(),
+            service: "svc".into(),
+            justification: if defect {
+                "exposed. **⚠️ defect**".into()
+            } else {
+                "documented".into()
+            },
+            doc_link: "doc".into(),
+            defect,
+        }
+    }
+
+    fn socket(ip: &str, port: u16, proto: &str) -> ActiveSocket {
+        ActiveSocket {
+            proto: proto.into(),
+            ip: ip.into(),
+            port,
+            process: None,
+        }
+    }
+
+    /// Blind spot 1 (pre-fix regression): a socket documented *truthfully* as
+    /// `0.0.0.0` rendered `COMPLIANT` because the catalog text lacked
+    /// `127.0.0.1`/`tailscale0`/`100.`. Concrete case: psicopompo Stremio.
+    #[test]
+    fn truthful_wildcard_bind_absent_from_section_four_is_flagged() {
+        let stremio = entry("psicopompo", 11470, "tcp", "0.0.0.0", true);
+        let sock = socket("0.0.0.0", 11470, "tcp");
+        assert!(is_unauthorized_wildcard_bind(
+            &sock,
+            &stremio,
+            &PortExceptions::default()
+        ));
+    }
+
+    /// The observed bind decides, never the wording: even a row the document did
+    /// not mark as a defect is a finding when it listens on `0.0.0.0` and §4
+    /// never accepted it (e.g. a `LAN (0.0.0.0)` row such as rpc.mountd).
+    #[test]
+    fn non_defect_wildcard_bind_absent_from_section_four_is_still_flagged() {
+        let mountd = entry("psicopompo", 20048, "tcp", "LAN (`0.0.0.0`)", false);
+        let sock = socket("0.0.0.0", 20048, "tcp");
+        assert!(is_unauthorized_wildcard_bind(
+            &sock,
+            &mountd,
+            &PortExceptions::default()
+        ));
+    }
+
+    /// Blind spot 2 (pre-fix regression): the remote branch ignored §4, so an
+    /// accepted exception (kavure `:8123`) rendered `UNAUTHORIZED`.
+    #[test]
+    fn section_four_exception_is_accepted_on_a_remote_host() {
+        let mut exceptions = PortExceptions::default();
+        exceptions.insert(8123, "tcp");
+        let ha = entry("kavure", 8123, "tcp", "0.0.0.0 (host networking)", false);
+        let sock = socket("0.0.0.0", 8123, "tcp");
+        assert!(!is_unauthorized_wildcard_bind(&sock, &ha, &exceptions));
+    }
+
+    /// Do not weaken: §4 lists the Swarm raft port, but kavure's own row is a
+    /// defect (no host firewall), so the exception must not excuse it.
+    #[test]
+    fn section_four_does_not_excuse_a_host_marked_as_a_defect() {
+        let mut exceptions = PortExceptions::default();
+        exceptions.insert(2377, "tcp");
+        let swarm = entry("kavure", 2377, "tcp", "0.0.0.0", true);
+        let sock = socket("0.0.0.0", 2377, "tcp");
+        assert!(is_unauthorized_wildcard_bind(&sock, &swarm, &exceptions));
+    }
+
+    /// An exception is protocol-specific: `9777/udp` does not excuse a tcp bind.
+    #[test]
+    fn section_four_exception_is_protocol_specific() {
+        let mut exceptions = PortExceptions::default();
+        exceptions.insert(9777, "udp");
+        let punktfunk = entry("psicopompo", 9777, "tcp", "0.0.0.0", false);
+        let sock = socket("0.0.0.0", 9777, "tcp");
+        assert!(is_unauthorized_wildcard_bind(
+            &sock,
+            &punktfunk,
+            &exceptions
+        ));
+    }
+
+    /// A restricted observed bind stays compliant even without an exception.
+    #[test]
+    fn restricted_observed_bind_is_compliant() {
+        let valkey = entry(
+            "kavure",
+            6379,
+            "tcp",
+            "sae-net (Overlay — unexposed on host)",
+            false,
+        );
+        let sock = socket("100.124.146.77", 6379, "tcp");
+        assert!(!is_unauthorized_wildcard_bind(
+            &sock,
+            &valkey,
+            &PortExceptions::default()
+        ));
+    }
+
+    /// §4 parsing: only the Port column counts, multi-port and multi-proto
+    /// tokens expand, and backticked numbers in the justification are ignored.
+    #[test]
+    fn parses_section_four_exception_table() {
+        let doc = "\
+## 3. Role\n\
+| `1/tcp` | not-an-exception |\n\
+## 4. Legitimate `0.0.0.0` Exceptions\n\
+\n\
+| Port | Service | Technical Justification |\n\
+|---|---|---|\n\
+| `9777/udp`, `47990/tcp`, `47992/47993/tcp` | **Punktfunk** | binds `0.0.0.0` |\n\
+| `2377/tcp`, `4789/udp`, `7946/tcp,udp`, `9092/tcp` | **Swarm** | raft port (`2377`), gossip (`7946`) |\n\
+| `3001/tcp`, `3002/tcp`, `9100/tcp` | **Ybytu** | allow list (`9096`) |\n\
+## 5. Next\n\
+| `5555/tcp` | not-an-exception |\n";
+
+        let exceptions = parse_exception_table(doc);
+        for (port, proto) in [
+            (9777u16, "udp"),
+            (47990, "tcp"),
+            (47992, "tcp"),
+            (47993, "tcp"),
+            (2377, "tcp"),
+            (4789, "udp"),
+            (7946, "tcp"),
+            (7946, "udp"),
+            (9092, "tcp"),
+            (3001, "tcp"),
+            (3002, "tcp"),
+            (9100, "tcp"),
+        ] {
+            assert!(exceptions.contains(port, proto), "missing {port}/{proto}");
+        }
+        assert!(!exceptions.contains(1, "tcp"));
+        assert!(!exceptions.contains(5555, "tcp"));
+        assert!(!exceptions.contains(8123, "udp"));
+    }
+
+    /// The catalog parser reads the document's own `⚠️ defect` marker per row.
+    #[test]
+    fn catalog_parser_marks_defect_rows() {
+        let doc = "\
+### 2.1. Psicopompo\n\
+| Port / Proto | Bind Interface | Service | Technical Justification | Canonical Reference |\n\
+|---|---|---|---|---|\n\
+| `11470,12470/tcp` | `0.0.0.0` | **Stremio** | Embedded node server. **⚠️ defect** — must bind `127.0.0.1` | [`x`](x) |\n\
+| `9090/tcp` | `127.0.0.1` | **steniorec** | GPU transcription | [`x`](x) |\n";
+
+        let entries = parse_markdown_catalog(doc);
+        assert!(entries.iter().any(|e| e.port == 11470 && e.defect));
+        assert!(entries.iter().any(|e| e.port == 12470 && e.defect));
+        assert!(entries.iter().any(|e| e.port == 9090 && !e.defect));
+    }
 }
