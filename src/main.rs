@@ -796,6 +796,52 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
+    // ── Service Naming Convention (HOMELAB-NAMING-SERVICE) ─────────────────
+    // One unit that must fire and one that must stay clean, over the same pure
+    // predicate used by `audit_infrastructure`.
+    total += 1;
+    let v_naming_bad = infra::check_service_naming(
+        "minecraft-status.service",
+        "provisioning/systemd/minecraft-status.service",
+    );
+    if v_naming_bad
+        .as_ref()
+        .is_some_and(|v| v.rule_id == "HOMELAB-NAMING-SERVICE")
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Service Missing hl- Prefix",
+            "HOMELAB-NAMING-SERVICE".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Service Missing hl- Prefix",
+            "HOMELAB-NAMING-SERVICE".red()
+        );
+    }
+
+    total += 1;
+    let v_naming_ok = infra::check_service_naming(
+        "hl-minecraft-status.service",
+        "provisioning/systemd/hl-minecraft-status.service",
+    );
+    if v_naming_ok.is_none() {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Service hl- Prefix Clean",
+            "HOMELAB-NAMING-SERVICE".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Service hl- Prefix Clean",
+            "HOMELAB-NAMING-SERVICE".red()
+        );
+    }
+
     // ── Tests for 6 Anti-Laziness / Anti-Bug Rust Best Practices ──────────
     check_case!(
         "Unbounded Channel",

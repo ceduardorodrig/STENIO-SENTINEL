@@ -620,12 +620,44 @@ fn check_docker_health() {
     }
 }
 
+/// Decides whether one observed socket is an attack-surface alert for the local
+/// host, using the **same** verdict as the `--ports` auditor.
+///
+/// The catalog, the accepted `0.0.0.0` exceptions (parsed from §4 of the matrix)
+/// and the wildcard-bind predicate all come from `ports.rs` — the auditor is the
+/// single source of truth (HB-054). This wrapper only adds the two *uncatalogued*
+/// dispositions the auditor renders inline: loopback is never an exposure, and
+/// the client/ephemeral desktop range is expected. `--health` and `--ports` can
+/// therefore never disagree on the same live state.
+fn is_attack_surface_alert(
+    sock: &crate::ports::ActiveSocket,
+    catalog_map: &std::collections::HashMap<u16, Vec<&crate::ports::PortEntry>>,
+    exceptions: &crate::ports::PortExceptions,
+) -> bool {
+    if let Some(entry) = catalog_map
+        .get(&sock.port)
+        .and_then(|entries| entries.iter().find(|e| e.host == "psicopompo"))
+    {
+        return crate::ports::is_unauthorized_wildcard_bind(sock, entry, exceptions);
+    }
+
+    if sock.ip.starts_with("127.0.0.") || sock.ip == "::1" {
+        return false;
+    }
+
+    !(sock.port > 30000 || sock.port == 1716 || sock.port == 27036 || sock.port == 9863)
+}
+
 fn check_ports_health() {
+    let root = std::path::Path::new(".");
     let sockets = crate::ports::scan_local_active_sockets();
-    let catalog = crate::ports::load_port_catalog(std::path::Path::new("."));
-    let mut catalog_map = std::collections::HashMap::new();
+    let catalog = crate::ports::load_port_catalog(root);
+    let exceptions = crate::ports::load_port_exceptions(root);
+
+    let mut catalog_map: std::collections::HashMap<u16, Vec<&crate::ports::PortEntry>> =
+        std::collections::HashMap::new();
     for entry in &catalog {
-        catalog_map.entry(entry.port).or_insert(entry);
+        catalog_map.entry(entry.port).or_default().push(entry);
     }
 
     let mut open_count = 0;
@@ -637,27 +669,7 @@ fn check_ports_health() {
             continue;
         }
         open_count += 1;
-        let is_wide = sock.ip == "0.0.0.0" || sock.ip == "::";
-        let is_local = sock.ip.starts_with("127.0.0.") || sock.ip == "::1";
-
-        if let Some(entry) = catalog_map.get(&sock.port) {
-            let should_restrict = entry.bind.contains("127.0.0.1")
-                || entry.bind.contains("tailscale0")
-                || entry.bind.contains("100.");
-            if is_wide
-                && should_restrict
-                && entry.port != 2049
-                && entry.port != 111
-                && entry.port != 20048
-            {
-                warn_count += 1;
-            }
-        } else if !is_local
-            && sock.port < 30000
-            && sock.port != 1716
-            && sock.port != 27036
-            && sock.port != 9863
-        {
+        if is_attack_surface_alert(sock, &catalog_map, &exceptions) {
             warn_count += 1;
         }
     }
@@ -674,5 +686,131 @@ fn check_ports_health() {
             warn_count.to_string().red().bold(),
             "stenio --ports".cyan().bold()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::{ActiveSocket, PortEntry, PortExceptions};
+
+    fn entry(host: &str, port: u16, proto: &str, bind: &str, defect: bool) -> PortEntry {
+        PortEntry {
+            host: host.into(),
+            port,
+            proto: proto.into(),
+            bind: bind.into(),
+            service: "svc".into(),
+            justification: if defect {
+                "exposed. **⚠️ defect**".into()
+            } else {
+                "documented".into()
+            },
+            doc_link: "doc".into(),
+            defect,
+        }
+    }
+
+    fn socket(ip: &str, port: u16, proto: &str) -> ActiveSocket {
+        ActiveSocket {
+            proto: proto.into(),
+            ip: ip.into(),
+            port,
+            process: None,
+        }
+    }
+
+    /// HB-054 regression: the old heuristic excused 2049/111/20048 by hardcoded
+    /// port number and flagged any catalogued wildcard whose §2 text mentioned
+    /// `tailscale0`. Here the §4-parsed exceptions decide: an unexcepted wildcard
+    /// (20048 absent from §4) is an alert, an excepted one (22000 in §4) is not.
+    #[test]
+    fn verdict_follows_the_parsed_section_four_exceptions() {
+        let entries = vec![
+            entry("psicopompo", 20048, "tcp", "LAN (`0.0.0.0`)", false),
+            entry("psicopompo", 22000, "tcp", "LAN + `tailscale0`", false),
+        ];
+        let mut map: std::collections::HashMap<u16, Vec<&PortEntry>> =
+            std::collections::HashMap::new();
+        for e in &entries {
+            map.entry(e.port).or_default().push(e);
+        }
+
+        let mut exceptions = PortExceptions::default();
+        exceptions.insert(22000, "tcp");
+
+        assert!(is_attack_surface_alert(
+            &socket("0.0.0.0", 20048, "tcp"),
+            &map,
+            &exceptions
+        ));
+        assert!(!is_attack_surface_alert(
+            &socket("0.0.0.0", 22000, "tcp"),
+            &map,
+            &exceptions
+        ));
+    }
+
+    /// The catalogued verdict is delegated verbatim to the auditor's predicate —
+    /// the parity the alignment guarantees (no parallel heuristic).
+    #[test]
+    fn catalogued_verdict_matches_the_auditor_predicate() {
+        let entries = vec![
+            entry("psicopompo", 11470, "tcp", "0.0.0.0", true),
+            entry("psicopompo", 9095, "tcp", "127.0.0.1", false),
+        ];
+        let mut map: std::collections::HashMap<u16, Vec<&PortEntry>> =
+            std::collections::HashMap::new();
+        for e in &entries {
+            map.entry(e.port).or_default().push(e);
+        }
+        let exceptions = PortExceptions::default();
+
+        for e in &entries {
+            let sock = socket("0.0.0.0", e.port, "tcp");
+            let expected = crate::ports::is_unauthorized_wildcard_bind(&sock, e, &exceptions);
+            assert_eq!(is_attack_surface_alert(&sock, &map, &exceptions), expected);
+        }
+    }
+
+    /// Uncatalogued dispositions mirror the auditor: loopback and the
+    /// client/ephemeral range are expected; a low uncatalogued port is an orphan.
+    #[test]
+    fn uncatalogued_dispositions_match_the_auditor() {
+        let map: std::collections::HashMap<u16, Vec<&PortEntry>> = std::collections::HashMap::new();
+        let exceptions = PortExceptions::default();
+
+        assert!(!is_attack_surface_alert(
+            &socket("127.0.0.1", 49374, "tcp"),
+            &map,
+            &exceptions
+        ));
+        assert!(!is_attack_surface_alert(
+            &socket("0.0.0.0", 43653, "tcp"),
+            &map,
+            &exceptions
+        ));
+        assert!(is_attack_surface_alert(
+            &socket("100.82.51.112%tailscale0", 443, "tcp"),
+            &map,
+            &exceptions
+        ));
+    }
+
+    /// A catalogued port whose row belongs to another host falls back to the
+    /// uncatalogued disposition, exactly like the auditor's `node_entry` lookup.
+    #[test]
+    fn other_host_rows_do_not_mask_a_local_orphan() {
+        let entries = vec![entry("kavure", 443, "tcp", "0.0.0.0", false)];
+        let mut map: std::collections::HashMap<u16, Vec<&PortEntry>> =
+            std::collections::HashMap::new();
+        for e in &entries {
+            map.entry(e.port).or_default().push(e);
+        }
+        assert!(is_attack_surface_alert(
+            &socket("100.82.51.112%tailscale0", 443, "tcp"),
+            &map,
+            &PortExceptions::default()
+        ));
     }
 }

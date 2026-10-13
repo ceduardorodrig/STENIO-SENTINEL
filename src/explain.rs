@@ -224,6 +224,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Route the workload through hl-infer (POST /v1/jobs for a VRAM lease, POST /v1/jobs/{id}/release when done) instead of claiming the device directly, or document the service as a consumer in mnemocine/services/hl-infer.md.",
     },
     RuleExplanation {
+        id: "HOMELAB-NAMING-SERVICE",
+        name: "Service Missing hl- Prefix",
+        severity: "WARN",
+        tag: "homelab",
+        summary: "Every Mnemocine infrastructure service (a systemd unit or a Docker/Compose service owned by the homelab) must carry the 'hl-' prefix.",
+        rationale: "Three otherwise-colliding namespaces share the fleet: homelab infrastructure services, SUMÆNIMÁ/Miracena products, and upstream/third-party daemons. Without a prefix a unit such as 'minecraft-status' or 'unbound-status' is indistinguishable from an upstream vendor unit, so ownership, lifecycle and the reconciliation catalogue cannot be derived from the name alone. The prefix lives on the unit — never on the binary — so renaming is runtime-transparent to the executable and to port-based consumers.",
+        bad_example: "minecraft-status.service   # a homelab Rust probe, indistinguishable from a vendor unit\nunbound-status.timer",
+        good_example: "hl-minecraft-status.service   # runs /usr/local/bin/minecraft-status\nhl-config-backup.timer",
+        remediation: "Rename the unit/service to 'hl-<role>' (e.g. 'minecraft-status.service' → 'hl-minecraft-status.service'). Templates (wol@<iface>), products (sae-*, sumaenima-*, miracena-*) and host-tuning helpers keep their names — see mnemocine/guides/ferramentas-de-operacao.md § Service Naming Convention.",
+    },
+    RuleExplanation {
         id: "DOC-BACKLOG-DRIFT",
         name: "Backlog Traceability Drift",
         severity: "WARN",

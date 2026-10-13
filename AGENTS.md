@@ -129,3 +129,32 @@ HTTP is reused from the existing Rust `xh` client via the shared
 `crate::health::http_get_body` helper and parsed with the already-present `serde_json`; no new
 dependency is introduced. `src/gpu.rs` and `src/infra.rs` carry **no new Guardian anchors**.
 
+## Service naming coverage (`HOMELAB-NAMING-SERVICE`, v4.5.0 — 2026-10-13)
+
+Every **Mnemocine infrastructure service** — a systemd unit (service or timer) — carries the
+**`hl-`** prefix (canonized 2026-10-12; fleet migrated under HB-019). `src/infra.rs` enforces it
+in `check_service_naming()`, called from the same systemd block that already runs
+`INFRA-SYSTEMD-SYNTAX`, so a unit without the prefix is a `HOMELAB-NAMING-SERVICE` **Warning**
+(rollout) wherever our own units are audited.
+
+- **Exempt by design** (documented in `mnemocine/guides/ferramentas-de-operacao.md` § Service
+  Naming Convention): template / instance units (`wol@<iface>`, `notify-backup-failure@<unit>`),
+  SUMÆNIMÁ / Miracena products (`sae-*`, `sumaenima-*`, `miracena-*`) and host-tuning helpers
+  (`tailscaled-wait`, `disable-acpi-spurious-wakeup`). The prefix lives on the **unit**, never on
+  the binary — renaming is runtime-transparent to the executable and to port-based consumers.
+- The check is gated by `code_debt`, so captured mirrors and upstream forks (whose units are not
+  ours to rename) are never flagged, and `golden/` copies are skipped. The dynamic counterpart is
+  `stenio --reconcile` (the service catalogue is the declaration it checks reality against).
+- The live `MNEMOCINE-OPS/provisioning/systemd/` tree is clean: 70 `hl-*` units + the exempt
+  `notify-backup-failure@.service`. `src/infra.rs` carries **no new Guardian anchors**.
+
+## Port-view consistency (`HB-054`, v4.5.0 — 2026-10-13)
+
+`health.rs::check_ports_health` no longer keeps a second, parallel port heuristic. It consumes the
+`--ports` auditor's single source of truth — `ports::load_port_catalog()`,
+`ports::load_port_exceptions()` (the §4 table parsed from `mnemocine/network/ports.md`) and
+`ports::is_unauthorized_wildcard_bind()` — and only adds the two *uncatalogued* dispositions the
+auditor renders inline (loopback, client/ephemeral range). The former hardcoded `2049`/`111`/
+`20048` exemptions and the catalogue-text `tailscale0` heuristic are gone, so `--health` and
+`--ports` can never disagree on the same live state.
+

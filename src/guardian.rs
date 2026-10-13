@@ -352,6 +352,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "SEC-PLAINTEXT-SECRET",
                 "SEC-PERM-LEAK",
                 "INFRA-BASH-STRICT",
+                "HOMELAB-NAMING-SERVICE",
             ],
         ),
         (

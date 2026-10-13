@@ -239,6 +239,74 @@ fn is_registered_gpu_consumer(service_name: &str, allowed: &[String]) -> bool {
         .any(|allowed_name| name.contains(allowed_name.as_str()))
 }
 
+/// Systemd unit base name (strips `.service` / `.timer`).
+fn unit_base_name(file_name: &str) -> &str {
+    file_name
+        .strip_suffix(".service")
+        .or_else(|| file_name.strip_suffix(".timer"))
+        .unwrap_or(file_name)
+}
+
+/// Documented exemptions from the `hl-` service prefix
+/// (`mnemocine/guides/ferramentas-de-operacao.md` § Service Naming Convention).
+///
+/// The prefix is mandatory for Mnemocine infrastructure units. Three categories
+/// deliberately keep another name:
+///
+/// * **template / instance units** — `wol@<iface>.service`,
+///   `notify-backup-failure@<unit>.service`, `hollyland-fix@.service`: the
+///   instance namespace is not a service identity;
+/// * **SUMÆNIMÁ / Miracena products** — they keep the brand
+///   (`sae-core_api`, `sumaenima-gpu`, `miracena-*`), not the homelab prefix;
+/// * **host-tuning helpers** excluded from the catalogue
+///   (`tailscaled-wait`, `disable-acpi-spurious-wakeup`).
+fn is_exempt_service_unit(file_name: &str) -> bool {
+    let base = unit_base_name(file_name);
+    if base.contains('@') {
+        return true;
+    }
+    const PRODUCT_PREFIXES: [&str; 3] = ["sae-", "sumaenima-", "miracena-"];
+    if PRODUCT_PREFIXES
+        .iter()
+        .any(|prefix| base.starts_with(prefix))
+    {
+        return true;
+    }
+    const HOST_HELPERS: [&str; 2] = ["tailscaled-wait", "disable-acpi-spurious-wakeup"];
+    HOST_HELPERS.contains(&base)
+}
+
+/// Enforces the `hl-` prefix on a systemd unit name (HOMELAB-NAMING-SERVICE).
+///
+/// Pure: returns the [`Violation`] for a unit that must be renamed, `None` when
+/// the name already complies, is not a unit file, or is a documented exemption.
+/// The prefix lives on the **unit**, never on the binary — renaming a unit is
+/// runtime-transparent to the executable and to port-based consumers.
+pub fn check_service_naming(file_name: &str, path_str: &str) -> Option<Violation> {
+    if !(file_name.ends_with(".service") || file_name.ends_with(".timer")) {
+        return None;
+    }
+    if file_name.starts_with("hl-") || is_exempt_service_unit(file_name) {
+        return None;
+    }
+    Some(Violation {
+        rule_id: "HOMELAB-NAMING-SERVICE".to_string(),
+        rule_name: "Service Missing hl- Prefix".to_string(),
+        severity: Severity::Warning,
+        file_path: path_str.to_string(),
+        line_number: 1,
+        snippet: file_name.to_string(),
+        message: format!(
+            "Systemd unit '{}' does not carry the 'hl-' prefix. Mnemocine infrastructure services must be named 'hl-<role>' (products, upstream units and templates are exempt).",
+            file_name
+        ),
+        suggestion: Some(format!(
+            "Rename the unit to 'hl-{}' (the prefix lives on the unit, never on the binary — see mnemocine/guides/ferramentas-de-operacao.md).",
+            file_name
+        )),
+    })
+}
+
 fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mirror_info = parse_mirror_path(path_str);
@@ -703,6 +771,17 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                         suggestion: Some("Add mandatory standard systemd sections.".to_string()),
                     });
                 }
+
+                // HOMELAB-NAMING-SERVICE: our own units must carry the `hl-`
+                // prefix. Gated by `code_debt` so captured mirrors and upstream
+                // forks (which are not our units to rename) are never flagged,
+                // and `golden/` copies (duplicated by config-backup) are skipped.
+                if code_debt
+                    && !path_str.contains("/golden/")
+                    && let Some(violation) = check_service_naming(file_name, &path_str)
+                {
+                    violations.push(violation);
+                }
             }
         }
 
@@ -1048,5 +1127,57 @@ hl-infer
             resolved,
             vec!["hl-infer".to_string(), "data-only-consumer".to_string()]
         );
+    }
+
+    /// HB-020 / HOMELAB-NAMING-SERVICE — a homelab unit without the prefix fires.
+    #[test]
+    fn flags_a_unit_missing_the_hl_prefix() {
+        for unit in ["minecraft-status.service", "unbound-status.timer"] {
+            let violation = check_service_naming(unit, "provisioning/systemd");
+            assert_eq!(
+                violation.map(|v| v.rule_id),
+                Some("HOMELAB-NAMING-SERVICE".to_string()),
+                "{unit} must be flagged"
+            );
+        }
+    }
+
+    /// A compliant unit (service or timer) is never flagged.
+    #[test]
+    fn accepts_units_with_the_hl_prefix() {
+        for unit in [
+            "hl-minecraft-status.service",
+            "hl-config-backup.timer",
+            "hl-infer.service",
+        ] {
+            assert!(check_service_naming(unit, "provisioning/systemd").is_none());
+        }
+    }
+
+    /// Templates, products and host-tuning helpers keep their documented names.
+    #[test]
+    fn exempts_templates_products_and_host_helpers() {
+        for unit in [
+            "notify-backup-failure@.service",
+            "wol@eno1.service",
+            "hollyland-fix@.service",
+            "sae-core_api.service",
+            "sumaenima-gpu.service",
+            "miracena-postgres.service",
+            "tailscaled-wait.service",
+            "disable-acpi-spurious-wakeup.service",
+        ] {
+            assert!(
+                check_service_naming(unit, "provisioning/systemd").is_none(),
+                "{unit} must be exempt"
+            );
+        }
+    }
+
+    /// Non-unit files are out of scope for the rule.
+    #[test]
+    fn ignores_non_unit_files() {
+        assert!(check_service_naming("compose.yml", "x").is_none());
+        assert!(check_service_naming("install-homelab-tools.sh", "x").is_none());
     }
 }
