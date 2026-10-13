@@ -4,7 +4,7 @@ tags: [meta, agents, governance, rust, engine]
 
 # AGENTS.md — StenioSentinel Engine Governance Rules
 
-This directory contains **StenioSentinel (Rust Engine v4.5.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
+This directory contains **StenioSentinel (Rust Engine v4.6.0)**, the universal static verification, architectural enforcement, and health monitoring engine for the entire ecosystem.
 
 When modifying any file in this repository, follow these mandatory governance rules:
 
@@ -129,7 +129,7 @@ HTTP is reused from the existing Rust `xh` client via the shared
 `crate::health::http_get_body` helper and parsed with the already-present `serde_json`; no new
 dependency is introduced. `src/gpu.rs` and `src/infra.rs` carry **no new Guardian anchors**.
 
-## Service naming coverage (`HOMELAB-NAMING-SERVICE`, v4.5.0 — 2026-10-13)
+## Service naming coverage (`HOMELAB-NAMING-SERVICE`, v4.6.0 — 2026-10-13)
 
 Every **Mnemocine infrastructure service** — a systemd unit (service or timer) — carries the
 **`hl-`** prefix (canonized 2026-10-12; fleet migrated under HB-019). `src/infra.rs` enforces it
@@ -148,7 +148,7 @@ in `check_service_naming()`, called from the same systemd block that already run
 - The live `MNEMOCINE-OPS/provisioning/systemd/` tree is clean: 70 `hl-*` units + the exempt
   `notify-backup-failure@.service`. `src/infra.rs` carries **no new Guardian anchors**.
 
-## Port-view consistency (`HB-054`, v4.5.0 — 2026-10-13)
+## Port-view consistency (`HB-054`, v4.6.0 — 2026-10-13)
 
 `health.rs::check_ports_health` no longer keeps a second, parallel port heuristic. It consumes the
 `--ports` auditor's single source of truth — `ports::load_port_catalog()`,
