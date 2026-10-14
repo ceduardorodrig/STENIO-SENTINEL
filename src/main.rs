@@ -29,6 +29,7 @@ mod mcp;
 mod mesh;
 mod migrations;
 mod ports;
+mod reconcile;
 pub mod remote;
 mod rule;
 mod tools;
@@ -129,6 +130,19 @@ struct Args {
         help = "Audit local and remote attack surface and open ports against canonical catalog"
     )]
     ports: bool,
+
+    #[arg(
+        long,
+        help = "Reconcile observed reality (containers, systemd units, sockets) against the declared documents: REALITY-UNDECLARED, DECLARATION-STALE, PURPOSE-MISSING, POLICY-UNDERIVABLE"
+    )]
+    reconcile: bool,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Observation-source manifest for --reconcile (default: governance/stenio/sources.toml)"
+    )]
+    sources: Option<PathBuf>,
 
     #[arg(
         long,
@@ -763,6 +777,56 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
+    // ── i18n Namespace Test (FRONT-I18N-NAMESPACE) ─────────────────────────
+    total += 1;
+    let v_i18n_bad = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/Privacy.tsx"),
+        "const { t } = useTranslation();\nreturn <h1>{t('privacy:title')}</h1>;",
+        &Whitelist::default(),
+    );
+    if v_i18n_bad
+        .iter()
+        .any(|v| v.rule_id == "FRONT-I18N-NAMESPACE")
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Missing i18n Namespace",
+            "FRONT-I18N-NAMESPACE".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Missing i18n Namespace",
+            "FRONT-I18N-NAMESPACE".red()
+        );
+    }
+
+    // ── Hardcoded Text Test (FRONT-NO-HARDCODED-TEXT) ──────────────────────
+    total += 1;
+    let v_hardcoded_bad = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/features/DeckDetail.tsx"),
+        "<p>Seu deck ainda não tem cartas.</p>",
+        &Whitelist::default(),
+    );
+    if v_hardcoded_bad
+        .iter()
+        .any(|v| v.rule_id == "FRONT-NO-HARDCODED-TEXT")
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Hardcoded UI Text in JSX",
+            "FRONT-NO-HARDCODED-TEXT".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Hardcoded UI Text in JSX",
+            "FRONT-NO-HARDCODED-TEXT".red()
+        );
+    }
+
     // ── SQL Idempotency Test (check_sql_idempotency) ───────────────────────
     total += 1;
     if migrations::check_sql_idempotency("CREATE TABLE users (id INT);").is_some() {
@@ -1086,6 +1150,122 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         );
     }
 
+    // ── Reconciliation invariants (HB-052): observed reality vs declaration ─
+    let rc_catalog = reconcile::Catalog {
+        entities: vec![reconcile::DeclaredEntity {
+            host: "h".to_string(),
+            name: "steniorec".to_string(),
+            kind: reconcile::DeclKind::Container,
+            purpose_present: true,
+            owner_present: true,
+            exempt: false,
+            line: 1,
+        }],
+        hosts: vec![("h".to_string(), "100.0.0.1".to_string())],
+        skipped_tables: Vec::new(),
+        skipped_rows: 0,
+    };
+    let rc_alias = std::collections::HashMap::new();
+
+    total += 1;
+    let rc_ok = vec![reconcile::Observation::observed(
+        "h",
+        "docker_names",
+        &["steniorec"],
+    )];
+    let (rc_v1, _) = reconcile::reconcile_all(&rc_catalog, "cat.md", &rc_ok, &rc_alias);
+    if rc_v1.is_empty() {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Reconcile: pair passes",
+            "REALITY-UNDECLARED".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Reconcile: pair passes",
+            "REALITY-UNDECLARED".red()
+        );
+    }
+
+    total += 1;
+    let rc_ghost = vec![reconcile::Observation::observed(
+        "h",
+        "docker_names",
+        &["steniorec", "ghost"],
+    )];
+    let (rc_v2, _) = reconcile::reconcile_all(&rc_catalog, "cat.md", &rc_ghost, &rc_alias);
+    if rc_v2
+        .iter()
+        .filter(|v| v.rule_id == "REALITY-UNDECLARED")
+        .count()
+        == 1
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Reconcile: undeclared",
+            "REALITY-UNDECLARED".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Reconcile: undeclared",
+            "REALITY-UNDECLARED".red()
+        );
+    }
+
+    total += 1;
+    let rc_none: Vec<reconcile::Observation> =
+        vec![reconcile::Observation::observed("h", "docker_names", &[])];
+    let (rc_v3, _) = reconcile::reconcile_all(&rc_catalog, "cat.md", &rc_none, &rc_alias);
+    if rc_v3.iter().any(|v| v.rule_id == "DECLARATION-STALE") {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Reconcile: stale",
+            "DECLARATION-STALE".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Reconcile: stale",
+            "DECLARATION-STALE".red()
+        );
+    }
+
+    total += 1;
+    let rc_policy = reconcile::parse_policy_grants(
+        r#"{"grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]}"#,
+    );
+    let rc_underivable = rc_policy
+        .ok()
+        .map(|grants| {
+            reconcile::check_policy(
+                &grants,
+                &std::collections::BTreeSet::new(),
+                &reconcile::RouteIndex::default(),
+                "policy.hujson",
+            )
+        })
+        .map(|v| v.iter().any(|x| x.rule_id == "POLICY-UNDERIVABLE"))
+        .unwrap_or(false);
+    if rc_underivable {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Reconcile: policy",
+            "POLICY-UNDERIVABLE".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Reconcile: policy",
+            "POLICY-UNDERIVABLE".red()
+        );
+    }
+
     println!();
     if passed == total {
         println!(
@@ -1323,6 +1503,18 @@ fn main() -> Result<()> {
     if args.ports {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(ports::run_ports_audit(&args.path))?;
+        return Ok(());
+    }
+
+    // ── Reconciliation Mode (--reconcile) ──────────────────────────────────
+    //
+    // Compares observed reality (read-only probes on the hosts, driven by the
+    // `sources.toml` manifest) against the declared documents (the service
+    // catalogue and the Tailscale policy). Emits REALITY-UNDECLARED,
+    // DECLARATION-STALE, PURPOSE-MISSING and POLICY-UNDERIVABLE. Unreadable
+    // sources are reported as skipped, never as violations.
+    if args.reconcile {
+        reconcile::run_reconcile(&args.path, args.sources.as_deref(), args.json)?;
         return Ok(());
     }
 

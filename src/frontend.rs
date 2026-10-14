@@ -662,5 +662,134 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
     }
 
+    // ── 21. FRONT-I18N-NAMESPACE: Explicit Namespace Binding in useTranslation ──
+    if (path_str.ends_with(".tsx") || path_str.ends_with(".ts"))
+        && !is_common_ignored_path(&path_str)
+        && !path_str.contains("/test")
+        && !path_str.contains(".test.")
+        && !path_str.contains(".spec.")
+    {
+        let has_prefixed_t = content.contains("t('") || content.contains("t(\"");
+        if has_prefixed_t {
+            // Check if any t('namespace:key') is used
+            let mut detected_ns: Vec<String> = Vec::new();
+            for line in content.lines() {
+                if let Some(pos) = line.find("t('") {
+                    let rem = &line[pos + 3..];
+                    if let Some(colon_pos) = rem.find(':') {
+                        let potential_ns = &rem[..colon_pos];
+                        if !potential_ns.contains(' ')
+                            && !potential_ns.contains('(')
+                            && !potential_ns.contains('/')
+                            && !potential_ns.is_empty()
+                            && !detected_ns.contains(&potential_ns.to_string())
+                        {
+                            detected_ns.push(potential_ns.to_string());
+                        }
+                    }
+                }
+                if let Some(pos) = line.find("t(\"") {
+                    let rem = &line[pos + 3..];
+                    if let Some(colon_pos) = rem.find(':') {
+                        let potential_ns = &rem[..colon_pos];
+                        if !potential_ns.contains(' ')
+                            && !potential_ns.contains('(')
+                            && !potential_ns.contains('/')
+                            && !potential_ns.is_empty()
+                            && !detected_ns.contains(&potential_ns.to_string())
+                        {
+                            detected_ns.push(potential_ns.to_string());
+                        }
+                    }
+                }
+            }
+
+            if !detected_ns.is_empty() {
+                // If prefixed namespaces like t('privacy:...') or t('docs:...') are used,
+                // verify that useTranslation declares them (e.g. useTranslation('privacy') or useTranslation(['privacy', ...]))
+                // or that useTranslation() is not called without arguments (falling back to common and breaking reactivity)
+                for (line_idx, line) in content.lines().enumerate() {
+                    let trimmed = line.trim();
+                    if trimmed.contains("useTranslation()") {
+                        let missing_ns = detected_ns.join(", ");
+                        if !whitelist.is_ignored(&path_str, "FRONT-I18N-NAMESPACE", line) {
+                            violations.push(Violation {
+                                rule_id: "FRONT-I18N-NAMESPACE".to_string(),
+                                rule_name: "Missing Explicit Namespace in useTranslation".to_string(),
+                                severity: Severity::Error,
+                                file_path: path_str.clone(),
+                                line_number: line_idx + 1,
+                                snippet: trimmed.to_string(),
+                                message: format!(
+                                    "Component uses namespace-prefixed translations ({}) but invokes bare useTranslation() without declaring the namespace. This causes language switching reactivity to fail or fall back to defaultNS.",
+                                    missing_ns
+                                ),
+                                suggestion: Some(format!(
+                                    "Declare namespaces explicitly: useTranslation([{}])",
+                                    detected_ns.iter().map(|n| format!("'{}'", n)).collect::<Vec<_>>().join(", ")
+                                )),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 22. FRONT-NO-HARDCODED-TEXT: Hardcoded UI Text Prohibition ────────
+    if (path_str.ends_with(".tsx") || path_str.ends_with(".jsx"))
+        && !is_common_ignored_path(&path_str)
+        && !path_str.contains("/test")
+        && !path_str.contains(".test.")
+        && !path_str.contains(".spec.")
+        && (path_str.contains("pages/") || path_str.contains("features/"))
+    {
+        for (line_idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.starts_with("{/*")
+            {
+                continue;
+            }
+            if trimmed.starts_with("import ")
+                || trimmed.starts_with("export type")
+                || trimmed.starts_with("interface ")
+                || trimmed.starts_with("console.")
+            {
+                continue;
+            }
+
+            // Detect raw hardcoded user-facing props
+            let has_hardcoded_prop = (trimmed.contains("placeholder=\"") && !trimmed.contains("{t("))
+                || (trimmed.contains("headline=\"") && !trimmed.contains("{t("))
+                || (trimmed.contains("subtitle=\"") && !trimmed.contains("{t("))
+                || (trimmed.contains("emptyMessage=\"") && !trimmed.contains("{t("));
+
+            // Detect literal Portuguese text directly embedded in JSX markup
+            let has_accented_jsx = (trimmed.contains('>') && (trimmed.contains('<') || !trimmed.ends_with(';')))
+                && trimmed.chars().any(|c| "áàâãéèêíïóôõöúçÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇ".contains(c))
+                && !trimmed.contains("t('")
+                && !trimmed.contains("t(\"")
+                && !trimmed.contains("//");
+
+            if (has_hardcoded_prop || has_accented_jsx)
+                && !whitelist.is_ignored(&path_str, "FRONT-NO-HARDCODED-TEXT", line)
+            {
+                violations.push(Violation {
+                    rule_id: "FRONT-NO-HARDCODED-TEXT".to_string(),
+                    rule_name: "Hardcoded Text in Frontend Component".to_string(),
+                    severity: Severity::Error,
+                    file_path: path_str.clone(),
+                    line_number: line_idx + 1,
+                    snippet: trimmed.to_string(),
+                    message: "Hardcoded user-facing string detected in frontend component. All UI text, placeholders, and headlines must be wrapped in useTranslation: t('namespace:key', 'Fallback').".to_string(),
+                    suggestion: Some("Extract string to src/i18n/locales/ and wrap with {t('namespace:key', ...)}.".to_string()),
+                });
+            }
+        }
+    }
+
     violations
 }

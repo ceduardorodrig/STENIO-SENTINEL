@@ -740,6 +740,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "<img src=\"/hero.jpg\" alt=\"Sumænimá Digital Bureau Hero Banner\" />\n<img src=\"/decor.png\" alt=\"\" aria-hidden=\"true\" />",
         remediation: "Add a descriptive alt=\"...\" attribute or aria-hidden=\"true\" for purely decorative graphics.",
     },
+    RuleExplanation {
+        id: "FRONT-I18N-NAMESPACE",
+        name: "Missing Explicit Namespace in useTranslation",
+        severity: "ERROR",
+        tag: "frontend",
+        summary: "Enforces declaring translation namespaces when components invoke namespace-prefixed translation keys.",
+        rationale: "When react-i18next components invoke bare useTranslation() while calling keys like t('privacy:title'), the hook only subscribes to defaultNS (common). Changing language via i18n.changeLanguage fails to trigger reactivity for undeclared namespaces, causing text to freeze or fall back to default strings.",
+        bad_example: "const { t } = useTranslation();\nreturn <h1>{t('privacy:title', 'Política')}</h1>;",
+        good_example: "const { t } = useTranslation(['privacy', 'common']);\nreturn <h1>{t('privacy:title', 'Política')}</h1>;",
+        remediation: "Explicitly declare all used namespaces in useTranslation(['namespace1', 'namespace2']).",
+    },
+    RuleExplanation {
+        id: "FRONT-NO-HARDCODED-TEXT",
+        name: "Hardcoded Text in Frontend Component",
+        severity: "ERROR",
+        tag: "frontend",
+        summary: "Prohibits hardcoded natural language strings, placeholders, and headlines in frontend JSX components without i18n.",
+        rationale: "Hardcoded strings in JSX markup or user-facing props break multilingual support and cause text to fail to translate when users switch languages. All visible text must be retrieved through the i18next hook t('namespace:key', 'Fallback').",
+        bad_example: "<p>Seu deck ainda não tem cartas.</p>\n<TextField placeholder=\"Buscar carta...\" />",
+        good_example: "<p>{t('arandu:details.empty_deck', 'Seu deck ainda não tem cartas.')}</p>\n<TextField placeholder={t('arandu:search.placeholder', 'Buscar carta...')} />",
+        remediation: "Extract the string to src/i18n/locales/ and wrap it with {t('namespace:key', ...)}.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

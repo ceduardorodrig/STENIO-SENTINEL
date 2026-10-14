@@ -331,6 +331,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "SEO-ROBOTS-SITEMAP",
                 "SEO-FAVICON-SPEC",
                 "SEO-IMG-ALT",
+                "FRONT-I18N-NAMESPACE",
+                "FRONT-NO-HARDCODED-TEXT",
             ],
         ),
         (
