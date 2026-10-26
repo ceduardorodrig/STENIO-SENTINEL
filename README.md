@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Audit Speed](https://img.shields.io/badge/scan%20latency-%3C1ms%20to%20%3C200ms-purple?style=flat-square&logo=speedtest)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Quality Gate](https://img.shields.io/badge/rule%200-anti--bypass-red?style=flat-square&logo=securityscorecard)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 
@@ -188,12 +188,9 @@ Options:
 
 ## 📜 License
 
-Dual-licensed under either:
+Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see [LICENSE](LICENSE).
 
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
-
-at your option.
+For proprietary integrations, enterprise compliance, or sovereign deployments without copyleft requirements, contact **SUMÆNIMÁ** ([ceduardorodrig@gmail.com](mailto:ceduardorodrig@gmail.com)).
 
 ---
 
