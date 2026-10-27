@@ -866,13 +866,19 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 
     // ── Missing i18n Key Test (FRONT-I18N-MISSING-KEY) ─────────────────────
     total += 1;
+    let temp_base =
+        std::env::temp_dir().join(format!("stenio_i18n_fixture_{}", std::process::id()));
+    let mock_locales = temp_base.join("src/i18n/locales/pt-br");
+    let _ = std::fs::create_dir_all(&mock_locales);
+    let mock_json = mock_locales.join("arandu.json");
+    let _ = std::fs::write(&mock_json, r#"{"grid": {"existing_key": "val"}}"#);
+    let mock_file = temp_base.join("src/features/TestComponent.tsx");
     let v_missing_key = frontend::audit_frontend_file(
-        &PathBuf::from(
-            "/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub/app/frontend-v2/src/features/TestComponent.tsx",
-        ),
+        &mock_file,
         "const label = t('arandu:grid.non_existent_ghost_key_9999', 'Fallback');",
         &Whitelist::default(),
     );
+    let _ = std::fs::remove_dir_all(&temp_base);
     if v_missing_key
         .iter()
         .any(|v| v.rule_id == "FRONT-I18N-MISSING-KEY")
