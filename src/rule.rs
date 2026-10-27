@@ -456,6 +456,18 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Return a structured HTTP error (e.g. Err(AppError::BadRequest(...))) instead of crashing the server process."),
     ));
 
+    // ── 19.1 Backend: Prohibition of Hardcoded Portuguese in API Responses ──
+    rules.push(Rule::new(
+        "BACKEND-NO-HARDCODED-TEXT",
+        "rust",
+        Severity::Error,
+        "Hardcoded Portuguese in Backend API Response",
+        "API error messages, details, and HTTP response bodies must use standardized English error codes or messages (language-policy.md). Raw Portuguese text in API responses breaks client i18n.",
+        r#"(?i)((json!\s*\(\s*\{|"(error|detail|message)"\s*:|StatusCode::|not_found_if_zero|delete_response|return\s+Err|erros\.push).*("[^"]*[áàâãéèêíïóôõöúçÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇ][^"]*"|"[^"]*\b(erro|erros|falha|falhas|sucesso|obrigatorio|obrigatório|obrigatória|invalido|inválido|inválida|nao encontrado|não encontrado|nao encontrada|não encontrada|permissao|permissão|banco de dados|usuario|usuário|jogador|dados excluídos|restrito|telefone)\b[^"]*"))|"[^"]*\b(telefone inválido|telefone invalido|acesso restrito)\b[^"]*"#,
+        &["rs"],
+        Some("Replace Portuguese text in API responses with standard English error codes or envelopes (e.g. json!({\"error\": \"RESOURCE_NOT_FOUND\", \"detail\": \"...\"}))."),
+    ));
+
     // ── 20. Architecture: Mandatory DRY (Don't Repeat Yourself) Principle ──
     rules.push(Rule::new(
         "ARCH-DRY-DUPLICATION",

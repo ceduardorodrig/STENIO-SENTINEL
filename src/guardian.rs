@@ -279,6 +279,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "CODE-NO-EMPTY-CATCH",
                 "BACKEND-BLOCKING-IO",
                 "BACKEND-NO-PANIC",
+                "BACKEND-NO-HARDCODED-TEXT",
                 "ARCH-DRY-DUPLICATION",
                 "ARCH-SCOPE-ISOLATION",
                 "PERF-GPU-ZERO-REPAINT",

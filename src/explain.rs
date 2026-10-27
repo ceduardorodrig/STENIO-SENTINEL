@@ -762,6 +762,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "<p>{t('arandu:details.empty_deck', 'Seu deck ainda não tem cartas.')}</p>\n<TextField placeholder={t('arandu:search.placeholder', 'Buscar carta...')} />",
         remediation: "Extract the string to src/i18n/locales/ and wrap it with {t('namespace:key', ...)}.",
     },
+    RuleExplanation {
+        id: "BACKEND-NO-HARDCODED-TEXT",
+        name: "Hardcoded Portuguese in Backend API Responses",
+        severity: "ERROR",
+        tag: "rust",
+        summary: "Prohibits hardcoded Portuguese strings in HTTP error responses, JSON payloads, and status bodies.",
+        rationale: "API response envelopes represent machine-to-machine contracts. Embedding localized Portuguese text in error bodies prevents multi-language UI translation, breaks client schema assumptions, and pollutes API diagnostics. Standardized English error codes or clean English messages must be used.",
+        bad_example: "return (StatusCode::BAD_REQUEST, Json(json!({\"error\": \"Erro no banco de dados\"}))).into_response();",
+        good_example: "return (StatusCode::BAD_REQUEST, Json(json!({\"error\": \"DATABASE_ERROR\", \"detail\": \"Database query failed\"}))).into_response();",
+        remediation: "Replace raw Portuguese text with standardized English error codes (e.g. RESOURCE_NOT_FOUND, INVALID_PAYLOAD) or clean English detail strings.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

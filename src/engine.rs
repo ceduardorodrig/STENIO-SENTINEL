@@ -415,6 +415,7 @@ impl Engine {
                 || rule.id == "RUST-SPAWN-ERROR-HANDLING"
                 || rule.id == "BACKEND-BLOCKING-IO"
                 || rule.id == "BACKEND-NO-PANIC"
+                || rule.id == "BACKEND-NO-HARDCODED-TEXT"
             {
                 if !path_str.contains("app/server/src/")
                     || path_str.contains("/bin/")
@@ -505,10 +506,20 @@ impl Engine {
                     }
 
                     if re.is_match(line) {
+                        // Skip pure comments for hardcoded text rules
+                        if rule.id == "BACKEND-NO-HARDCODED-TEXT"
+                            && (trimmed.starts_with("//")
+                                || trimmed.starts_with("/*")
+                                || trimmed.starts_with("*"))
+                        {
+                            continue;
+                        }
+
                         // If rule is exclusive to production Rust code, ignore within test scope
                         if in_test_scope
                             && (rule.id == "RUST-NO-UNWRAP"
                                 || rule.id == "BACKEND-NO-PANIC"
+                                || rule.id == "BACKEND-NO-HARDCODED-TEXT"
                                 || rule.id == "RUST-NO-UNBOUNDED-CHANNEL")
                         {
                             continue;

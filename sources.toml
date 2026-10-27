@@ -1,0 +1,177 @@
+# ============================================================================
+# Reconciliation sources — observed reality vs declared documents (HB-052)
+# ============================================================================
+#
+# Every `[[source]]` block is ONE read-only observation of ONE host. Adding a
+# host, or an observation kind, is a DATA edit here — never an engine change.
+# The engine (`stenio --reconcile`) runs each enabled source, feeds the output
+# through the matching generic extractor, and compares the observed entity set
+# with the declared set (the service catalogue) to emit:
+#
+#   REALITY-UNDECLARED   observed entity that no document declares
+#   DECLARATION-STALE    declared entity that is no longer observed
+#   PURPOSE-MISSING      declared row without a purpose/owner column value
+#   POLICY-UNDERIVABLE   Tailscale grant not derivable from the declaration
+#
+# Fields per source:
+#   host      — the node the entities belong to (matches the catalogue section)
+#   transport — "local" (run here) or "ssh" (via crate::remote::run_ssh)
+#   parser    — the generic extractor used to read the command output:
+#                 docker_names  one container name per line (Swarm task suffix
+#                               `service.<slot>.<hash>` is stripped)
+#                 systemd_units "<unit>\t<fragment-path>" per line; a fragment
+#                               under /etc/systemd/system or ~/.config/systemd
+#                               is "operator-managed" — base-OS units are still
+#                               seen for staleness but hidden from drift
+#                 ss_processes  `ss -Htlpn` output; process names owning a socket
+#                 plain_lines   one entity name per line
+#   command   — the exact read-only shell command (run with `sh -c`)
+#   enabled   — false keeps a block documented but inert
+#   include / exclude — optional globs (only `*`) applied to observed names
+#                       before the REALITY-UNDECLARED verdict
+#   timeout_secs — SSH timeout hint (default 8)
+#
+# NEVER GUESS: a source that cannot be read (SSH auth, timeout, non-zero exit)
+# or a table that cannot be parsed is reported as SKIPPED, never as a violation.
+# ============================================================================
+
+[reconcile]
+# Documents the engine reconciles the observed reality against.
+catalog = "mnemocine/services-catalog.md"
+# The Tailscale policy is a declaration too (GitOps, private repo MNEMOCINE-ACL).
+# It is only READ here — the engine never edits the policy.
+policy = "/mnt/NVME_PCI/homelab/mnemocine-acl/policy.hujson"
+# "Documented routes": subnet routes, peer relays and exit nodes are declared in
+# the network notes; a policy grant targeting them is derivable.
+route_docs = [
+  "mnemocine/network/tailscale.md",
+  "mnemocine/network/topology.md",
+]
+# A declared row carrying one of these markers is an intentional absence and is
+# exempt from DECLARATION-STALE (e.g. "COLD — exited", "replicas: 0", planned).
+exempt_markers = [
+  "planned",
+  "retired",
+  "cold",
+  "decommissioned",
+  "exited",
+  "dormant",
+  "standby",
+  "helper",
+]
+
+# ── Aliases: declared (colloquial) name -> observed (runtime) name ───────────
+# Both sides are normalised first (lowercase; `.`/`/`/space -> '-'). Keep this
+# list tiny: an alias records a naming fact, it is not a way to silence a
+# finding. A name that is genuinely absent must stay a DECLARATION-STALE.
+[aliases]
+"rpc-mountd" = "nfs-mountd"
+"waydroid" = "waydroid-container"
+"dnsmasq" = "libvirtd"
+"nfsd" = "nfs-server"
+
+# ============================================================================
+# psicopompo — workstation, GPU host, NAS (also the machine that runs Stenio)
+# ============================================================================
+[[source]]
+host = "psicopompo"
+transport = "local"
+parser = "docker_names"
+command = "docker ps --format '{{.Names}}'"
+
+[[source]]
+host = "psicopompo"
+transport = "local"
+parser = "systemd_units"
+command = "systemctl list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl show -p FragmentPath --value \"$u\")\"; done"
+# Tuning / boot-ordering helpers live under /etc but are not catalogue services.
+exclude = ["disable-*", "tailscaled-wait", "*-wait"]
+
+[[source]]
+host = "psicopompo"
+transport = "local"
+parser = "systemd_units"
+command = "systemctl --user list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl --user show -p FragmentPath --value \"$u\")\"; done"
+# Desktop session components live under ~/.config but are not homelab services.
+exclude = ["xsettingsd", "dconf", "gnome-keyring*", "*-portal*", "gvfs-*"]
+
+# ============================================================================
+# kavure — Swarm manager & core services node
+# ============================================================================
+[[source]]
+host = "kavure"
+transport = "ssh"
+parser = "docker_names"
+command = "docker ps --format '{{.Names}}'"
+
+[[source]]
+host = "kavure"
+transport = "ssh"
+parser = "systemd_units"
+command = "systemctl list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl show -p FragmentPath --value \"$u\")\"; done"
+
+# ============================================================================
+# ybyra — cloud primary edge (Swarm worker)
+# ============================================================================
+[[source]]
+host = "ybyra"
+transport = "ssh"
+parser = "docker_names"
+command = "docker ps --format '{{.Names}}'"
+
+[[source]]
+host = "ybyra"
+transport = "ssh"
+parser = "systemd_units"
+command = "systemctl list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl show -p FragmentPath --value \"$u\")\"; done"
+# `snap.*` units are managed by the package manager (OCI cloud agent), not the
+# operator's service catalogue.
+exclude = ["snap.*"]
+
+# ============================================================================
+# ybytu — cloud exit node & auxiliary DNS
+# ============================================================================
+[[source]]
+host = "ybytu"
+transport = "ssh"
+parser = "docker_names"
+command = "docker ps --format '{{.Names}}'"
+
+[[source]]
+host = "ybytu"
+transport = "ssh"
+parser = "systemd_units"
+command = "systemctl list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl show -p FragmentPath --value \"$u\")\"; done"
+
+# ============================================================================
+# kuaray — media + Miracena (standalone Docker, not a Swarm node)
+# ============================================================================
+[[source]]
+host = "kuaray"
+transport = "ssh"
+parser = "docker_names"
+command = "docker ps --format '{{.Names}}'"
+
+[[source]]
+host = "kuaray"
+transport = "ssh"
+parser = "systemd_units"
+command = "systemctl list-units --type=service --state=active --no-legend --no-pager --plain | awk '{print $1}' | while read -r u; do printf '%s\\t%s\\n' \"$u\" \"$(systemctl show -p FragmentPath --value \"$u\")\"; done"
+
+# ============================================================================
+# kururu — Alpine ARM probe: NO Docker, NO systemd. Observation of a systemd
+# unit would be meaningless, so the node is intentionally left without a source
+# (the catalogue's kururu declarations are therefore not stale-checked).
+# ============================================================================
+
+# ── Socket observation (documented, disabled) ───────────────────────────────
+# `ss` yields process names (`docker-proxy`, `systemd-resolved`, …) that do not
+# map 1:1 to catalogue service names, so a socket source would produce false
+# positives. It is shipped DISABLED as the template for a host whose sockets are
+# worth reconciling. Enable per host when a reliable name mapping exists.
+[[source]]
+host = "psicopompo"
+transport = "local"
+parser = "ss_processes"
+enabled = false
+command = "ss -Htlpn"

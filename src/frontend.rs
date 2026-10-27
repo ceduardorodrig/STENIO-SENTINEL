@@ -3,6 +3,43 @@ use crate::engine::Violation;
 use crate::rule::Severity;
 use std::path::Path;
 
+fn find_locales_dir(path: &Path) -> Option<std::path::PathBuf> {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        let candidate = dir.join("src/i18n/locales/pt-br");
+        if candidate.is_dir() {
+            return Some(dir.join("src/i18n/locales"));
+        }
+        let candidate_app = dir.join("app/frontend-v2/src/i18n/locales/pt-br");
+        if candidate_app.is_dir() {
+            return Some(dir.join("app/frontend-v2/src/i18n/locales"));
+        }
+        current = dir.parent();
+    }
+    let fallback = std::path::PathBuf::from(
+        "/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub/app/frontend-v2/src/i18n/locales",
+    );
+    if fallback.join("pt-br").is_dir() {
+        Some(fallback)
+    } else {
+        None
+    }
+}
+
+fn key_exists_in_json(json: &serde_json::Value, key_path: &str) -> bool {
+    if json.get(key_path).is_some() {
+        return true;
+    }
+    let mut current = json;
+    for part in key_path.split('.') {
+        match current.get(part) {
+            Some(next) => current = next,
+            None => return false,
+        }
+    }
+    true
+}
+
 pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) -> Vec<Violation> {
     let mut violations = Vec::new();
     let path_str = path.to_string_lossy().to_string();
@@ -130,6 +167,35 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                         suggestion: Some("Replace raw hex classes (e.g. bg-[#...]) with M3 tokens: bg-surface, text-primary, border-outline.".to_string()),
                     });
                 }
+            }
+        }
+    }
+
+    // ── 5B. FRONT-NO-OFF-SPEC-BUTTON: Cores Rígidas e Botões Fora da Spec MD3 ──
+    if path_str.ends_with(".css") || path_str.ends_with(".tsx") || path_str.ends_with(".ts") {
+        for (line_idx, line) in content.lines().enumerate() {
+            let lower = line.to_lowercase();
+            let is_hardcoded_button = (lower.contains("--md-filled-button-container-color")
+                || lower.contains("--md-button-container-color")
+                || (lower.contains(".btn-google") && lower.contains("background")))
+                && (lower.contains("rgb(255, 255, 255)")
+                    || lower.contains("#ffffff")
+                    || lower.contains(" white"))
+                && !lower.contains("var(");
+
+            if is_hardcoded_button
+                && !whitelist.is_ignored(&path_str, "FRONT-NO-OFF-SPEC-BUTTON", line)
+            {
+                violations.push(Violation {
+                    rule_id: "FRONT-NO-OFF-SPEC-BUTTON".to_string(),
+                    rule_name: "Hardcoded Button Container Color".to_string(),
+                    severity: Severity::Error,
+                    file_path: path_str.clone(),
+                    line_number: line_idx + 1,
+                    snippet: line.trim().to_string(),
+                    message: "Botões no Sumænimá Hub devem herdar tokens dinâmicos MD3 (var(--theme-primary) / var(--theme-on-primary)). Proibido forçar cores rígidas brancas (#ffffff / rgb(255, 255, 255)) em contêineres de botões.".to_string(),
+                    suggestion: Some("Remova a estilização estática e use var(--theme-primary) para conformidade com o tema da rota ativa.".to_string()),
+                });
             }
         }
     }
@@ -736,14 +802,212 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
     }
 
+    // ── 21B. FRONT-I18N-MISSING-KEY: Translation Keys Must Exist in Locales ──
+    if (path_str.ends_with(".tsx") || path_str.ends_with(".ts"))
+        && !path_str.ends_with(".d.ts")
+        && !path_str.contains("/test")
+        && (path_str.contains("pages/")
+            || path_str.contains("features/")
+            || path_str.contains("components/"))
+    {
+        if let Some(locales_dir) = find_locales_dir(path) {
+            for (line_idx, line) in content.lines().enumerate() {
+                let mut search_from = 0;
+                while let Some(rel_pos) = line[search_from..]
+                    .find("t('")
+                    .or_else(|| line[search_from..].find("t(\""))
+                {
+                    let call_start = search_from + rel_pos;
+                    let quote_char = line.as_bytes()[call_start + 2] as char;
+                    let str_start = call_start + 3;
+                    if let Some(str_len) = line[str_start..].find(quote_char) {
+                        let key_arg = &line[str_start..str_start + str_len];
+                        search_from = str_start + str_len + 1;
+
+                        if let Some(colon_pos) = key_arg.find(':') {
+                            let ns = &key_arg[..colon_pos];
+                            let key_path = &key_arg[colon_pos + 1..];
+
+                            if !ns.contains(' ')
+                                && !key_path.contains(' ')
+                                && !key_path.contains('$')
+                                && !key_path.is_empty()
+                            {
+                                for lang in &["pt-br", "en"] {
+                                    let json_file =
+                                        locales_dir.join(lang).join(format!("{}.json", ns));
+                                    if json_file.is_file() {
+                                        if let Ok(json_content) =
+                                            std::fs::read_to_string(&json_file)
+                                        {
+                                            if let Ok(parsed) =
+                                                serde_json::from_str::<serde_json::Value>(
+                                                    &json_content,
+                                                )
+                                            {
+                                                if !key_exists_in_json(&parsed, key_path) {
+                                                    if !whitelist.is_ignored(
+                                                        &path_str,
+                                                        "FRONT-I18N-MISSING-KEY",
+                                                        key_arg,
+                                                    ) {
+                                                        violations.push(Violation {
+                                                            rule_id: "FRONT-I18N-MISSING-KEY".to_string(),
+                                                            rule_name: "Missing Key in i18n Translation Dictionary".to_string(),
+                                                            severity: Severity::Error,
+                                                            file_path: path_str.clone(),
+                                                            line_number: line_idx + 1,
+                                                            snippet: line.trim().to_string(),
+                                                            message: format!(
+                                                                "Translation key '{}:{}' invoked in component does not exist in {}/{}.json. Fallback strings will leak into production.",
+                                                                ns, key_path, lang, ns
+                                                            ),
+                                                            suggestion: Some(format!(
+                                                                "Add '{}' under the appropriate object path in {}/{}.json.",
+                                                                key_path, lang, ns
+                                                            )),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // ── 22. FRONT-NO-HARDCODED-TEXT: Hardcoded UI Text Prohibition ────────
     if (path_str.ends_with(".tsx") || path_str.ends_with(".jsx"))
         && !is_common_ignored_path(&path_str)
         && !path_str.contains("/test")
         && !path_str.contains(".test.")
         && !path_str.contains(".spec.")
-        && (path_str.contains("pages/") || path_str.contains("features/"))
+        && !path_str.contains("/types/")
+        && !path_str.contains(".d.ts")
+        && (path_str.contains("pages/")
+            || path_str.contains("features/")
+            || path_str.contains("components/"))
     {
+        const PT_STOP_WORDS: &[&str] = &[
+            "buscar",
+            "busca",
+            "cartas",
+            "carta",
+            "projetos",
+            "projeto",
+            "reunião",
+            "reuniao",
+            "salvar",
+            "cancelar",
+            "fechar",
+            "sair",
+            "entrar",
+            "carregar",
+            "nenhum",
+            "gravar",
+            "gravação",
+            "gravacao",
+            "tempo",
+            "total",
+            "saldo",
+            "tokens",
+            "valor",
+            "preço",
+            "preco",
+            "pontos",
+            "adicionar",
+            "remover",
+            "excluir",
+            "editar",
+            "detalhes",
+            "configurações",
+            "configuracoes",
+            "termo",
+            "termos",
+            "palavra",
+            "palavras",
+            "descrição",
+            "descricao",
+            "título",
+            "titulo",
+            "nome",
+            "documento",
+            "documentos",
+            "pasta",
+            "pastas",
+            "troca",
+            "trocas",
+            "venda",
+            "vendas",
+            "lista",
+            "listas",
+            "desejo",
+            "desejos",
+            "usuário",
+            "usuario",
+            "conta",
+            "contas",
+            "idioma",
+            "ajuda",
+            "sobre",
+            "contato",
+            "voltar",
+            "avançar",
+            "avancar",
+            "concluir",
+            "finalizar",
+            "iniciar",
+            "parar",
+            "pausar",
+            "continuar",
+            "limpar",
+            "atualizar",
+            "baixar",
+            "texto",
+            "novo",
+            "nova",
+            "novos",
+            "novas",
+            "minhas",
+            "meus",
+            "minha",
+            "meu",
+            "sua",
+            "seu",
+            "suas",
+            "seus",
+            "para",
+            "travar",
+            "destravar",
+            "bloquear",
+            "desbloquear",
+            "edição",
+            "edicao",
+            "liberada",
+            "pronto",
+        ];
+
+        let user_props = [
+            "placeholder=\"",
+            "headline=\"",
+            "subtitle=\"",
+            "emptyMessage=\"",
+            "emptyTitle=\"",
+            "label=\"",
+            "title=\"",
+            "confirmLabel=\"",
+            "cancelLabel=\"",
+            "buttonText=\"",
+            "downloadTranscriptLabel=\"",
+        ];
+
         for (line_idx, line) in content.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("//")
@@ -761,20 +1025,109 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                 continue;
             }
 
-            // Detect raw hardcoded user-facing props
-            let has_hardcoded_prop = (trimmed.contains("placeholder=\"") && !trimmed.contains("{t("))
-                || (trimmed.contains("headline=\"") && !trimmed.contains("{t("))
-                || (trimmed.contains("subtitle=\"") && !trimmed.contains("{t("))
-                || (trimmed.contains("emptyMessage=\"") && !trimmed.contains("{t("));
+            // (A) Detect raw hardcoded user-facing props
+            let mut has_hardcoded_prop = false;
+            for prop in &user_props {
+                if let Some(pos) = trimmed.find(prop) {
+                    let rest = &trimmed[pos + prop.len()..];
+                    if let Some(end_quote) = rest.find('"') {
+                        let prop_val = &rest[..end_quote];
+                        if !prop_val.starts_with("http")
+                            && !prop_val.starts_with("/api")
+                            && prop_val.len() > 1
+                            && ![
+                                "icon",
+                                "submit",
+                                "button",
+                                "sm",
+                                "md",
+                                "lg",
+                                "primary",
+                                "brand",
+                                "text",
+                                "secondary",
+                            ]
+                            .contains(&prop_val)
+                        {
+                            let lower_val = prop_val.to_lowercase();
+                            let contains_pt_stop = PT_STOP_WORDS.iter().any(|w| {
+                                lower_val
+                                    .split(|c: char| !c.is_alphanumeric())
+                                    .any(|token| token == *w)
+                            });
+                            let has_accent = prop_val
+                                .chars()
+                                .any(|c| "áàâãéèêíïóôõöúçÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇ".contains(c));
+                            if contains_pt_stop || has_accent {
+                                has_hardcoded_prop = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
 
-            // Detect literal Portuguese text directly embedded in JSX markup
-            let has_accented_jsx = (trimmed.contains('>') && (trimmed.contains('<') || !trimmed.ends_with(';')))
-                && trimmed.chars().any(|c| "áàâãéèêíïóôõöúçÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇ".contains(c))
-                && !trimmed.contains("t('")
-                && !trimmed.contains("t(\"")
-                && !trimmed.contains("//");
+            // (B) Detect literal Portuguese text directly embedded in JSX markup
+            let mut has_hardcoded_jsx_text = false;
+            if !trimmed.ends_with(';') && !trimmed.contains("=>") && trimmed.contains('>') {
+                // Strip out JSX expressions enclosed in {...} to avoid matching JS properties like {item.nome}
+                let mut stripped = String::with_capacity(trimmed.len());
+                let mut depth = 0;
+                for c in trimmed.chars() {
+                    if c == '{' {
+                        depth += 1;
+                    } else if c == '}' {
+                        if depth > 0 {
+                            depth -= 1;
+                        }
+                    } else if depth == 0 {
+                        stripped.push(c);
+                    }
+                }
 
-            if (has_hardcoded_prop || has_accented_jsx)
+                let is_pure_icon = stripped.contains("<md-icon")
+                    && stripped.contains("</md-icon>")
+                    && !stripped.contains("<div")
+                    && !stripped.contains("<span")
+                    && !stripped.contains("<button")
+                    && !stripped.contains("<p");
+                if !is_pure_icon
+                    && !stripped.contains("t('")
+                    && !stripped.contains("t(\"")
+                    && !stripped.contains("//")
+                {
+                    let mut in_tag = false;
+                    let mut inner_text = String::new();
+                    for c in stripped.chars() {
+                        if c == '<' {
+                            in_tag = true;
+                        } else if c == '>' {
+                            in_tag = false;
+                            inner_text.push(' ');
+                        } else if !in_tag {
+                            inner_text.push(c);
+                        }
+                    }
+
+                    let clean_inner = inner_text.trim();
+                    if !clean_inner.is_empty() {
+                        let has_accent = clean_inner
+                            .chars()
+                            .any(|c| "áàâãéèêíïóôõöúçÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇ".contains(c));
+                        let lower_inner = clean_inner.to_lowercase();
+                        let contains_pt_stop = PT_STOP_WORDS.iter().any(|w| {
+                            lower_inner
+                                .split(|c: char| !c.is_alphanumeric())
+                                .any(|token| token == *w)
+                        });
+                        if has_accent || contains_pt_stop {
+                            has_hardcoded_jsx_text = true;
+                        }
+                    }
+                }
+            }
+
+            if (has_hardcoded_prop || has_hardcoded_jsx_text)
                 && !whitelist.is_ignored(&path_str, "FRONT-NO-HARDCODED-TEXT", line)
             {
                 violations.push(Violation {
@@ -784,7 +1137,7 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
                     file_path: path_str.clone(),
                     line_number: line_idx + 1,
                     snippet: trimmed.to_string(),
-                    message: "Hardcoded user-facing string detected in frontend component. All UI text, placeholders, and headlines must be wrapped in useTranslation: t('namespace:key', 'Fallback').".to_string(),
+                    message: "Hardcoded user-facing string detected in frontend component. All UI text, placeholders, labels, and headlines must be wrapped in useTranslation: t('namespace:key', 'Fallback').".to_string(),
                     suggestion: Some("Extract string to src/i18n/locales/ and wrap with {t('namespace:key', ...)}.".to_string()),
                 });
             }

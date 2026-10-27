@@ -632,6 +632,18 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         false
     );
     check_case!(
+        "Backend Portuguese Error",
+        "BACKEND-NO-HARDCODED-TEXT",
+        r#"Json(serde_json::json!({ "error": "Erro no banco de dados" }))"#, // stenio-ignore: BACKEND-NO-HARDCODED-TEXT
+        true
+    );
+    check_case!(
+        "Backend English Error OK",
+        "BACKEND-NO-HARDCODED-TEXT",
+        r#"Json(serde_json::json!({ "error": "DATABASE_ERROR", "detail": "Database offline" }))"#,
+        false
+    );
+    check_case!(
         "Zero-Repaint Box-Shadow",
         "PERF-GPU-ZERO-REPAINT",
         "transition: box-shadow 0.3s ease;", // stenio-ignore: PERF-GPU-ZERO-REPAINT
@@ -824,6 +836,58 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             "   ❌ Test {:<24} [{}] - FAILED",
             "Hardcoded UI Text in JSX",
             "FRONT-NO-HARDCODED-TEXT".red()
+        );
+    }
+
+    // ── Hardcoded Button Color Test (FRONT-NO-OFF-SPEC-BUTTON) ───────────
+    total += 1;
+    let v_btn_bad = frontend::audit_frontend_file(
+        &PathBuf::from("frontend/src/index.css"),
+        ".btn-google { --md-filled-button-container-color: rgb(255, 255, 255) !important; }",
+        &Whitelist::default(),
+    );
+    if v_btn_bad
+        .iter()
+        .any(|v| v.rule_id == "FRONT-NO-OFF-SPEC-BUTTON")
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Hardcoded Button Color",
+            "FRONT-NO-OFF-SPEC-BUTTON".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Hardcoded Button Color",
+            "FRONT-NO-OFF-SPEC-BUTTON".red()
+        );
+    }
+
+    // ── Missing i18n Key Test (FRONT-I18N-MISSING-KEY) ─────────────────────
+    total += 1;
+    let v_missing_key = frontend::audit_frontend_file(
+        &PathBuf::from(
+            "/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub/app/frontend-v2/src/features/TestComponent.tsx",
+        ),
+        "const label = t('arandu:grid.non_existent_ghost_key_9999', 'Fallback');",
+        &Whitelist::default(),
+    );
+    if v_missing_key
+        .iter()
+        .any(|v| v.rule_id == "FRONT-I18N-MISSING-KEY")
+    {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Missing i18n Dict Key",
+            "FRONT-I18N-MISSING-KEY".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Missing i18n Dict Key",
+            "FRONT-I18N-MISSING-KEY".red()
         );
     }
 
