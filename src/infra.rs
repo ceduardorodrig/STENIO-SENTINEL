@@ -416,6 +416,88 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
                         ));
                     }
 
+
+                    // Security / Least-Privilege Rule: docker.sock mounting guard (Incident 2026-10 follow-up)
+                    // Regular application services must NEVER mount docker.sock. Infrastructure services must mount read-only (:ro)
+                    // unless documented as an authorized agent (autoheal, watchtower, dockerproxy).
+                    if let Some(volumes) = svc_val.get("volumes").and_then(|v| v.as_sequence()) {
+                        for vol in volumes {
+                            if let Some(vol_str) = vol.as_str() {
+                                if vol_str.contains("/var/run/docker.sock") {
+                                    let is_infra_exempt = svc_name == "autoheal" 
+                                        || svc_name == "watchtower" 
+                                        || svc_name == "dockerproxy" 
+                                        || svc_name == "tecnativa-dockerproxy";
+                                    let is_ro = vol_str.ends_with(":ro");
+
+                                    if !is_infra_exempt && !is_ro {
+                                        findings.push((
+                                            "SEC-COMPOSE-DOCKER-SOCK-RW",
+                                            "Dangerous Read-Write docker.sock Mount",
+                                            Severity::Error,
+                                            format!(
+                                                "Service '{}' mounts '/var/run/docker.sock' with write privileges. A compromised container gains root-equivalent control over the Docker daemon host.",
+                                                svc_name
+                                            ),
+                                            Some(format!(
+                                                "Remove '/var/run/docker.sock' or mount it as read-only ('/var/run/docker.sock:/var/run/docker.sock:ro') and proxy requests through 'dockerproxy'."
+                                            )),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Security / Least-Privilege Rule: Shared Secret Pool anti-pattern (Incident 2026-10)
+                    // Services must not bind the monolithic '.env' file directly.
+                    if let Some(env_file) = svc_val.get("env_file") {
+                        let is_monolithic = match env_file {
+                            serde_yaml::Value::String(f) => f == ".env" || f == "./.env",
+                            serde_yaml::Value::Sequence(seq) => seq.iter().any(|item| {
+                                item.as_str().map(|f| f == ".env" || f == "./.env").unwrap_or(false)
+                            }),
+                            _ => false,
+                        };
+                        if is_monolithic {
+                            findings.push((
+                                "SEC-COMPOSE-LEAST-PRIVILEGE-ENV",
+                                "Shared Monolithic Secret Pool (.env)",
+                                Severity::Warning,
+                                format!(
+                                    "Service '{}' binds the entire monolithic '.env'. This violates Least-Privilege / Need-to-Know (Incident 2026-10). A compromised container will read all stack secrets.",
+                                    svc_name
+                                ),
+                                Some(format!(
+                                    "Split '.env' into a service-scoped bundle (e.g. './env/{}.env' or generated via gen-envs.sh) containing only variables used by this service.",
+                                    svc_name
+                                )),
+                            ));
+                        }
+                    }
+
+                    // Image Hygiene: Stateful engines (WordPress, MariaDB, Postgres) must pin versions (never :latest)
+                    if let Some(img) = svc_val.get("image").and_then(|v| v.as_str()) {
+                        let is_stateful_app = svc_name.contains("wordpress")
+                            || svc_name.contains("mariadb")
+                            || svc_name.contains("postgres");
+                        if is_stateful_app && (img.ends_with(":latest") || !img.contains(':')) {
+                            findings.push((
+                                "SEC-COMPOSE-PINNED-IMAGE",
+                                "Unpinned Image Tag on Critical Stateful Service",
+                                Severity::Warning,
+                                format!(
+                                    "Service '{}' uses unpinned image tag '{}'. Core application and database services must pin exact semantic release versions to prevent uncontrolled upstream drift and breaking changes.",
+                                    svc_name, img
+                                ),
+                                Some(format!(
+                                    "Pin service '{}' to a specific release tag (e.g. '{}:<version>').",
+                                    svc_name, img.split(':').next().unwrap_or(img)
+                                )),
+                            ));
+                        }
+                    }
+
                     // GPU centralization: a compose service that claims the GPU
                     // must be a registered consumer of the gateway (hl-infer).
                     // Otherwise inference bypasses VRAM arbitration entirely.
@@ -578,7 +660,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         let is_text_or_config = matches!(
             ext,
-            "yml" | "yaml" | "env" | "json" | "sh" | "conf" | "service" | "md"
+            "yml" | "yaml" | "env" | "json" | "sh" | "conf" | "service" | "md" | "php" | "htaccess"
         );
 
         if is_text_or_config {
@@ -782,6 +864,25 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 {
                     violations.push(violation);
                 }
+
+                // ── 4. WordPress Hardening Guard (SEC-WORDPRESS-HARDENING) ────
+                if file_name == "wp-config.php" {
+                    if !content.contains("DISALLOW_FILE_EDIT")
+                        || content.contains("define('DISALLOW_FILE_EDIT', false)")
+                        || content.contains("define( 'DISALLOW_FILE_EDIT', false )")
+                    {
+                        violations.push(Violation {
+                            rule_id: "SEC-WORDPRESS-HARDENING".to_string(),
+                            rule_name: "WordPress In-Dashboard File Editing Enabled".to_string(),
+                            severity: Severity::Error,
+                            file_path: path_str.clone(),
+                            line_number: 1,
+                            snippet: "wp-config.php".to_string(),
+                            message: "WordPress configuration is missing DISALLOW_FILE_EDIT. In-dashboard file editing allows code execution on compromised admin accounts (Incident 2026-10).".to_string(),
+                            suggestion: Some("Add \"define( 'DISALLOW_FILE_EDIT', true );\" to wp-config.php.".to_string()),
+                        });
+                    }
+                }
             }
         }
 
@@ -862,10 +963,26 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                     }
                 }
             }
+
+            // ── 8. Prohibited High-Risk Plugins (SEC-WORDPRESS-BANNED-PLUGIN) ────
+            if path_str.contains("wp-content/plugins/wp-file-manager")
+                || path_str.contains("wp-content/plugins/file-manager-advanced")
+            {
+                violations.push(Violation {
+                    rule_id: "SEC-WORDPRESS-BANNED-PLUGIN".to_string(),
+                    rule_name: "Prohibited High-Risk WordPress Plugin Detected".to_string(),
+                    severity: Severity::Error,
+                    file_path: path_str.clone(),
+                    line_number: 1,
+                    snippet: path_str.clone(),
+                    message: "Plugin 'wp-file-manager' is strictly banned across all homelab environments (Incident 2026-10 vector).".to_string(),
+                    suggestion: Some("Permanently delete the vulnerable plugin directory from wp-content/plugins/.".to_string()),
+                });
+            }
         }
     }
 
-    // ── 7. Production Static Parity Verification (OPS-STATIC-PARITY) ──────
+    // ── 9. Production Static Parity Verification (OPS-STATIC-PARITY) ──────
     if let Some(parity) = crate::deploy::check_static_parity(root) {
         if !parity.in_sync {
             violations.push(Violation {
