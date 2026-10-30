@@ -16,7 +16,7 @@ COPY src ./src
 RUN cargo build --release && strip target/release/stenio
 
 # ── Stage 2: Minimal Production Runtime ─────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
