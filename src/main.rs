@@ -11,7 +11,9 @@ mod config;
 mod context;
 mod cv;
 mod deploy;
+mod directus;
 mod doc;
+mod docker;
 mod dry;
 mod dry_ast;
 mod engine;
@@ -20,18 +22,21 @@ mod frontend;
 mod gaming;
 mod gov;
 mod gpu;
+mod graph;
 mod guardian;
 mod health;
 mod homelab;
 mod infra;
 mod learner;
 mod mcp;
+mod mcp_server;
 mod mesh;
 mod migrations;
 mod ports;
 mod reconcile;
 pub mod remote;
 mod rule;
+mod semantic;
 mod tools;
 mod typegen;
 mod util;
@@ -209,6 +214,44 @@ struct Args {
 
     #[arg(
         long,
+        alias = "mcp-server-sse",
+        help = "MCP Server SSE mode: run as Model Context Protocol HTTP Server-Sent Events daemon on local network (for Directus, AI Chat, remote agents)"
+    )]
+    mcp_sse: bool,
+
+    #[arg(
+        long,
+        value_name = "HOST",
+        default_value = "0.0.0.0",
+        help = "Bind host/IP for MCP SSE HTTP server (e.g. 100.82.51.112 for Tailscale only)"
+    )]
+    mcp_host: String,
+
+    #[arg(
+        long,
+        value_name = "PORT",
+        default_value = "9099",
+        help = "Port for MCP SSE HTTP server (default: 9099)"
+    )]
+    mcp_port: u16,
+
+    #[arg(
+        long,
+        value_name = "QUERY",
+        help = "Local offline semantic search over vault documents using TF-IDF vectorization (<5ms, zero external API keys)"
+    )]
+    semantic: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "5",
+        help = "Number of top semantic matches to return (default: 5)"
+    )]
+    top_k: usize,
+
+    #[arg(
+        long,
         num_args = 0..=1,
         default_missing_value = "all",
         help = "Display detailed technical documentation, bad/good examples, and remediation for rules (e.g. --explain SEC-SUDO, --explain RUST-NO-UNWRAP)"
@@ -260,6 +303,58 @@ struct Args {
         help = "Search the backlog queue and the archive for a term (find recurrences); implies --backlog"
     )]
     search: Option<String>,
+
+    #[arg(
+        long,
+        help = "Audit knowledge graph topology (nodes, edges, hubs, density) using petgraph"
+    )]
+    graph: bool,
+
+    #[arg(
+        long,
+        help = "List all unreferenced orphan documents in the vault"
+    )]
+    graph_orphans: bool,
+
+    #[arg(
+        long,
+        help = "Export the vault knowledge graph in Graphviz DOT format"
+    )]
+    graph_dot: bool,
+
+    #[arg(
+        long,
+        help = "Audit Directus relational schemas, currency formatting, and governance rules in Rust"
+    )]
+    directus: bool,
+
+    #[arg(
+        long,
+        value_name = "URL",
+        help = "Directus base URL (default: http://100.94.209.99:8055 or DIRECTUS_URL env)"
+    )]
+    directus_url: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "TOKEN",
+        help = "Directus Admin API token (default: DIRECTUS_TOKEN env)"
+    )]
+    directus_token: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Directus schema JSON file for offline static audit"
+    )]
+    directus_schema: Option<PathBuf>,
+
+    #[arg(
+        long,
+        alias = "docker-drift",
+        help = "Audit live Docker containers, failed services, and insecure port binds directly via socket (bollard)"
+    )]
+    docker: bool,
 }
 
 fn install_pre_commit_hook(start_dir: &Path) -> Result<()> {
@@ -1675,6 +1770,86 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // ── Knowledge Graph Mode (--graph [--graph-orphans] [--graph-dot]) ──────
+    if args.graph || args.graph_orphans || args.graph_dot {
+        let (vault_graph, analysis) = graph::build_vault_graph(&args.path);
+        if args.graph_dot {
+            print!("{}", graph::export_dot(&vault_graph));
+        } else {
+            graph::print_graph_report(&analysis, args.graph_orphans);
+        }
+        return Ok(());
+    }
+
+    // ── Semantic Search Mode (--semantic <QUERY> [--top-k <N>]) ─────────────
+    if let Some(ref query) = args.semantic {
+        semantic::run_semantic_search(&args.path, query, args.top_k);
+        return Ok(());
+    }
+
+    // ── Directus Governance Auditor (--directus, --scope directus, --directus-schema) ──
+    if args.directus || args.scope.as_deref() == Some("directus") || args.directus_schema.is_some() {
+        let report = if let Some(ref schema_file) = args.directus_schema {
+            let content = match fs::read_to_string(schema_file) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("❌ Failed to read Directus schema file {}: {}", schema_file.display(), e);
+                    std::process::exit(1);
+                }
+            };
+            let json: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(j) => j,
+                Err(e) => {
+                    eprintln!("❌ Failed to parse JSON schema: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            directus::audit_directus_from_json(&json, None, None, None, None, None)
+        } else {
+            let base_url = args
+                .directus_url
+                .or_else(|| std::env::var("DIRECTUS_URL").ok())
+                .unwrap_or_else(|| "http://100.94.209.99:8055".to_string());
+            let token = args.directus_token.or_else(|| std::env::var("DIRECTUS_TOKEN").ok());
+
+            match directus::audit_directus_live(&base_url, token.as_deref()) {
+                Ok(rep) => rep,
+                Err(e) => {
+                    eprintln!("❌ Directus Live Auditor failed: {}", e);
+                    eprintln!("💡 Ensure Directus is reachable at {} or pass --directus-schema <FILE>", base_url);
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        directus::print_directus_report(&report);
+        let error_count = report.violations.iter().filter(|v| v.severity == directus::Severity::Error).count();
+        if error_count > 0 && (args.strict || args.gate) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    // ── Docker Live Drift Inspector (--docker, --docker-drift) ─────────────
+    if args.docker {
+        let rt = tokio::runtime::Runtime::new()?;
+        match rt.block_on(docker::audit_docker_live()) {
+            Ok(report) => {
+                docker::print_docker_report(&report);
+                let error_count = report.violations.iter().filter(|v| v.severity == docker::DockerSeverity::Error).count();
+                if error_count > 0 && (args.strict || args.gate) {
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ Docker Sentinel failed: {}", e);
+                eprintln!("💡 Ensure Docker daemon is running and user has permission to access /var/run/docker.sock");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     let whitelist_path = args.path.join(".steniocheck-whitelist-registry.json");
     let whitelist = Whitelist::load_from_file(&whitelist_path);
 
@@ -1758,6 +1933,19 @@ fn main() -> Result<()> {
     // ── MCP Server Mode (JSON-RPC 2.0 stdio protocol for OpenCode, Antigravity, Claude) ──
     if args.mcp {
         mcp::run_mcp_server(&args.path, rules, whitelist)?;
+        return Ok(());
+    }
+
+    // ── MCP Server SSE Mode (HTTP Server-Sent Events for Directus, remote agents) ──
+    if args.mcp_sse {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(mcp_server::start_mcp_sse_server(
+            args.path,
+            &args.mcp_host,
+            args.mcp_port,
+            rules,
+            whitelist,
+        ))?;
         return Ok(());
     }
 
