@@ -430,23 +430,19 @@ pub fn dispatch_mcp_request(
                     }
                 }
                 "stenio_docker" => {
-                    let rt = match tokio::runtime::Builder::new_current_thread()
+                    let res = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        tokio::task::block_in_place(|| {
+                            handle.block_on(crate::docker::audit_docker_live())
+                        })
+                    } else if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                     {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Some(McpResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req_id,
-                                result: Some(
-                                    json!({ "content": [{ "type": "text", "text": format!("Tokio runtime error: {}", e) }] }),
-                                ),
-                                error: None,
-                            });
-                        }
+                        rt.block_on(crate::docker::audit_docker_live())
+                    } else {
+                        Err("Failed to acquire tokio runtime".to_string())
                     };
-                    match rt.block_on(crate::docker::audit_docker_live()) {
+                    match res {
                         Ok(report) => {
                             let errors = report
                                 .violations
