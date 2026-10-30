@@ -11,10 +11,12 @@ use std::path::{Path, PathBuf};
 pub struct VaultGraph {
     pub graph: DiGraph<String, ()>,
     pub node_indices: HashMap<String, NodeIndex>,
+    #[allow(dead_code)]
     pub file_paths: HashMap<String, PathBuf>,
 }
 
 impl VaultGraph {
+    #[allow(dead_code)]
     pub fn get_path(&self, rel_path: &str) -> Option<&PathBuf> {
         self.file_paths.get(rel_path)
     }
@@ -27,7 +29,7 @@ pub struct GraphAnalysis {
     pub density: f64,
     pub orphan_nodes: Vec<String>,
     pub hub_nodes: Vec<(String, usize, usize)>, // (name, in_degree, out_degree)
-    pub broken_links: Vec<(String, String)>,     // (from, to)
+    pub broken_links: Vec<(String, String)>,    // (from, to)
     pub clusters_count: usize,
 }
 
@@ -69,12 +71,19 @@ pub fn build_vault_graph(vault_root: &Path) -> (VaultGraph, GraphAnalysis) {
 
         let rel_path = path.strip_prefix(vault_root).unwrap_or(path);
         let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let file_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
 
         let idx = graph.add_node(rel_str.clone());
         node_indices.insert(rel_str.clone(), idx);
         file_paths.insert(rel_str.clone(), path.to_path_buf());
-        files_by_name.entry(file_stem.to_lowercase()).or_insert_with(Vec::new).push((rel_str, idx));
+        files_by_name
+            .entry(file_stem.to_lowercase())
+            .or_insert_with(Vec::new)
+            .push((rel_str, idx));
     }
 
     // 2. Second pass: Extract links and connect edges
@@ -82,15 +91,21 @@ pub fn build_vault_graph(vault_root: &Path) -> (VaultGraph, GraphAnalysis) {
     let mut edges_added = HashSet::new();
 
     for (rel_path, &source_idx) in &node_indices {
-        let Some(full_path) = file_paths.get(rel_path) else { continue };
-        let Ok(content) = fs::read_to_string(full_path) else { continue };
+        let Some(full_path) = file_paths.get(rel_path) else {
+            continue;
+        };
+        let Ok(content) = fs::read_to_string(full_path) else {
+            continue;
+        };
 
         // Parse wikilinks
         if let Some(ref re) = re_wikilink {
             for cap in re.captures_iter(&content) {
                 let Some(target) = cap.get(1) else { continue };
                 let target_raw = target.as_str().trim();
-                if target_raw.is_empty() { continue; }
+                if target_raw.is_empty() {
+                    continue;
+                }
 
                 let target_name = target_raw.replace('\\', "/");
                 let target_stem = Path::new(&target_name)
@@ -168,8 +183,12 @@ pub fn build_vault_graph(vault_root: &Path) -> (VaultGraph, GraphAnalysis) {
     let mut node_degrees = Vec::new();
 
     for (name, &idx) in &node_indices {
-        let in_deg = graph.neighbors_directed(idx, petgraph::Direction::Incoming).count();
-        let out_deg = graph.neighbors_directed(idx, petgraph::Direction::Outgoing).count();
+        let in_deg = graph
+            .neighbors_directed(idx, petgraph::Direction::Incoming)
+            .count();
+        let out_deg = graph
+            .neighbors_directed(idx, petgraph::Direction::Outgoing)
+            .count();
 
         if in_deg == 0 {
             orphan_nodes.push(name.clone());
@@ -208,18 +227,50 @@ pub fn build_vault_graph(vault_root: &Path) -> (VaultGraph, GraphAnalysis) {
 
 /// Formats and prints the knowledge graph analysis to the terminal.
 pub fn print_graph_report(analysis: &GraphAnalysis, show_orphans: bool) {
-    println!("\n{}", "══════════════════════════════════════════════════════════════════════════════".bold());
-    println!("{}", "StenioSentinel Graph Engine (petgraph) — Vault Knowledge Topology".bold().cyan());
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "\n{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
+    println!(
+        "{}",
+        "StenioSentinel Graph Engine (petgraph) — Vault Knowledge Topology"
+            .bold()
+            .cyan()
+    );
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
 
-    println!("   📊 Total Documents (Nodes) : {}", analysis.total_nodes.to_string().bold());
-    println!("   🔗 Total References (Edges): {}", analysis.total_edges.to_string().bold());
-    println!("   🌐 Network Graph Density    : {:.4}%", analysis.density * 100.0);
-    println!("   🔄 Cyclic Clusters (SCCs)   : {}", analysis.clusters_count.to_string().bold());
-    println!("   🏝️  Orphan Notes (In-deg 0) : {}", analysis.orphan_nodes.len().to_string().yellow().bold());
-    println!("   ⚠️  Broken Link References  : {}", analysis.broken_links.len().to_string().red().bold());
+    println!(
+        "   📊 Total Documents (Nodes) : {}",
+        analysis.total_nodes.to_string().bold()
+    );
+    println!(
+        "   🔗 Total References (Edges): {}",
+        analysis.total_edges.to_string().bold()
+    );
+    println!(
+        "   🌐 Network Graph Density    : {:.4}%",
+        analysis.density * 100.0
+    );
+    println!(
+        "   🔄 Cyclic Clusters (SCCs)   : {}",
+        analysis.clusters_count.to_string().bold()
+    );
+    println!(
+        "   🏝️  Orphan Notes (In-deg 0) : {}",
+        analysis.orphan_nodes.len().to_string().yellow().bold()
+    );
+    println!(
+        "   ⚠️  Broken Link References  : {}",
+        analysis.broken_links.len().to_string().red().bold()
+    );
 
-    println!("\n{}", "── 🏛️  Top Knowledge Hubs (Most Referenced Documents) ───────────────".bold());
+    println!(
+        "\n{}",
+        "── 🏛️  Top Knowledge Hubs (Most Referenced Documents) ───────────────".bold()
+    );
     for (i, (name, in_deg, out_deg)) in analysis.hub_nodes.iter().enumerate().take(8) {
         println!(
             "   {:2}. {:<48} [{} in / {} out]",
@@ -231,12 +282,18 @@ pub fn print_graph_report(analysis: &GraphAnalysis, show_orphans: bool) {
     }
 
     if show_orphans && !analysis.orphan_nodes.is_empty() {
-        println!("\n{}", "── 🏝️  Orphan Documents (Unreferenced by any note) ─────────────────".bold());
+        println!(
+            "\n{}",
+            "── 🏝️  Orphan Documents (Unreferenced by any note) ─────────────────".bold()
+        );
         for orphan in analysis.orphan_nodes.iter().take(20) {
             println!("   ⚠️  {}", orphan.yellow());
         }
         if analysis.orphan_nodes.len() > 20 {
-            println!("   ... and {} more orphan notes.", analysis.orphan_nodes.len() - 20);
+            println!(
+                "   ... and {} more orphan notes.",
+                analysis.orphan_nodes.len() - 20
+            );
         }
     }
 }
@@ -250,7 +307,10 @@ pub fn export_dot(vault_graph: &VaultGraph) -> String {
     dot.push_str("  edge [color=\"#94a3b8\", arrowhead=vee, arrowsize=0.7];\n\n");
 
     for (name, &idx) in &vault_graph.node_indices {
-        let in_deg = vault_graph.graph.neighbors_directed(idx, petgraph::Direction::Incoming).count();
+        let in_deg = vault_graph
+            .graph
+            .neighbors_directed(idx, petgraph::Direction::Incoming)
+            .count();
         let color = if in_deg > 5 {
             "#e0f2fe" // Hub
         } else if in_deg == 0 {
@@ -258,12 +318,24 @@ pub fn export_dot(vault_graph: &VaultGraph) -> String {
         } else {
             "#ffffff"
         };
-        let label = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name);
-        dot.push_str(&format!("  \"{}\" [label=\"{}\", fillcolor=\"{}\"];\n", idx.index(), label, color));
+        let label = Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name);
+        dot.push_str(&format!(
+            "  \"{}\" [label=\"{}\", fillcolor=\"{}\"];\n",
+            idx.index(),
+            label,
+            color
+        ));
     }
 
     for edge in vault_graph.graph.raw_edges() {
-        dot.push_str(&format!("  \"{}\" -> \"{}\";\n", edge.source().index(), edge.target().index()));
+        dot.push_str(&format!(
+            "  \"{}\" -> \"{}\";\n",
+            edge.source().index(),
+            edge.target().index()
+        ));
     }
 
     dot.push_str("}\n");

@@ -310,16 +310,10 @@ struct Args {
     )]
     graph: bool,
 
-    #[arg(
-        long,
-        help = "List all unreferenced orphan documents in the vault"
-    )]
+    #[arg(long, help = "List all unreferenced orphan documents in the vault")]
     graph_orphans: bool,
 
-    #[arg(
-        long,
-        help = "Export the vault knowledge graph in Graphviz DOT format"
-    )]
+    #[arg(long, help = "Export the vault knowledge graph in Graphviz DOT format")]
     graph_dot: bool,
 
     #[arg(
@@ -1788,12 +1782,17 @@ fn main() -> Result<()> {
     }
 
     // ── Directus Governance Auditor (--directus, --scope directus, --directus-schema) ──
-    if args.directus || args.scope.as_deref() == Some("directus") || args.directus_schema.is_some() {
+    if args.directus || args.scope.as_deref() == Some("directus") || args.directus_schema.is_some()
+    {
         let report = if let Some(ref schema_file) = args.directus_schema {
             let content = match fs::read_to_string(schema_file) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("❌ Failed to read Directus schema file {}: {}", schema_file.display(), e);
+                    eprintln!(
+                        "❌ Failed to read Directus schema file {}: {}",
+                        schema_file.display(),
+                        e
+                    );
                     std::process::exit(1);
                 }
             };
@@ -1810,20 +1809,29 @@ fn main() -> Result<()> {
                 .directus_url
                 .or_else(|| std::env::var("DIRECTUS_URL").ok())
                 .unwrap_or_else(|| "http://100.94.209.99:8055".to_string());
-            let token = args.directus_token.or_else(|| std::env::var("DIRECTUS_TOKEN").ok());
+            let token = args
+                .directus_token
+                .or_else(|| std::env::var("DIRECTUS_TOKEN").ok());
 
             match directus::audit_directus_live(&base_url, token.as_deref()) {
                 Ok(rep) => rep,
                 Err(e) => {
                     eprintln!("❌ Directus Live Auditor failed: {}", e);
-                    eprintln!("💡 Ensure Directus is reachable at {} or pass --directus-schema <FILE>", base_url);
+                    eprintln!(
+                        "💡 Ensure Directus is reachable at {} or pass --directus-schema <FILE>",
+                        base_url
+                    );
                     std::process::exit(1);
                 }
             }
         };
 
         directus::print_directus_report(&report);
-        let error_count = report.violations.iter().filter(|v| v.severity == directus::Severity::Error).count();
+        let error_count = report
+            .violations
+            .iter()
+            .filter(|v| v.severity == directus::Severity::Error)
+            .count();
         if error_count > 0 && (args.strict || args.gate) {
             std::process::exit(1);
         }
@@ -1836,14 +1844,20 @@ fn main() -> Result<()> {
         match rt.block_on(docker::audit_docker_live()) {
             Ok(report) => {
                 docker::print_docker_report(&report);
-                let error_count = report.violations.iter().filter(|v| v.severity == docker::DockerSeverity::Error).count();
+                let error_count = report
+                    .violations
+                    .iter()
+                    .filter(|v| v.severity == docker::DockerSeverity::Error)
+                    .count();
                 if error_count > 0 && (args.strict || args.gate) {
                     std::process::exit(1);
                 }
             }
             Err(e) => {
                 eprintln!("❌ Docker Sentinel failed: {}", e);
-                eprintln!("💡 Ensure Docker daemon is running and user has permission to access /var/run/docker.sock");
+                eprintln!(
+                    "💡 Ensure Docker daemon is running and user has permission to access /var/run/docker.sock"
+                );
                 std::process::exit(1);
             }
         }

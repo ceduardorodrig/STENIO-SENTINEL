@@ -375,7 +375,11 @@ pub fn dispatch_mcp_request(
                             dry_count, dry_dur
                         )
                     } else {
-                        format!("⚠️ [DRY DETECTED] {} duplicate code block(s) detected across {} files.", dry_violations.len(), dry_count)
+                        format!(
+                            "⚠️ [DRY DETECTED] {} duplicate code block(s) detected across {} files.",
+                            dry_violations.len(),
+                            dry_count
+                        )
                     }
                 }
                 "stenio_directus" => {
@@ -389,13 +393,36 @@ pub fn dispatch_mcp_request(
 
                     match crate::directus::audit_directus_live(base_url, token) {
                         Ok(report) => {
-                            let errors = report.violations.iter().filter(|v| v.severity == crate::directus::Severity::Error).count();
-                            let warnings = report.violations.iter().filter(|v| v.severity == crate::directus::Severity::Warning).count();
+                            let errors = report
+                                .violations
+                                .iter()
+                                .filter(|v| v.severity == crate::directus::Severity::Error)
+                                .count();
+                            let warnings = report
+                                .violations
+                                .iter()
+                                .filter(|v| v.severity == crate::directus::Severity::Warning)
+                                .count();
                             if report.violations.is_empty() {
-                                format!("✨ [DIRECTUS PASSED] All {} relational and schema checks passed in {:.2}ms.", report.checks_passed, report.execution_time_ms)
+                                format!(
+                                    "✨ [DIRECTUS PASSED] All {} relational and schema checks passed in {:.2}ms.",
+                                    report.checks_passed, report.execution_time_ms
+                                )
                             } else {
-                                format!("⚠️ [DIRECTUS VIOLATIONS] {} error(s), {} warning(s) in {:.2}ms:\n{}", errors, warnings, report.execution_time_ms,
-                                    report.violations.iter().map(|v| format!("• [{}] {}: {}", v.rule, v.location, v.message)).collect::<Vec<_>>().join("\n")
+                                format!(
+                                    "⚠️ [DIRECTUS VIOLATIONS] {} error(s), {} warning(s) in {:.2}ms:\n{}",
+                                    errors,
+                                    warnings,
+                                    report.execution_time_ms,
+                                    report
+                                        .violations
+                                        .iter()
+                                        .map(|v| format!(
+                                            "• [{}] {}: {}",
+                                            v.rule, v.location, v.message
+                                        ))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
                                 )
                             }
                         }
@@ -403,25 +430,55 @@ pub fn dispatch_mcp_request(
                     }
                 }
                 "stenio_docker" => {
-                    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
                         Ok(r) => r,
-                        Err(e) => return Some(McpResponse {
-                            jsonrpc: "2.0".to_string(),
-                            id: req_id,
-                            result: Some(json!({ "content": [{ "type": "text", "text": format!("Tokio runtime error: {}", e) }] })),
-                            error: None,
-                        }),
+                        Err(e) => {
+                            return Some(McpResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req_id,
+                                result: Some(
+                                    json!({ "content": [{ "type": "text", "text": format!("Tokio runtime error: {}", e) }] }),
+                                ),
+                                error: None,
+                            });
+                        }
                     };
                     match rt.block_on(crate::docker::audit_docker_live()) {
                         Ok(report) => {
-                            let errors = report.violations.iter().filter(|v| v.severity == crate::docker::DockerSeverity::Error).count();
-                            let warnings = report.violations.iter().filter(|v| v.severity == crate::docker::DockerSeverity::Warning).count();
+                            let errors = report
+                                .violations
+                                .iter()
+                                .filter(|v| v.severity == crate::docker::DockerSeverity::Error)
+                                .count();
+                            let warnings = report
+                                .violations
+                                .iter()
+                                .filter(|v| v.severity == crate::docker::DockerSeverity::Warning)
+                                .count();
                             if report.violations.is_empty() {
-                                format!("✨ [DOCKER PASSED] {} containers inspected ({:.2}ms). All running clean.", report.total_containers, report.execution_time_ms)
+                                format!(
+                                    "✨ [DOCKER PASSED] {} containers inspected ({:.2}ms). All running clean.",
+                                    report.total_containers, report.execution_time_ms
+                                )
                             } else {
-                                format!("⚠️ [DOCKER ANOMALIES] {} total, {} running, {} error(s), {} warning(s):\n{}",
-                                    report.total_containers, report.running_containers, errors, warnings,
-                                    report.violations.iter().map(|v| format!("• [{}] {}: {}", v.rule, v.container, v.message)).collect::<Vec<_>>().join("\n")
+                                format!(
+                                    "⚠️ [DOCKER ANOMALIES] {} total, {} running, {} error(s), {} warning(s):\n{}",
+                                    report.total_containers,
+                                    report.running_containers,
+                                    errors,
+                                    warnings,
+                                    report
+                                        .violations
+                                        .iter()
+                                        .map(|v| format!(
+                                            "• [{}] {}: {}",
+                                            v.rule, v.container, v.message
+                                        ))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
                                 )
                             }
                         }
@@ -429,18 +486,28 @@ pub fn dispatch_mcp_request(
                     }
                 }
                 "stenio_graph" => {
-                    let show_orphans = arguments.get("show_orphans").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let show_orphans = arguments
+                        .get("show_orphans")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     let (_vault_graph, analysis) = crate::graph::build_vault_graph(repo_root);
                     let mut msg = format!(
                         "📊 Vault Graph Topology:\n• Documents: {}\n• References: {}\n• Density: {:.4}%\n• Cyclic Clusters (SCC): {}\n• Orphan Notes: {}\n• Broken Links: {}\n\nTop Hubs:\n",
-                        analysis.total_nodes, analysis.total_edges, analysis.density * 100.0,
-                        analysis.clusters_count, analysis.orphan_nodes.len(), analysis.broken_links.len()
+                        analysis.total_nodes,
+                        analysis.total_edges,
+                        analysis.density * 100.0,
+                        analysis.clusters_count,
+                        analysis.orphan_nodes.len(),
+                        analysis.broken_links.len()
                     );
                     for (name, in_deg, out_deg) in analysis.hub_nodes.iter().take(5) {
                         msg.push_str(&format!("• {} ({} in / {} out)\n", name, in_deg, out_deg));
                     }
                     if show_orphans && !analysis.orphan_nodes.is_empty() {
-                        msg.push_str(&format!("\nOrphans (first 10 of {}):\n", analysis.orphan_nodes.len()));
+                        msg.push_str(&format!(
+                            "\nOrphans (first 10 of {}):\n",
+                            analysis.orphan_nodes.len()
+                        ));
                         for orphan in analysis.orphan_nodes.iter().take(10) {
                             msg.push_str(&format!("• {}\n", orphan));
                         }
@@ -448,17 +515,30 @@ pub fn dispatch_mcp_request(
                     msg
                 }
                 "stenio_semantic" => {
-                    let query = arguments.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let top_k = arguments.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+                    let query = arguments
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let top_k =
+                        arguments.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
                     let index = crate::semantic::SemanticIndex::build(repo_root);
                     let results = index.search(query, top_k);
                     if results.is_empty() {
                         format!("No relevant documents found for query: '{}'", query)
                     } else {
-                        let mut msg = format!("🔍 Top {} semantic matches for '{}':\n\n", results.len(), query);
+                        let mut msg = format!(
+                            "🔍 Top {} semantic matches for '{}':\n\n",
+                            results.len(),
+                            query
+                        );
                         for (i, r) in results.iter().enumerate() {
-                            msg.push_str(&format!("{}. **{}** ({:.1}% match)\n   📁 `{}`\n   💬 _{}_\n\n",
-                                i + 1, r.title, (r.score * 100.0).min(100.0), r.path, r.snippet
+                            msg.push_str(&format!(
+                                "{}. **{}** ({:.1}% match)\n   📁 `{}`\n   💬 _{}_\n\n",
+                                i + 1,
+                                r.title,
+                                (r.score * 100.0).min(100.0),
+                                r.path,
+                                r.snippet
                             ));
                         }
                         msg

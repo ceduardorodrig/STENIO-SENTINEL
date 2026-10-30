@@ -26,6 +26,7 @@ pub struct IndexedDoc {
 pub struct SemanticIndex {
     pub documents: Vec<IndexedDoc>,
     pub idf: HashMap<String, f32>,
+    #[allow(dead_code)]
     pub total_docs: usize,
 }
 
@@ -59,7 +60,9 @@ impl SemanticIndex {
                 continue;
             }
 
-            let Ok(content) = fs::read_to_string(path) else { continue };
+            let Ok(content) = fs::read_to_string(path) else {
+                continue;
+            };
             let rel_path = path
                 .strip_prefix(vault_root)
                 .unwrap_or(path)
@@ -104,7 +107,9 @@ impl SemanticIndex {
 
         for (term, doc_count) in doc_frequencies {
             // Smoothed IDF: ln(1 + (N - n + 0.5) / (n + 0.5))
-            let idf_val = ((total_docs as f32 - doc_count as f32 + 0.5) / (doc_count as f32 + 0.5) + 1.0).ln();
+            let idf_val = ((total_docs as f32 - doc_count as f32 + 0.5) / (doc_count as f32 + 0.5)
+                + 1.0)
+                .ln();
             idf.insert(term, idf_val.max(0.1));
         }
 
@@ -185,7 +190,11 @@ impl SemanticIndex {
             }
         }
 
-        scored_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored_results.truncate(top_k);
         scored_results
     }
@@ -194,9 +203,9 @@ impl SemanticIndex {
 /// Tokenizes text into lowercase alphanumeric words, filtering out common noise.
 fn tokenize(text: &str) -> Vec<String> {
     let stop_words: HashSet<&'static str> = [
-        "a", "o", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das",
-        "em", "no", "na", "nos", "nas", "por", "para", "com", "sem", "e", "ou", "se", "que",
-        "the", "of", "and", "to", "in", "for", "with", "on", "at", "by", "from", "is", "it",
+        "a", "o", "os", "as", "um", "uma", "uns", "umas", "de", "do", "da", "dos", "das", "em",
+        "no", "na", "nos", "nas", "por", "para", "com", "sem", "e", "ou", "se", "que", "the", "of",
+        "and", "to", "in", "for", "with", "on", "at", "by", "from", "is", "it",
     ]
     .into_iter()
     .collect();
@@ -215,7 +224,10 @@ fn extract_snippet(content: &str, query_tokens: &[String]) -> String {
 
     for (idx, line) in lines.iter().enumerate() {
         let line_lower = line.to_lowercase();
-        let matches = query_tokens.iter().filter(|&t| line_lower.contains(t)).count();
+        let matches = query_tokens
+            .iter()
+            .filter(|&t| line_lower.contains(t))
+            .count();
         if matches > max_matches && !line.trim().starts_with("---") {
             max_matches = matches;
             best_line_idx = idx;
@@ -235,15 +247,26 @@ fn extract_snippet(content: &str, query_tokens: &[String]) -> String {
 
 /// Formats and displays semantic search results in the terminal.
 pub fn print_semantic_results(query: &str, results: &[SearchResult], elapsed_ms: f64) {
-    println!("\n{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "\n{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
     println!(
         "{} [{:.2}ms]",
-        "StenioSentinel Local Semantic Search Engine (TF-IDF Vectorizer)".bold().cyan(),
+        "StenioSentinel Local Semantic Search Engine (TF-IDF Vectorizer)"
+            .bold()
+            .cyan(),
         elapsed_ms
     );
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
     println!("   🔍 Query   : \"{}\"", query.bold().yellow());
-    println!("   📄 Matches : {}\n", results.len().to_string().bold().green());
+    println!(
+        "   📄 Matches : {}\n",
+        results.len().to_string().bold().green()
+    );
 
     if results.is_empty() {
         println!("   ⚠️  No relevant documents found for this query in the local vault.");

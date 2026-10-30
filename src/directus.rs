@@ -57,7 +57,10 @@ pub fn audit_directus_from_json(
 
         for (col, fld, _target_col) in &critical_m2o {
             let field_entry = fields.iter().find(|item| {
-                let c = item.get("collection").and_then(|v| v.as_str()).unwrap_or("");
+                let c = item
+                    .get("collection")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let f = item.get("field").and_then(|v| v.as_str()).unwrap_or("");
                 c == *col && f == *fld
             });
@@ -66,15 +69,24 @@ pub fn audit_directus_from_json(
                 None => {
                     violations.push(DirectusViolation {
                         rule: "DIRECTUS-REL-MISSING-FIELD",
-                        message: format!("Relational field {}.{} does not exist in schema", col, fld),
+                        message: format!(
+                            "Relational field {}.{} does not exist in schema",
+                            col, fld
+                        ),
                         location: format!("{}.{}", col, fld),
                         severity: Severity::Error,
                     });
                 }
                 Some(entry) => {
                     let meta = entry.get("meta");
-                    let interface = meta.and_then(|m| m.get("interface")).and_then(|v| v.as_str()).unwrap_or("");
-                    let display = meta.and_then(|m| m.get("display")).and_then(|v| v.as_str()).unwrap_or("");
+                    let interface = meta
+                        .and_then(|m| m.get("interface"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let display = meta
+                        .and_then(|m| m.get("display"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
 
                     if interface != "select-dropdown-m2o" || display != "related-values" {
                         violations.push(DirectusViolation {
@@ -104,14 +116,20 @@ pub fn audit_directus_from_json(
 
         for (col, fld) in &currency_fields {
             let field_entry = fields.iter().find(|item| {
-                let c = item.get("collection").and_then(|v| v.as_str()).unwrap_or("");
+                let c = item
+                    .get("collection")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let f = item.get("field").and_then(|v| v.as_str()).unwrap_or("");
                 c == *col && f == *fld
             });
 
             if let Some(entry) = field_entry {
                 let meta = entry.get("meta");
-                let display = meta.and_then(|m| m.get("display")).and_then(|v| v.as_str()).unwrap_or("");
+                let display = meta
+                    .and_then(|m| m.get("display"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let prefix = meta
                     .and_then(|m| m.get("display_options"))
                     .and_then(|o| o.get("prefix"))
@@ -145,7 +163,10 @@ pub fn audit_directus_from_json(
         if let Some(links) = items {
             for item in links {
                 let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("unnamed");
+                let title = item
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unnamed");
 
                 if url.contains("localhost")
                     || url.contains("file:///")
@@ -154,7 +175,10 @@ pub fn audit_directus_from_json(
                 {
                     violations.push(DirectusViolation {
                         rule: "DIRECTUS-PLACEHOLDER-LINKS",
-                        message: format!("Link '{}' points to placeholder or local URL: '{}'", title, url),
+                        message: format!(
+                            "Link '{}' points to placeholder or local URL: '{}'",
+                            title, url
+                        ),
                         location: format!("links/{}", title),
                         severity: Severity::Error,
                     });
@@ -177,7 +201,10 @@ pub fn audit_directus_from_json(
         if title.contains("Guia de Bordo") || title.contains("Onboarding") {
             violations.push(DirectusViolation {
                 rule: "DIRECTUS-TAB-STUTTER",
-                message: format!("onboarding.welcome_title repeats the collection name: '{}'", title),
+                message: format!(
+                    "onboarding.welcome_title repeats the collection name: '{}'",
+                    title
+                ),
                 location: "items/onboarding".to_string(),
                 severity: Severity::Warning,
             });
@@ -243,7 +270,10 @@ pub fn audit_directus_from_json(
 }
 
 /// Connects live to Directus via HTTP REST API and runs the governance auditor.
-pub fn audit_directus_live(base_url: &str, token: Option<&str>) -> Result<DirectusAuditReport, String> {
+pub fn audit_directus_live(
+    base_url: &str,
+    token: Option<&str>,
+) -> Result<DirectusAuditReport, String> {
     let clean_url = base_url.trim_end_matches('/');
     let client = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(4))
@@ -294,37 +324,80 @@ pub fn audit_directus_live(base_url: &str, token: Option<&str>) -> Result<Direct
 
 /// Formats and displays the Directus Sentinel audit report.
 pub fn print_directus_report(report: &DirectusAuditReport) {
-    println!("\n{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "\n{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
     println!(
         "{} [{:.2}ms]",
-        "StenioSentinel Directus Governance Engine — Relational & Schema Integrity".bold().cyan(),
+        "StenioSentinel Directus Governance Engine — Relational & Schema Integrity"
+            .bold()
+            .cyan(),
         report.execution_time_ms
     );
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
 
-    let errors_count = report.violations.iter().filter(|v| v.severity == Severity::Error).count();
-    let warnings_count = report.violations.iter().filter(|v| v.severity == Severity::Warning).count();
+    let errors_count = report
+        .violations
+        .iter()
+        .filter(|v| v.severity == Severity::Error)
+        .count();
+    let warnings_count = report
+        .violations
+        .iter()
+        .filter(|v| v.severity == Severity::Warning)
+        .count();
 
-    println!("   🛡️  Checks Passed     : {}", report.checks_passed.to_string().green().bold());
-    println!("   ❌ Errors (Blocking) : {}", errors_count.to_string().red().bold());
-    println!("   ⚠️  Warnings          : {}", warnings_count.to_string().yellow().bold());
+    println!(
+        "   🛡️  Checks Passed     : {}",
+        report.checks_passed.to_string().green().bold()
+    );
+    println!(
+        "   ❌ Errors (Blocking) : {}",
+        errors_count.to_string().red().bold()
+    );
+    println!(
+        "   ⚠️  Warnings          : {}",
+        warnings_count.to_string().yellow().bold()
+    );
 
     if !report.violations.is_empty() {
-        println!("\n{}", "── Detailed Directus Violations ──────────────────────────────────────────────".bold());
+        println!(
+            "\n{}",
+            "── Detailed Directus Violations ──────────────────────────────────────────────".bold()
+        );
         for v in &report.violations {
             match v.severity {
                 Severity::Error => {
-                    println!("   {} [{}] in {}:", "❌ ERROR".red().bold(), v.rule.bold(), v.location.cyan());
+                    println!(
+                        "   {} [{}] in {}:",
+                        "❌ ERROR".red().bold(),
+                        v.rule.bold(),
+                        v.location.cyan()
+                    );
                     println!("      {}", v.message);
                 }
                 Severity::Warning => {
-                    println!("   {}  [{}] in {}:", "⚠️  WARN".yellow().bold(), v.rule.bold(), v.location.cyan());
+                    println!(
+                        "   {}  [{}] in {}:",
+                        "⚠️  WARN".yellow().bold(),
+                        v.rule.bold(),
+                        v.location.cyan()
+                    );
                     println!("      {}", v.message);
                 }
             }
         }
     } else {
-        println!("\n   ✨ {}", "All Directus relational, currency, and schema governance checks passed!".green().bold());
+        println!(
+            "\n   ✨ {}",
+            "All Directus relational, currency, and schema governance checks passed!"
+                .green()
+                .bold()
+        );
     }
 }
 
@@ -351,7 +424,12 @@ mod tests {
 
         let report = audit_directus_from_json(&valid_fields, None, None, None, None, None);
         assert_eq!(report.violations.len(), 8); // other 8 critical m2o are missing
-        assert!(!report.violations.iter().any(|v| v.rule == "DIRECTUS-BRL-CURRENCY"));
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.rule == "DIRECTUS-BRL-CURRENCY")
+        );
 
         // Field with missing BRL prefix
         let invalid_fields = json!({
@@ -367,7 +445,8 @@ mod tests {
             ]
         });
 
-        let report_invalid = audit_directus_from_json(&invalid_fields, None, None, None, None, None);
+        let report_invalid =
+            audit_directus_from_json(&invalid_fields, None, None, None, None, None);
         assert!(report_invalid.iter_currency_violations());
     }
 
@@ -377,7 +456,9 @@ mod tests {
 
     impl TestHelper for DirectusAuditReport {
         fn iter_currency_violations(&self) -> bool {
-            self.violations.iter().any(|v| v.rule == "DIRECTUS-BRL-CURRENCY")
+            self.violations
+                .iter()
+                .any(|v| v.rule == "DIRECTUS-BRL-CURRENCY")
         }
     }
 }

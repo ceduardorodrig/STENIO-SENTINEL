@@ -1,5 +1,5 @@
-use bollard::query_parameters::ListContainersOptions;
 use bollard::Docker;
+use bollard::query_parameters::ListContainersOptions;
 use colored::*;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -30,11 +30,22 @@ pub struct DockerAuditReport {
 /// Connects directly to the Docker socket and inspects live containers and security drift.
 pub async fn audit_docker_live() -> Result<DockerAuditReport, String> {
     let start = Instant::now();
-    let docker = Docker::connect_with_defaults()
-        .map_err(|e| format!("Failed to connect to Docker socket (/var/run/docker.sock): {}", e))?;
+    let docker = Docker::connect_with_defaults().map_err(|e| {
+        format!(
+            "Failed to connect to Docker socket (/var/run/docker.sock): {}",
+            e
+        )
+    })?;
 
     let mut filters = HashMap::new();
-    filters.insert("status".to_string(), vec!["running".to_string(), "exited".to_string(), "dead".to_string()]);
+    filters.insert(
+        "status".to_string(),
+        vec![
+            "running".to_string(),
+            "exited".to_string(),
+            "dead".to_string(),
+        ],
+    );
 
     let options = Some(ListContainersOptions {
         all: true,
@@ -59,7 +70,11 @@ pub async fn audit_docker_live() -> Result<DockerAuditReport, String> {
             .map(|s| s.trim_start_matches('/'))
             .unwrap_or("unnamed");
 
-        let state_str = c.state.as_ref().map(|s| format!("{:?}", s).to_lowercase()).unwrap_or_default();
+        let state_str = c
+            .state
+            .as_ref()
+            .map(|s| format!("{:?}", s).to_lowercase())
+            .unwrap_or_default();
         let status = c.status.as_deref().unwrap_or("");
 
         if state_str.contains("running") {
@@ -115,39 +130,88 @@ pub async fn audit_docker_live() -> Result<DockerAuditReport, String> {
 
 /// Formats and displays the Docker Live Sentinel audit report.
 pub fn print_docker_report(report: &DockerAuditReport) {
-    println!("\n{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "\n{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
     println!(
         "{} [{:.2}ms]",
-        "StenioSentinel Docker Live Inspector (bollard) — Fleet Drift & Ports".bold().cyan(),
+        "StenioSentinel Docker Live Inspector (bollard) — Fleet Drift & Ports"
+            .bold()
+            .cyan(),
         report.execution_time_ms
     );
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
 
-    let errors_count = report.violations.iter().filter(|v| v.severity == DockerSeverity::Error).count();
-    let warnings_count = report.violations.iter().filter(|v| v.severity == DockerSeverity::Warning).count();
+    let errors_count = report
+        .violations
+        .iter()
+        .filter(|v| v.severity == DockerSeverity::Error)
+        .count();
+    let warnings_count = report
+        .violations
+        .iter()
+        .filter(|v| v.severity == DockerSeverity::Warning)
+        .count();
 
-    println!("   🐳 Total Containers   : {}", report.total_containers.to_string().bold());
-    println!("   🟢 Running Containers : {}", report.running_containers.to_string().green().bold());
-    println!("   ⚪ Stopped / Idle     : {}", report.stopped_containers.to_string().bold());
-    println!("   ❌ Errors (Failed)    : {}", errors_count.to_string().red().bold());
-    println!("   ⚠️  Security Warnings  : {}", warnings_count.to_string().yellow().bold());
+    println!(
+        "   🐳 Total Containers   : {}",
+        report.total_containers.to_string().bold()
+    );
+    println!(
+        "   🟢 Running Containers : {}",
+        report.running_containers.to_string().green().bold()
+    );
+    println!(
+        "   ⚪ Stopped / Idle     : {}",
+        report.stopped_containers.to_string().bold()
+    );
+    println!(
+        "   ❌ Errors (Failed)    : {}",
+        errors_count.to_string().red().bold()
+    );
+    println!(
+        "   ⚠️  Security Warnings  : {}",
+        warnings_count.to_string().yellow().bold()
+    );
 
     if !report.violations.is_empty() {
-        println!("\n{}", "── Observed Container Anomalies ──────────────────────────────────────────────".bold());
+        println!(
+            "\n{}",
+            "── Observed Container Anomalies ──────────────────────────────────────────────".bold()
+        );
         for v in &report.violations {
             match v.severity {
                 DockerSeverity::Error => {
-                    println!("   {} [{}] in {}:", "❌ ERROR".red().bold(), v.rule.bold(), v.container.cyan());
+                    println!(
+                        "   {} [{}] in {}:",
+                        "❌ ERROR".red().bold(),
+                        v.rule.bold(),
+                        v.container.cyan()
+                    );
                     println!("      {}", v.message);
                 }
                 DockerSeverity::Warning => {
-                    println!("   {}  [{}] in {}:", "⚠️  WARN".yellow().bold(), v.rule.bold(), v.container.cyan());
+                    println!(
+                        "   {}  [{}] in {}:",
+                        "⚠️  WARN".yellow().bold(),
+                        v.rule.bold(),
+                        v.container.cyan()
+                    );
                     println!("      {}", v.message);
                 }
             }
         }
     } else {
-        println!("\n   ✨ {}", "All containers are healthy, with zero unexpected failures or insecure binds!".green().bold());
+        println!(
+            "\n   ✨ {}",
+            "All containers are healthy, with zero unexpected failures or insecure binds!"
+                .green()
+                .bold()
+        );
     }
 }
 

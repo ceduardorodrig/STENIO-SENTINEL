@@ -1,9 +1,9 @@
 use anyhow::Result;
+use axum::Router;
 use axum::extract::State;
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
-use axum::Router;
 use colored::*;
 use futures_util::stream;
 use serde_json::json;
@@ -15,7 +15,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::baseline::Whitelist;
 use crate::engine::Engine;
-use crate::mcp::{dispatch_mcp_request, McpRequest};
+use crate::mcp::{McpRequest, dispatch_mcp_request};
 use crate::rule::Rule;
 
 pub struct ServerState {
@@ -51,16 +51,31 @@ pub async fn start_mcp_sse_server(
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    println!("\n{}", "══════════════════════════════════════════════════════════════════════════════".bold());
+    println!(
+        "\n{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
     println!(
         "{} on {}",
         "StenioSentinel MCP SSE Server (Axum Native)".bold().cyan(),
         format!("http://{}:{}", host, port).bold().green()
     );
-    println!("{}", "══════════════════════════════════════════════════════════════════════════════".bold());
-    println!("   📡 SSE Handshake Endpoint : {}", format!("http://{}:{}/sse", host, port).bold());
-    println!("   📬 Message JSON-RPC Route : {}", format!("http://{}:{}/message", host, port).bold());
-    println!("   ❤️  Health Status Route   : {}", format!("http://{}:{}/health", host, port).bold());
+    println!(
+        "{}",
+        "══════════════════════════════════════════════════════════════════════════════".bold()
+    );
+    println!(
+        "   📡 SSE Handshake Endpoint : {}",
+        format!("http://{}:{}/sse", host, port).bold()
+    );
+    println!(
+        "   📬 Message JSON-RPC Route : {}",
+        format!("http://{}:{}/message", host, port).bold()
+    );
+    println!(
+        "   ❤️  Health Status Route   : {}",
+        format!("http://{}:{}/health", host, port).bold()
+    );
     println!("\n   ✨ Ready to receive MCP agents from Directus, Claude Code, OpenCode, Cursor!\n");
 
     let listener = match tokio::net::TcpListener::bind(addr).await {

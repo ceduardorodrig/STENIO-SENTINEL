@@ -416,7 +416,6 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
                         ));
                     }
 
-
                     // Security / Least-Privilege Rule: docker.sock mounting guard (Incident 2026-10 follow-up)
                     // Regular application services must NEVER mount docker.sock. Infrastructure services must mount read-only (:ro)
                     // unless documented as an authorized agent (autoheal, watchtower, dockerproxy).
@@ -424,9 +423,9 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
                         for vol in volumes {
                             if let Some(vol_str) = vol.as_str() {
                                 if vol_str.contains("/var/run/docker.sock") {
-                                    let is_infra_exempt = svc_name == "autoheal" 
-                                        || svc_name == "watchtower" 
-                                        || svc_name == "dockerproxy" 
+                                    let is_infra_exempt = svc_name == "autoheal"
+                                        || svc_name == "watchtower"
+                                        || svc_name == "dockerproxy"
                                         || svc_name == "tecnativa-dockerproxy";
                                     let is_ro = vol_str.ends_with(":ro");
 
@@ -455,7 +454,9 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
                         let is_monolithic = match env_file {
                             serde_yaml::Value::String(f) => f == ".env" || f == "./.env",
                             serde_yaml::Value::Sequence(seq) => seq.iter().any(|item| {
-                                item.as_str().map(|f| f == ".env" || f == "./.env").unwrap_or(false)
+                                item.as_str()
+                                    .map(|f| f == ".env" || f == "./.env")
+                                    .unwrap_or(false)
                             }),
                             _ => false,
                         };
