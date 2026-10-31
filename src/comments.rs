@@ -135,10 +135,21 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
         "alteracao", "resposta", "respostas", "leitora", "servidor", "mensagem", "mensagens",
         "resolvido", "resolvida", "exclusao", "permissao", "permissoes", "obrigatorio",
         "obrigatoria", "invalido", "invalida", "nao", "sao", "estao", "verificar", "garantir",
-        "usuario", "usuarios", "relatorio", "relatorios", "tabela", "tabelas"
+        "relatorio", "relatorios"
     ];
 
-    let words: Vec<&str> = cleaned
+    // Strip backticked symbols before checking word tokens
+    let mut cleaned_no_code = String::with_capacity(cleaned.len());
+    let mut in_backtick = false;
+    for ch in cleaned.chars() {
+        if ch == '`' {
+            in_backtick = !in_backtick;
+        } else if !in_backtick {
+            cleaned_no_code.push(ch);
+        }
+    }
+
+    let words: Vec<&str> = cleaned_no_code
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|w| !w.is_empty())
         .collect();
