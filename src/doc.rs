@@ -486,6 +486,11 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         ));
     }
 
+    // ── Product backlog queues (Hub `SB-`, Miracena `MB-`): structure, lifecycle, state, recurrence ──
+    let product_queues = crate::backlog::audit_product_queues(repo_root);
+    violations.extend(product_queues.violations);
+    messages.extend(product_queues.messages);
+
     DocAuditResult {
         total_docs,
         broken_links,

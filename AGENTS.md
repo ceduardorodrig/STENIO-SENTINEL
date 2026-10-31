@@ -158,3 +158,21 @@ auditor renders inline (loopback, client/ephemeral range). The former hardcoded 
 `20048` exemptions and the catalogue-text `tailscale0` heuristic are gone, so `--health` and
 `--ports` can never disagree on the same live state.
 
+
+## Backlog queues as data (`backlog-queues.toml`, 2026-10-30)
+
+The canonical method is [`../backlog-method.md`](../backlog-method.md). `src/backlog.rs` audits **every queue declared in `backlog-queues.toml`** with one lifecycle model; the registry is embedded with `include_str!`, so the set of queues is versioned with the engine and reproducible from a clean build.
+
+| Queue | Location | Prefix | Traced via `pending:` |
+|---|---|---|---|
+| Homelab | `mnemocine/backlog.md` | `HB-` | yes (bidirectional) |
+| SUMÆNIMÁ Hub | `<hub>/docs/backlog.md` (needs `app/`) | `SB-` | no |
+| Miracena engagement | `clients/miracena/backlog.md` | `MB-` | no |
+
+- `audit_backlog()` audits the **linked** queues (homelab); `audit_product_queues()` audits the rest and is called from `audit_documentation()`, so it runs in the `hub`, `homelab` and `vault` scopes without duplicating messages.
+- Product queues are checked for structure, lifecycle, state, recurrence and `Ref` resolution (`HOMELAB-BACKLOG-MALFORMED`, `-LIFECYCLE`, `-STATE`, `DOC-BACKLOG-RECURRENCE`, `DOC-BACKLOG-DRIFT`); the reverse document walk is skipped.
+- Tables accept the English state words **or** the glyphs ⏳ 🏗 ⏸ ✅ ✗, the severities 🔴🟠🟡🟢🔵💡 and Portuguese header synonyms. Columns are resolved from the header.
+- **CLI:** `stenio --backlog [--search <term>]` covers all queues found under `--path`; `stenio --backlog-new <PREFIX> --path <dir> [--backlog-name N]` scaffolds a queue from `templates/backlog*.md.tpl` (refuses to overwrite or to reuse a prefix).
+- **Adding a queue:** scaffold it, append it to `backlog-queues.toml`, rebuild, run `stenio --guardian`. Tests guard the registry (parses, unique prefixes, only `HB-` linked) and the scaffolder (a fresh queue audits clean; never overwrites).
+- Rule ids keep their `HOMELAB-` prefix for compatibility (Guardian anchors); they apply to every queue.
+- Authorization: extending the engine was explicitly authorized by the owner on 2026-10-30 (`ARCH-SCOPE-ISOLATION` otherwise forbids engine edits during product work).

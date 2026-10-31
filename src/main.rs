@@ -306,6 +306,20 @@ struct Args {
 
     #[arg(
         long,
+        value_name = "PREFIX",
+        help = "Scaffold a new backlog queue (backlog.md + backlog-archive.md) at --path from the embedded template, e.g. --backlog-new TB- --path ./tasks"
+    )]
+    backlog_new: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Display name for --backlog-new (defaults to the directory name)"
+    )]
+    backlog_name: Option<String>,
+
+    #[arg(
+        long,
         help = "Audit knowledge graph topology (nodes, edges, hubs, density) using petgraph"
     )]
     graph: bool,
@@ -1753,6 +1767,25 @@ fn main() -> Result<()> {
         }
         println!();
         return Ok(());
+    }
+
+    // ── Backlog scaffolder (--backlog-new <PREFIX> --path <dir>) ────────────
+    if let Some(prefix) = args.backlog_new.as_deref() {
+        match backlog::scaffold_queue(prefix, &args.path, args.backlog_name.as_deref()) {
+            Ok(files) => {
+                for file in &files {
+                    println!("   ✅ created {}", file.display());
+                }
+                println!(
+                    "   ℹ️ Register the queue in governance/stenio/backlog-queues.toml (name, prefix = \"{prefix}\", dir) and rebuild the engine."
+                );
+                return Ok(());
+            }
+            Err(reason) => {
+                eprintln!("   ✗ {reason}");
+                std::process::exit(2);
+            }
+        }
     }
 
     // ── Backlog Mode (--backlog [--search <term>]) ──────────────────────────

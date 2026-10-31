@@ -1,0 +1,36 @@
+# Canonical registry of the backlog queues audited by StenioSentinel.
+#
+# One queue = a directory holding `backlog.md` (active) and `backlog-archive.md` (history),
+# with ids `<prefix><number>`. All queues share ONE lifecycle model (see
+# governance/backlog-method.md). This file is embedded in the binary at build time, so a
+# queue is added by (1) `stenio --backlog-new <PREFIX> --path <dir>`, (2) appending its
+# entry here, (3) rebuilding. The registry is versioned with the engine: reproducible.
+#
+# Fields
+#   name           short label shown in reports
+#   prefix         id prefix, 2-4 capital letters and a dash (HB-, SB-, MB-, ...)
+#   dir            queue directory, relative to the audited path
+#   requires       optional: a directory that must also exist under the audited path
+#                  (used to recognise a repository root, e.g. the Hub's `app/`)
+#   linked         true: every item is traced both ways to the document it references
+#                  (`pending: [PREFIX-n]` frontmatter). false (default): structure,
+#                  lifecycle, state, recurrence and Ref resolution only
+#   self_if_named  true: when the audited path itself ends with `dir`, it is the queue dir
+
+[[queue]]
+name = "homelab"
+prefix = "HB-"
+dir = "mnemocine"
+linked = true
+self_if_named = true
+
+[[queue]]
+name = "hub"
+prefix = "SB-"
+dir = "docs"
+requires = "app"
+
+[[queue]]
+name = "miracena"
+prefix = "MB-"
+dir = "clients/miracena"
