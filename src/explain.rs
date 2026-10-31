@@ -19,10 +19,10 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Standardized StenioSentinel Governance Disclaimer Missing or Inconsistent",
         severity: "ERROR",
         tag: "doc",
-        summary: "Enforces the standardized human-AI governance disclaimer ('Human-in-the-Loop Agentic Engineering & Deterministic Governance') and blocks legacy vibe-coding badges in public repositories.",
+        summary: "Enforces the standardized human-AI governance disclaimer ('Human-in-the-Loop Agentic Engineering') and blocks legacy vibe-coding badges in public repositories.",
         rationale: "Ensures transparency regarding agentic engineering governance and human authorship across open-source and public projects led by Carlos Eduardo Rodrigues, positioning StenioSentinel as the deterministic guardian of integrity.",
         bad_example: "> 🔮 **Yes... This is a Vibe Coded project**\n# Or README missing any governance disclaimer.",
-        good_example: "<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",
+        good_example: "<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering\n\nDeveloped by [Carlos Eduardo Rodrigues](https://github.com/ceduardorodrig) with AI coding agents.\nEvery change is verified by the deterministic quality gate [StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL).\n\n</div>",
         remediation: "Insert the standardized centered HTML block at the bottom of README.md.",
     },
     RuleExplanation {

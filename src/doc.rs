@@ -426,8 +426,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 .to_string_lossy()
                 .to_string();
 
-            let has_modern_title = content
-                .contains("Human-in-the-Loop Agentic Engineering & Deterministic Governance");
+            // The short title is a substring of the earlier long one
+            // ("... & Deterministic Governance"), so READMEs that still carry the long
+            // form remain valid and no fleet-wide rewrite is forced.
+            let has_modern_title = content.contains("Human-in-the-Loop Agentic Engineering");
             let has_legacy_vibe = content.contains("**Yes... This is a Vibe Coded project**")
                 || content.contains("Yes... This is a Vibe Coded project")
                 || content.contains("Vibe Coded with StenioSentinel")
@@ -443,11 +445,11 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 let (reason, suggestion) = if has_legacy_vibe {
                     (
                         "README contains legacy 'vibe-coded' badge or mention incompatible with current governance.",
-                        "Replace legacy badge with '[![Governance](https://img.shields.io/badge/governance-StenioSentinel-brightgreen)](https://github.com/ceduardorodrig/STENIO-SENTINEL)' and ensure the 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' footer.",
+                        "Replace legacy badge with '[![Governance](https://img.shields.io/badge/governance-StenioSentinel-brightgreen)](https://github.com/ceduardorodrig/STENIO-SENTINEL)' and ensure the 'Human-in-the-Loop Agentic Engineering' footer.",
                     )
                 } else if !has_modern_title {
                     (
-                        "Disclaimer 'Human-in-the-Loop Agentic Engineering & Deterministic Governance' not found in README.",
+                        "Disclaimer 'Human-in-the-Loop Agentic Engineering' not found in README.",
                         "Add the standardized Stenio governance disclaimer block to the footer of README.md.",
                     )
                 } else {
@@ -463,10 +465,10 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     severity: Severity::Error,
                     file_path: path_display,
                     line_number: content.lines().count().max(1),
-                    snippet: "Human-in-the-Loop Agentic Engineering & Deterministic Governance".to_string(),
+                    snippet: "Human-in-the-Loop Agentic Engineering".to_string(),
                     message: format!("README '{}': {}", readme_path.display(), reason),
                     suggestion: Some(format!(
-                        "{}\nMandatory format:\n<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering & Deterministic Governance\n\n> **Architected by an Anthropologist, Built with Autonomous AI Agents, Governed by Deterministic Code.**\n> \n> This project was developed through rigorous human-AI pair programming led by **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig)) — an anthropologist and product architect using autonomous coding agents under strict, sub-millisecond static governance.\n>\n> Every commit, driver, and system architecture is continuously audited and enforced by 🤖 **[StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL)** (our native Rust quality gate) with zero tolerance for hallucinated tests, blind merges, or bypassed checks.\n\n</div>",
+                        "{}\nMandatory format:\n<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering\n\nDeveloped by [Carlos Eduardo Rodrigues](https://github.com/ceduardorodrig) with AI coding agents.\nEvery change is verified by the deterministic quality gate [StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL).\n\n</div>",
                         suggestion
                     )),
                 });
