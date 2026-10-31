@@ -171,7 +171,7 @@ pub fn audit_frontend_file(path: &Path, content: &str, whitelist: &Whitelist) ->
         }
     }
 
-    // ── 5B. FRONT-NO-OFF-SPEC-BUTTON: Cores Rígidas e Botões Fora da Spec MD3 ──
+    // ── 5B. FRONT-NO-OFF-SPEC-BUTTON: Hardcoded Colors and Off-Spec MD3 Buttons ──
     if path_str.ends_with(".css") || path_str.ends_with(".tsx") || path_str.ends_with(".ts") {
         for (line_idx, line) in content.lines().enumerate() {
             let lower = line.to_lowercase();

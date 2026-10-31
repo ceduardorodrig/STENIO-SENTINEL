@@ -364,6 +364,71 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                         }
                     }
                 }
+
+                // Rule 4.3: Tier A Documentation Language (DOC-LANGUAGE-EN)
+                let is_hub_doc = doc_path.to_string_lossy().contains("sumaenima-hub")
+                    || doc_path.to_string_lossy().contains("SUMAENIMA-HUB")
+                    || repo_root.ends_with("sumaenima-hub")
+                    || repo_root.ends_with("SUMAENIMA-HUB");
+
+                if is_hub_doc {
+                    let file_name = doc_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                    if file_name != "handoff-log.md"
+                        && file_name != "cockpit-flight.md"
+                        && !file_name.contains("ptbr")
+                        && !doc_path.to_string_lossy().contains("/archive/")
+                        && !doc_path.to_string_lossy().contains("/external/")
+                    {
+                        let mut in_code_fence = false;
+                        let mut pt_lines = 0;
+                        let mut first_pt_line = 0;
+                        let mut first_snippet = String::new();
+
+                        for (line_idx, line) in content.lines().enumerate() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("```") {
+                                in_code_fence = !in_code_fence;
+                                continue;
+                            }
+                            if in_code_fence || trimmed.is_empty() {
+                                continue;
+                            }
+                            // Strip inline code `...`
+                            let mut stripped = String::new();
+                            let mut in_inline = false;
+                            for ch in trimmed.chars() {
+                                if ch == '`' {
+                                    in_inline = !in_inline;
+                                } else if !in_inline {
+                                    stripped.push(ch);
+                                }
+                            }
+                            if crate::comments::is_portuguese_comment(&stripped) {
+                                pt_lines += 1;
+                                if first_pt_line == 0 {
+                                    first_pt_line = line_idx + 1;
+                                    first_snippet = trimmed.to_string();
+                                }
+                            }
+                        }
+
+                        if pt_lines > 0 {
+                            violations.push(Violation {
+                                rule_id: "DOC-LANGUAGE-EN".to_string(),
+                                rule_name: "Non-English Technical Documentation".to_string(),
+                                severity: Severity::Warning,
+                                file_path: path_display.clone(),
+                                line_number: first_pt_line,
+                                snippet: first_snippet,
+                                message: format!(
+                                    "Document '{}' contains {} line(s) in Portuguese. Tier A policy mandates English.",
+                                    file_name, pt_lines
+                                ),
+                                suggestion: Some("Translate document prose to English per governance/language-policy.md (tracked in SB-017).".to_string()),
+                            });
+                        }
+                    }
+                }
             }
         }
     }

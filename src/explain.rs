@@ -828,6 +828,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "services:\n  wordpress:\n    image: wordpress:6.6.2-php8.3-apache",
         remediation: "Pin the service image to a specific semantic version tag (e.g. 'wordpress:6.6.2-php8.3-apache', 'mariadb:11', 'postgres:16-alpine').",
     },
+    RuleExplanation {
+        id: "CODE-NO-PORTUGUESE-COMMENTS",
+        name: "Non-English Comments in Source Code",
+        severity: "ERROR",
+        tag: "gov",
+        summary: "Prohibits Portuguese and non-English comments across all programming languages (Rust, TypeScript, Python, Shell, SQL, CSS, HTML, TOML, YAML).",
+        rationale: "Per the universal language policy (governance/language-policy.md), all codebase assets including code comments must be written strictly in English to ensure universal comprehensibility, multi-agent interoperability, and professional engineering standards.",
+        bad_example: "// função para validar o token do usuário\n# verificar se o container está ativo\n-- tabela de pagamentos pendentes",
+        good_example: "// Function to validate user token\n# Verify if container is active\n-- Pending payments table",
+        remediation: "Translate all comments, documentation docstrings, and inline notes into professional technical English.",
+    },
+    RuleExplanation {
+        id: "DOC-LANGUAGE-EN",
+        name: "Non-English Technical Documentation",
+        severity: "WARN",
+        tag: "doc",
+        summary: "Flags technical documentation containing Portuguese prose outside code blocks in Tier A repositories.",
+        rationale: "Technical documentation in Tier A software repositories must be written in English to align with international open-source standards and prevent AI drift across diverse coding agents.",
+        bad_example: "# Arquitetura de Pagamentos\nEste documento detalha o fluxo de liquidação...",
+        good_example: "# Payment Architecture\nThis document details the settlement workflow...",
+        remediation: "Translate the technical document to English per the backlog translation plan (SB-017).",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

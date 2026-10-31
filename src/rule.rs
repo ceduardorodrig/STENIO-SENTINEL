@@ -432,6 +432,27 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Some("Log the error (tracing, logger, console.error) or propagate via '?'. Never swallow errors silently."),
     ));
 
+    // ── 17.1 Universal Code Comments Language: Prohibition of Portuguese Comments ───
+    let mut rule_pt_comments = Rule::new(
+        "CODE-NO-PORTUGUESE-COMMENTS",
+        "gov",
+        Severity::Error,
+        "Non-English Comments in Source Code",
+        "Source code comments across all programming languages must be written exclusively in English.",
+        r"(//|/\*|\*|--|#|<!--)",
+        &[
+            "rs", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "sql", "css", "scss",
+            "html", "yaml", "yml", "toml",
+        ],
+        Some("Translate comments to English according to the universal language policy (governance/language-policy.md)."),
+    );
+    rule_pt_comments.path_excludes = vec![
+        ".migration_dumps/".to_string(),
+        "/archive/".to_string(),
+        "archive/".to_string(),
+    ];
+    rules.push(rule_pt_comments);
+
     // ── 18. Backend: Prohibition of Blocking I/O in Tokio ──────────────────
     rules.push(Rule::new(
         "BACKEND-BLOCKING-IO",

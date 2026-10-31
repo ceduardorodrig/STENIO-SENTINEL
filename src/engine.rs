@@ -525,6 +525,17 @@ impl Engine {
                             continue;
                         }
 
+                        if rule.id == "CODE-NO-PORTUGUESE-COMMENTS" {
+                            let comment_opt = crate::comments::extract_comment(&ext, line);
+                            if let Some(comment) = comment_opt {
+                                if !crate::comments::is_portuguese_comment(comment) {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
+
                         if !self.whitelist.is_ignored(&path_str, &rule.id, line) {
                             file_violations.push(Violation {
                                 rule_id: rule.id.clone(),

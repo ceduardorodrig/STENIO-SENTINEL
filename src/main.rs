@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 mod backlog;
 mod baseline;
 mod clean;
+mod comments;
 mod config;
 mod context;
 mod cv;
@@ -577,6 +578,29 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         "grep -r pattern .",
         true
     ); // New: AGENTS.md terminal preference rule
+
+    // CODE-NO-PORTUGUESE-COMMENTS self-tests
+    total += 1;
+    let pt_comment = "// validação de usuário";
+    let en_comment = "// user validation";
+    let extracted_pt = crate::comments::extract_comment("rs", pt_comment);
+    let extracted_en = crate::comments::extract_comment("rs", en_comment);
+    let is_pt_detected = extracted_pt.map_or(false, crate::comments::is_portuguese_comment);
+    let is_en_detected = extracted_en.map_or(false, crate::comments::is_portuguese_comment);
+    if is_pt_detected && !is_en_detected {
+        passed += 1;
+        println!(
+            "   ✅ Test {:<24} [{}] - OK",
+            "Portuguese Comments",
+            "CODE-NO-PORTUGUESE-COMMENTS".cyan()
+        );
+    } else {
+        println!(
+            "   ❌ Test {:<24} [{}] - FAILED",
+            "Portuguese Comments",
+            "CODE-NO-PORTUGUESE-COMMENTS".red()
+        );
+    }
     check_case!(
         "Valid Rust Tools",
         "ARCH-RUST-TOOLS",
