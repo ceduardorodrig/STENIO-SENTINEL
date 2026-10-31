@@ -62,106 +62,10 @@ pub fn audit_governance(repo_root: &Path) -> GovAuditResult {
     } else {
         match fs::read_to_string(&agents_md_path) {
             Ok(content) => {
-                // If this is the universal AGENTS.md of Vault/Homelab
-                if content.contains("agent-conventions.md") && !content.contains("StênioBOT") {
-                    let has_conventions = content.contains("agent-conventions.md");
-                    let has_rust_tools = content.contains("Ferramentas Rust")
-                        || content.contains("Preferências de Terminal")
-                        || content.contains("Rust Tools")
-                        || content.contains("Terminal Preferences");
-                    let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
-
-                    if has_conventions && has_rust_tools && has_homelab_or_mei {
-                        messages.push(
-                            "✅ Universal AGENTS.md intact and aligned with governance conventions"
-                                .to_string(),
-                        );
-                        messages
-                            .push("✅ Rust tools and system privilege rules preserved".to_string());
-                        laws_count = 14;
-                    } else {
-                        let err = "❌ Universal AGENTS.md missing essential conventions or rules"
-                            .to_string();
-                        messages.push(err.clone());
-                        errors.push(err);
-                    }
-                } else if content.contains("currículo")
-                    || content.contains("curriculum-vitae")
-                    || content.contains("WITH-SMOOTH-MOTION")
-                    || ((content.contains("StenioSentinel") || content.contains("StênioKernel"))
-                        && !content.contains("Orientação para assistentes")
-                        && !content.contains("Guidance for AI Assistants")
-                        && !content.contains("LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA)")
-                        && !content.contains("ABSOLUTE LAWS OF THE AGENT"))
-                {
-                    // Satellite / Specialized Public Repository AGENTS.md
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with(|c: char| c.is_ascii_digit())
-                            && trimmed.contains(". **")
-                        {
-                            laws_count += 1;
-                        }
-                    }
-
-                    if laws_count >= 5 {
-                        messages.push(format!(
-                            "✅ Satellite AGENTS.md intact with {} specific rules preserved",
-                            laws_count
-                        ));
-                    } else {
-                        let err = format!(
-                            "❌ Satellite AGENTS.md contains only {} rules (expected >= 5).",
-                            laws_count
-                        );
-                        messages.push(err.clone());
-                        errors.push(err);
-                    }
-                } else {
-                    // Engineering Hub AGENTS.md (38 Absolute Laws)
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with(|c: char| c.is_ascii_digit())
-                            && trimmed.contains(". **")
-                        {
-                            laws_count += 1;
-                        }
-                    }
-
-                    if laws_count >= 13 {
-                        messages.push(format!(
-                            "✅ AGENTS.md intact with {} Absolute Laws preserved",
-                            laws_count
-                        ));
-                    } else {
-                        let err = format!(
-                            "❌ AGENTS.md contains only {} laws (expected >= 13). Omission of absolute laws!",
-                            laws_count
-                        );
-                        messages.push(err.clone());
-                        errors.push(err);
-                    }
-
-                    // Vital clauses validation (bilingual PT/EN)
-                    if content.contains("REGRA DE OURO") || content.contains("GOLDEN RULE") {
-                        messages.push("✅ Golden Rule clause present".to_string());
-                    } else {
-                        let err = "❌ Golden Rule clause ('GOLDEN RULE' / 'REGRA DE OURO') missing from AGENTS.md".to_string();
-                        messages.push(err.clone());
-                        errors.push(err);
-                    }
-
-                    if content.contains("HERANÇA DE CONTEXTO")
-                        || content.contains("CONTEXT INHERITANCE")
-                    {
-                        messages.push("✅ Context Inheritance clause present".to_string());
-                    } else {
-                        let err =
-                            "❌ Context Inheritance clause ('CONTEXT INHERITANCE' / 'HERANÇA DE CONTEXTO') missing from AGENTS.md".to_string();
-                        messages.push(err.clone());
-                        errors.push(err);
-                    }
-                }
+                let (c, msgs, errs) = evaluate_agents_md_content(&content);
+                laws_count = c;
+                messages.extend(msgs);
+                errors.extend(errs);
             }
             Err(e) => {
                 let err = format!("❌ Failed to read AGENTS.md: {}", e);
@@ -409,4 +313,206 @@ pub fn audit_directory_casing(repo_root: &Path) -> Vec<crate::engine::Violation>
     }
 
     violations
+}
+
+/// Evaluates AGENTS.md content against universal, satellite, or engineering hub governance rules.
+/// Returns (laws_count, messages, errors).
+pub fn evaluate_agents_md_content(content: &str) -> (usize, Vec<String>, Vec<String>) {
+    let mut messages = Vec::new();
+    let mut errors = Vec::new();
+    let mut laws_count = 0;
+
+    // If this is the universal AGENTS.md of Vault/Homelab
+    if content.contains("agent-conventions.md")
+        && !content.contains("StênioBOT")
+        && !content.contains("StenioBOT")
+    {
+        let has_conventions = content.contains("agent-conventions.md");
+        let has_rust_tools = content.contains("Ferramentas Rust")
+            || content.contains("Preferências de Terminal")
+            || content.contains("Rust Tools")
+            || content.contains("Terminal Preferences");
+        let has_homelab_or_mei = content.contains("Homelab") || content.contains("MEI");
+
+        if has_conventions && has_rust_tools && has_homelab_or_mei {
+            messages.push(
+                "✅ Universal AGENTS.md intact and aligned with governance conventions".to_string(),
+            );
+            messages.push("✅ Rust tools and system privilege rules preserved".to_string());
+            laws_count = 14;
+        } else {
+            let err = "❌ Universal AGENTS.md missing essential conventions or rules".to_string();
+            messages.push(err.clone());
+            errors.push(err);
+        }
+    } else if content.contains("currículo")
+        || content.contains("curriculum-vitae")
+        || content.contains("WITH-SMOOTH-MOTION")
+        || ((content.contains("StenioSentinel") || content.contains("StênioKernel"))
+            && !content.contains("Orientação para assistentes")
+            && !content.contains("Guidance for AI Assistants")
+            && !content.contains("Guidance for assistants")
+            && !content.contains("Guidance for Assistants")
+            && !content.contains("LEIS ABSOLUTAS DO AGENTE")
+            && !content.contains("ABSOLUTE LAWS OF THE AGENT"))
+    {
+        // Satellite / Specialized Public Repository AGENTS.md
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                laws_count += 1;
+            }
+        }
+
+        if laws_count >= 5 {
+            messages.push(format!(
+                "✅ Satellite AGENTS.md intact with {} specific rules preserved",
+                laws_count
+            ));
+        } else {
+            let err = format!(
+                "❌ Satellite AGENTS.md contains only {} rules (expected >= 5).",
+                laws_count
+            );
+            messages.push(err.clone());
+            errors.push(err);
+        }
+    } else {
+        // Engineering Hub AGENTS.md (38 Absolute Laws)
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". **") {
+                laws_count += 1;
+            }
+        }
+
+        if laws_count >= 13 {
+            messages.push(format!(
+                "✅ AGENTS.md intact with {} Absolute Laws preserved",
+                laws_count
+            ));
+        } else {
+            let err = format!(
+                "❌ AGENTS.md contains only {} laws (expected >= 13). Omission of absolute laws!",
+                laws_count
+            );
+            messages.push(err.clone());
+            errors.push(err);
+        }
+
+        // Vital clauses validation (bilingual PT/EN)
+        if content.contains("REGRA DE OURO") || content.contains("GOLDEN RULE") {
+            messages.push("✅ Golden Rule clause present".to_string());
+        } else {
+            let err =
+                "❌ Golden Rule clause ('GOLDEN RULE' / 'REGRA DE OURO') missing from AGENTS.md"
+                    .to_string();
+            messages.push(err.clone());
+            errors.push(err);
+        }
+
+        if content.contains("HERANÇA DE CONTEXTO") || content.contains("CONTEXT INHERITANCE") {
+            messages.push("✅ Context Inheritance clause present".to_string());
+        } else {
+            let err = "❌ Context Inheritance clause ('CONTEXT INHERITANCE' / 'HERANÇA DE CONTEXTO') missing from AGENTS.md".to_string();
+            messages.push(err.clone());
+            errors.push(err);
+        }
+    }
+
+    (laws_count, messages, errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_evaluate_agents_md_hub_portuguese() {
+        let content = r#"# Orientação para assistentes (StênioBOT)
+## 🛑 LEIS ABSOLUTAS DO AGENTE (ANTIGRAVITY / IA) 🛑
+1. **DOCS-FIRST:** doc first
+2. **RASTREABILIDADE:** ancoras
+3. **SINTAXE VISUAL:** glyphs
+4. **BACKLOG VIVO:** sb
+5. **A REGRA DE OURO (Gatilho Anti-Drift):** stenio
+6. **BASE VIVA:** kbase
+7. **SEM LEFTOVERS:** clean
+8. **LEI 8:** texto
+9. **LEI 9:** texto
+10. **LEI 10:** texto
+11. **LEI 11:** texto
+12. **LEI 12:** texto
+13. **LEI 13:** texto
+14. **HERANÇA DE CONTEXTO OBRIGATÓRIA (ADR-032):** handoff
+"#;
+        let (laws, _, errs) = evaluate_agents_md_content(content);
+        assert_eq!(laws, 14);
+        assert!(errs.is_empty(), "Expected 0 errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn test_evaluate_agents_md_hub_english() {
+        let content = r#"# Guidance for Assistants (StenioBOT)
+## 🛑 ABSOLUTE LAWS OF THE AGENT (ANTIGRAVITY / AI) 🛑
+1. **DOCS-FIRST:** doc first
+2. **TRACEABILITY:** anchors
+3. **STRICT VISUAL SYNTAX:** glyphs
+4. **LIVING BACKLOG:** sb
+5. **THE GOLDEN RULE (Anti-Drift Trigger):** stenio
+6. **LIVING KNOWLEDGE BASE:** kbase
+7. **NO LEFTOVER ARTIFACTS:** clean
+8. **LAW 8:** text
+9. **LAW 9:** text
+10. **LAW 10:** text
+11. **LAW 11:** text
+12. **LAW 12:** text
+13. **LAW 13:** text
+14. **MANDATORY CONTEXT INHERITANCE (ADR-032):** handoff
+"#;
+        let (laws, _, errs) = evaluate_agents_md_content(content);
+        assert_eq!(laws, 14);
+        assert!(errs.is_empty(), "Expected 0 errors, got: {:?}", errs);
+    }
+
+    #[test]
+    fn test_evaluate_agents_md_universal_bilingual() {
+        let pt = r#"---
+tags: [meta, agents]
+---
+# AGENTS.md
+Este repo segue agent-conventions.md.
+## Preferências de Terminal (Ferramentas Rust)
+## Homelab
+"#;
+        let (laws_pt, _, errs_pt) = evaluate_agents_md_content(pt);
+        assert_eq!(laws_pt, 14);
+        assert!(errs_pt.is_empty());
+
+        let en = r#"---
+tags: [meta, agents]
+---
+# AGENTS.md
+This repo follows agent-conventions.md.
+## Terminal Preferences (Rust Tools)
+## Homelab
+"#;
+        let (laws_en, _, errs_en) = evaluate_agents_md_content(en);
+        assert_eq!(laws_en, 14);
+        assert!(errs_en.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_agents_md_satellite() {
+        let content = r#"# AGENTS.md (WITH-SMOOTH-MOTION)
+1. **Rule 1:** something
+2. **Rule 2:** something
+3. **Rule 3:** something
+4. **Rule 4:** something
+5. **Rule 5:** something
+"#;
+        let (laws, _, errs) = evaluate_agents_md_content(content);
+        assert_eq!(laws, 5);
+        assert!(errs.is_empty());
+    }
 }
