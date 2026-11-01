@@ -24,8 +24,8 @@ fn mask_snippet(line: &str) -> String {
 
 /// Distinguishes a real credential from prose that merely mentions one.
 ///
-/// Documentation frequently shows illustrative values ("Garantir
-/// `ADMINPASSWORD=adminpz123` em ...") or lists variable names as a concept.
+/// Documentation frequently shows illustrative values (an install guide telling
+/// the reader to set `ADMINPASSWORD=adminpz123`) or lists variable names as a concept.
 /// Those are not leaks: nothing is being exposed. Real leaks have random-looking
 /// values; examples are short, dictionary-like, or match a well-known demo
 /// value. This keeps the rule actionable instead of training everyone to
@@ -49,7 +49,7 @@ fn is_documentation_example(line: &str, value: &str) -> bool {
         .starts_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
         && line.contains(". ")
     {
-        // numbered list item in a guide, e.g. "1. Garantir ..."
+        // numbered list item in a guide, e.g. "1. Make sure ..." (in the guide's own language)
         return true;
     }
 
