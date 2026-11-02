@@ -441,10 +441,12 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         "Source code comments across all programming languages must be written exclusively in English.",
         r"(//|/\*|\*|--|#|<!--)",
         &[
-            "rs", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "sql", "css", "scss",
-            "html", "yaml", "yml", "toml",
+            "rs", "ts", "tsx", "js", "jsx", "py", "sh", "bash", "sql", "css", "scss", "html",
+            "yaml", "yml", "toml",
         ],
-        Some("Translate comments to English according to the universal language policy (governance/language-policy.md)."),
+        Some(
+            "Translate comments to English according to the universal language policy (governance/language-policy.md).",
+        ),
     );
     rule_pt_comments.path_excludes = vec![
         ".migration_dumps/".to_string(),

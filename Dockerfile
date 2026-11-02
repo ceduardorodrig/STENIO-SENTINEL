@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY backlog-queues.toml ./
+COPY templates ./templates
 
 # Build optimized release binary with stripped debug symbols
 RUN cargo build --release && strip target/release/stenio

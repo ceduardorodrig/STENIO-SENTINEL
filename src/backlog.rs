@@ -577,8 +577,7 @@ fn check_forward(
                 item.id, reference
             ),
             suggestion: Some(
-                "Fix the Ref to an existing document, or remove the item."
-                    .to_string(),
+                "Fix the Ref to an existing document, or remove the item.".to_string(),
             ),
         });
         return found;
@@ -745,7 +744,10 @@ fn extract_link(cell: &str) -> Option<String> {
 fn parse_severity(cell: &str) -> (Severity, bool) {
     if cell.contains('🔴') {
         (Severity::Error, true)
-    } else if ['🟠', '🟡', '🟢', '🔵', '💡'].iter().any(|glyph| cell.contains(*glyph)) {
+    } else if ['🟠', '🟡', '🟢', '🔵', '💡']
+        .iter()
+        .any(|glyph| cell.contains(*glyph))
+    {
         (Severity::Warning, true)
     } else {
         (Severity::Warning, false)
@@ -802,7 +804,10 @@ fn parse_table(content: &str, prefix: &str) -> Table {
     let mut orphans = Vec::new();
     for (idx, line) in lines.iter().enumerate().skip(header_idx + 1) {
         let cells = split_row(line);
-        let Some(id) = cells.get(columns.id).and_then(|cell| extract_id(cell, prefix)) else {
+        let Some(id) = cells
+            .get(columns.id)
+            .and_then(|cell| extract_id(cell, prefix))
+        else {
             if let Some(id) = cells.first().and_then(|cell| extract_id(cell, prefix)) {
                 orphans.push((idx + 1, id));
             }
@@ -940,8 +945,15 @@ pub fn run_backlog_report(repo_root: &Path, search: Option<&str>) {
         let archive = parse_table(&archive_content, &q.prefix);
         println!(
             "   {} {}",
-            format!("{} ({}) — active queue:", q.name, q.prefix).white().bold(),
-            format!("{} item(s), {} archived", active.items.len(), archive.items.len()).dimmed()
+            format!("{} ({}) — active queue:", q.name, q.prefix)
+                .white()
+                .bold(),
+            format!(
+                "{} item(s), {} archived",
+                active.items.len(),
+                archive.items.len()
+            )
+            .dimmed()
         );
         print_queue(&active, &active_content);
         println!();
@@ -958,11 +970,17 @@ pub fn run_backlog_report(repo_root: &Path, search: Option<&str>) {
 /// `stenio --backlog-new <PREFIX> --path <dir>`: scaffolds a new queue (`backlog.md` +
 /// `backlog-archive.md`) from the embedded templates and prints the registry entry to add.
 /// Never overwrites an existing file. Returns `Err` with a human-readable reason on refusal.
-pub fn scaffold_queue(prefix: &str, dir: &Path, name: Option<&str>) -> Result<Vec<PathBuf>, String> {
+pub fn scaffold_queue(
+    prefix: &str,
+    dir: &Path,
+    name: Option<&str>,
+) -> Result<Vec<PathBuf>, String> {
     let valid = prefix.len() >= 3
         && prefix.len() <= 5
         && prefix.ends_with('-')
-        && prefix[..prefix.len() - 1].chars().all(|c| c.is_ascii_uppercase());
+        && prefix[..prefix.len() - 1]
+            .chars()
+            .all(|c| c.is_ascii_uppercase());
     if !valid {
         return Err(format!(
             "invalid prefix '{prefix}': use 2-4 capital letters and a dash (e.g. TB-)"
@@ -979,12 +997,20 @@ pub fn scaffold_queue(prefix: &str, dir: &Path, name: Option<&str>) -> Result<Ve
     });
     fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let mut written = Vec::new();
-    for (file, template) in [(BACKLOG_REL, TEMPLATE_QUEUE), (ARCHIVE_REL, TEMPLATE_ARCHIVE)] {
+    for (file, template) in [
+        (BACKLOG_REL, TEMPLATE_QUEUE),
+        (ARCHIVE_REL, TEMPLATE_ARCHIVE),
+    ] {
         let target = dir.join(file);
         if target.exists() {
-            return Err(format!("{} already exists; refusing to overwrite", target.display()));
+            return Err(format!(
+                "{} already exists; refusing to overwrite",
+                target.display()
+            ));
         }
-        let body = template.replace("{{NAME}}", &label).replace("{{PREFIX}}", prefix);
+        let body = template
+            .replace("{{NAME}}", &label)
+            .replace("{{PREFIX}}", prefix);
         fs::write(&target, body).map_err(|e| format!("cannot write {}: {e}", target.display()))?;
         written.push(target);
     }
@@ -1136,7 +1162,10 @@ mod tests {
     fn prefix_is_configurable_and_isolated() {
         assert_eq!(extract_id("**SB-012**", "SB-"), Some("SB-012".to_string()));
         assert_eq!(extract_id("**SB-012**", "HB-"), None);
-        assert_eq!(extract_ids("↻ SB-003 and HB-001", "SB-"), vec!["SB-003".to_string()]);
+        assert_eq!(
+            extract_ids("↻ SB-003 and HB-001", "SB-"),
+            vec!["SB-003".to_string()]
+        );
     }
 
     #[test]
@@ -1173,7 +1202,8 @@ mod tests {
     fn product_queue_needs_no_pending_declaration() {
         let root = std::env::temp_dir().join(format!("stenio-backlog-test-{}", std::process::id()));
         let docs = root.join("docs");
-        let created = fs::create_dir_all(root.join("app")).is_ok() && fs::create_dir_all(&docs).is_ok();
+        let created =
+            fs::create_dir_all(root.join("app")).is_ok() && fs::create_dir_all(&docs).is_ok();
         assert!(created);
         let wrote = fs::write(docs.join("area.md"), "# area\n").is_ok()
             && fs::write(
@@ -1194,20 +1224,40 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
 
         assert_eq!(report.total_items, 1);
-        assert!(report.violations.is_empty(), "unexpected: {}", report.violations.len());
+        assert!(
+            report.violations.is_empty(),
+            "unexpected: {}",
+            report.violations.len()
+        );
     }
 
     #[test]
     fn embedded_registry_parses_with_unique_prefixes() {
         let queues = registry();
-        assert!(queues.len() >= 3, "registry must declare the HB/SB/MB queues");
+        assert!(
+            queues.len() >= 3,
+            "registry must declare the HB/SB/MB queues"
+        );
         let mut prefixes: Vec<&str> = queues.iter().map(|q| q.prefix.as_str()).collect();
         prefixes.sort_unstable();
         prefixes.dedup();
-        assert_eq!(prefixes.len(), queues.len(), "queue prefixes must be unique");
-        assert!(queues.iter().all(|q| q.prefix.ends_with('-') && !q.dir.is_empty()));
+        assert_eq!(
+            prefixes.len(),
+            queues.len(),
+            "queue prefixes must be unique"
+        );
+        assert!(
+            queues
+                .iter()
+                .all(|q| q.prefix.ends_with('-') && !q.dir.is_empty())
+        );
         // Only the homelab queue is traced to documents.
-        assert!(queues.iter().filter(|q| q.linked).all(|q| q.prefix == "HB-"));
+        assert!(
+            queues
+                .iter()
+                .filter(|q| q.linked)
+                .all(|q| q.prefix == "HB-")
+        );
     }
 
     #[test]
@@ -1216,7 +1266,10 @@ mod tests {
         assert!(scaffold_queue("tb-", &dir, None).is_err());
         assert!(scaffold_queue("TB", &dir, None).is_err());
         assert!(scaffold_queue("TOOLONG-", &dir, None).is_err());
-        assert!(scaffold_queue("HB-", &dir, None).is_err(), "HB- is already registered");
+        assert!(
+            scaffold_queue("HB-", &dir, None).is_err(),
+            "HB- is already registered"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1228,7 +1281,10 @@ mod tests {
         let dir = root.join("tasks");
         let written = scaffold_queue("ZZ-", &dir, Some("Tasks"));
         assert!(written.is_ok());
-        assert!(scaffold_queue("ZY-", &dir, None).is_err(), "must not overwrite");
+        assert!(
+            scaffold_queue("ZY-", &dir, None).is_err(),
+            "must not overwrite"
+        );
 
         let active = fs::read_to_string(dir.join(BACKLOG_REL)).unwrap_or_default();
         assert!(active.contains("# Tasks Backlog") && active.contains("ZZ-nnn"));
@@ -1242,6 +1298,10 @@ mod tests {
         };
         let report = audit_queue(&root, &dir, &queue);
         let _ = fs::remove_dir_all(&root);
-        assert!(report.violations.is_empty(), "unexpected: {}", report.violations.len());
+        assert!(
+            report.violations.is_empty(),
+            "unexpected: {}",
+            report.violations.len()
+        );
     }
 }

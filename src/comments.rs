@@ -13,8 +13,8 @@ pub fn extract_comment<'a>(ext: &str, line: &'a str) -> Option<&'a str> {
 
     // 1. Direct line-start comments
     match ext {
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "c" | "cpp" | "h" | "hpp" | "go" | "java"
-        | "kt" | "swift" | "dart" | "zig" | "cs" | "php" | "css" | "scss" => {
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "c" | "cpp" | "h" | "hpp" | "go" | "java" | "kt"
+        | "swift" | "dart" | "zig" | "cs" | "php" | "css" | "scss" => {
             if let Some(rest) = trimmed.strip_prefix("///") {
                 return Some(rest.trim());
             }
@@ -129,13 +129,47 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
 
     // 3. Unambiguous Portuguese grammatical words & technical terms (unaccented forms)
     static UNAMBIGUOUS_PT_WORDS: &[&str] = &[
-        "funcao", "funcoes", "padrao", "padroes", "configuracao", "configuracoes",
-        "atencao", "observacao", "validacao", "validacoes", "requisicao", "requisicoes",
-        "atualizacao", "autenticacao", "conexao", "conexoes", "criacao", "edicao",
-        "alteracao", "resposta", "respostas", "leitora", "servidor", "mensagem", "mensagens",
-        "resolvido", "resolvida", "exclusao", "permissao", "permissoes", "obrigatorio",
-        "obrigatoria", "invalido", "invalida", "nao", "sao", "estao", "verificar", "garantir",
-        "relatorio", "relatorios"
+        "funcao",
+        "funcoes",
+        "padrao",
+        "padroes",
+        "configuracao",
+        "configuracoes",
+        "atencao",
+        "observacao",
+        "validacao",
+        "validacoes",
+        "requisicao",
+        "requisicoes",
+        "atualizacao",
+        "autenticacao",
+        "conexao",
+        "conexoes",
+        "criacao",
+        "edicao",
+        "alteracao",
+        "resposta",
+        "respostas",
+        "leitora",
+        "servidor",
+        "mensagem",
+        "mensagens",
+        "resolvido",
+        "resolvida",
+        "exclusao",
+        "permissao",
+        "permissoes",
+        "obrigatorio",
+        "obrigatoria",
+        "invalido",
+        "invalida",
+        "nao",
+        "sao",
+        "estao",
+        "verificar",
+        "garantir",
+        "relatorio",
+        "relatorios",
     ];
 
     // Strip backticked symbols before checking word tokens
@@ -162,8 +196,8 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
 
     // 4. Multiple Portuguese stop-words (>= 2)
     static PT_STOPWORDS: &[&str] = &[
-        "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta",
-        "esse", "essa", "aquele", "aquela", "quando", "onde", "porque", "uma", "mais"
+        "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta", "esse", "essa",
+        "aquele", "aquela", "quando", "onde", "porque", "uma", "mais",
     ];
 
     let sw_count = words
@@ -181,25 +215,52 @@ mod tests {
     #[test]
     fn test_extract_comment_c_style() {
         assert_eq!(extract_comment("rs", "// hello world"), Some("hello world"));
-        assert_eq!(extract_comment("rs", "/// doc comment"), Some("doc comment"));
+        assert_eq!(
+            extract_comment("rs", "/// doc comment"),
+            Some("doc comment")
+        );
         assert_eq!(extract_comment("rs", "//! inner doc"), Some("inner doc"));
-        assert_eq!(extract_comment("ts", "let x = 1; // inline comment"), Some("inline comment"));
-        assert_eq!(extract_comment("js", "const url = \"https://foo.bar\";"), None);
-        assert_eq!(extract_comment("rs", "/* block comment */"), Some("block comment"));
-        assert_eq!(extract_comment("rs", " * list in block"), Some("list in block"));
+        assert_eq!(
+            extract_comment("ts", "let x = 1; // inline comment"),
+            Some("inline comment")
+        );
+        assert_eq!(
+            extract_comment("js", "const url = \"https://foo.bar\";"),
+            None
+        );
+        assert_eq!(
+            extract_comment("rs", "/* block comment */"),
+            Some("block comment")
+        );
+        assert_eq!(
+            extract_comment("rs", " * list in block"),
+            Some("list in block")
+        );
     }
 
     #[test]
     fn test_extract_comment_sql() {
-        assert_eq!(extract_comment("sql", "-- table schema"), Some("table schema"));
-        assert_eq!(extract_comment("sql", "SELECT * FROM users; -- get all"), Some("get all"));
+        assert_eq!(
+            extract_comment("sql", "-- table schema"),
+            Some("table schema")
+        );
+        assert_eq!(
+            extract_comment("sql", "SELECT * FROM users; -- get all"),
+            Some("get all")
+        );
     }
 
     #[test]
     fn test_extract_comment_script() {
         assert_eq!(extract_comment("sh", "#!/usr/bin/env bash"), None);
-        assert_eq!(extract_comment("sh", "# run backup now"), Some("run backup now"));
-        assert_eq!(extract_comment("py", "def foo(): # python comment"), Some("python comment"));
+        assert_eq!(
+            extract_comment("sh", "# run backup now"),
+            Some("run backup now")
+        );
+        assert_eq!(
+            extract_comment("py", "def foo(): # python comment"),
+            Some("python comment")
+        );
     }
 
     #[test]
@@ -218,10 +279,16 @@ mod tests {
         assert!(is_portuguese_comment("feito para rodar com docker"));
 
         // English comments (should pass)
-        assert!(!is_portuguese_comment("Initialize the database connection pool"));
+        assert!(!is_portuguese_comment(
+            "Initialize the database connection pool"
+        ));
         assert!(!is_portuguese_comment("Handle incoming WebSocket frame"));
         assert!(!is_portuguese_comment("Returns status code 200 on success"));
-        assert!(!is_portuguese_comment("Query Scryfall for Pokémon card prices"));
-        assert!(!is_portuguese_comment("Sumænimá Hub audio stream pipeline with Stênio kernel"));
+        assert!(!is_portuguese_comment(
+            "Query Scryfall for Pokémon card prices"
+        ));
+        assert!(!is_portuguese_comment(
+            "Sumænimá Hub audio stream pipeline with Stênio kernel"
+        ));
     }
 }
