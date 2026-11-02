@@ -76,7 +76,7 @@ pub async fn start_mcp_sse_server(
         "   ❤️  Health Status Route   : {}",
         format!("http://{}:{}/health", host, port).bold()
     );
-    println!("\n   ✨ Ready to receive MCP agents from Directus, Claude Code, OpenCode, Cursor!\n");
+    println!("\n   ✨ Ready to receive MCP agents from Claude Code, OpenCode, Cursor!\n");
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

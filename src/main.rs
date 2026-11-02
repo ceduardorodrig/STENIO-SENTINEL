@@ -12,7 +12,6 @@ mod config;
 mod context;
 mod cv;
 mod deploy;
-mod directus;
 mod doc;
 mod docker;
 mod dry;
@@ -216,7 +215,7 @@ struct Args {
     #[arg(
         long,
         alias = "mcp-server-sse",
-        help = "MCP Server SSE mode: run as Model Context Protocol HTTP Server-Sent Events daemon on local network (for Directus, AI Chat, remote agents)"
+        help = "MCP Server SSE mode: run as Model Context Protocol HTTP Server-Sent Events daemon on local network (for AI Chat, remote agents)"
     )]
     mcp_sse: bool,
 
@@ -330,33 +329,6 @@ struct Args {
 
     #[arg(long, help = "Export the vault knowledge graph in Graphviz DOT format")]
     graph_dot: bool,
-
-    #[arg(
-        long,
-        help = "Audit Directus relational schemas, currency formatting, and governance rules in Rust"
-    )]
-    directus: bool,
-
-    #[arg(
-        long,
-        value_name = "URL",
-        help = "Directus base URL (default: http://100.94.209.99:8055 or DIRECTUS_URL env)"
-    )]
-    directus_url: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "TOKEN",
-        help = "Directus Admin API token (default: DIRECTUS_TOKEN env)"
-    )]
-    directus_token: Option<String>,
-
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Directus schema JSON file for offline static audit"
-    )]
-    directus_schema: Option<PathBuf>,
 
     #[arg(
         long,
@@ -1838,63 +1810,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Directus Governance Auditor (--directus, --scope directus, --directus-schema) ──
-    if args.directus || args.scope.as_deref() == Some("directus") || args.directus_schema.is_some()
-    {
-        let report = if let Some(ref schema_file) = args.directus_schema {
-            let content = match fs::read_to_string(schema_file) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!(
-                        "❌ Failed to read Directus schema file {}: {}",
-                        schema_file.display(),
-                        e
-                    );
-                    std::process::exit(1);
-                }
-            };
-            let json: serde_json::Value = match serde_json::from_str(&content) {
-                Ok(j) => j,
-                Err(e) => {
-                    eprintln!("❌ Failed to parse JSON schema: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            directus::audit_directus_from_json(&json, None, None, None, None, None)
-        } else {
-            let base_url = args
-                .directus_url
-                .or_else(|| std::env::var("DIRECTUS_URL").ok())
-                .unwrap_or_else(|| "http://100.94.209.99:8055".to_string());
-            let token = args
-                .directus_token
-                .or_else(|| std::env::var("DIRECTUS_TOKEN").ok());
-
-            match directus::audit_directus_live(&base_url, token.as_deref()) {
-                Ok(rep) => rep,
-                Err(e) => {
-                    eprintln!("❌ Directus Live Auditor failed: {}", e);
-                    eprintln!(
-                        "💡 Ensure Directus is reachable at {} or pass --directus-schema <FILE>",
-                        base_url
-                    );
-                    std::process::exit(1);
-                }
-            }
-        };
-
-        directus::print_directus_report(&report);
-        let error_count = report
-            .violations
-            .iter()
-            .filter(|v| v.severity == directus::Severity::Error)
-            .count();
-        if error_count > 0 && (args.strict || args.gate) {
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
-
     // ── Docker Live Drift Inspector (--docker, --docker-drift) ─────────────
     if args.docker {
         let rt = tokio::runtime::Runtime::new()?;
@@ -2007,7 +1922,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── MCP Server SSE Mode (HTTP Server-Sent Events for Directus, remote agents) ──
+    // ── MCP Server SSE Mode (HTTP Server-Sent Events for remote agents) ──
     if args.mcp_sse {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(mcp_server::start_mcp_sse_server(

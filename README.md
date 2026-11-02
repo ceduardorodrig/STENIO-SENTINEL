@@ -41,29 +41,26 @@ Leveraging Rayon and the memory-mapped `ignore` walker, StenioSentinel traverses
 ### 2. Knowledge Graph Engine (`--graph`, `--graph-orphans`)
 Constructs a directed graph of all Markdown documents and cross-links via `petgraph`. Computes network density, cyclic clusters (Tarjan's SCC), top referenced knowledge hubs, unreferenced orphan notes, and exports Graphviz DOT topologies (`--graph-dot`).
 
-### 3. Native Directus Relational & Schema Sentinel (`--scope directus`)
-Audits Directus schemas in **1.11ms**: enforces foreign key `m2o`/`m2m` dropdown interfaces and template displays (preventing raw UUIDs), verifies Brazilian Real BRL currency formatting (`R$ `), prevents browser tab title stutter on singletons, and verifies ADR consistency.
-
-### 4. Docker Live Drift Inspector (`--docker`)
+### 3. Docker Live Drift Inspector (`--docker`)
 Connects directly to the local Docker socket (`/var/run/docker.sock`) via `bollard` in **19ms**. Inspects container exit states (catches dead/exited containers with error codes) and alerts on insecure `0.0.0.0` wildcard port exposures vs. loopback/Tailscale binds.
 
-### 5. Native MCP SSE Network Server (`--mcp-sse`)
-Built on `axum` and `tokio`, exposes a local Model Context Protocol (MCP) server over Server-Sent Events (SSE) and JSON-RPC 2.0 (`/sse`, `/message`, `/health`). Allows Directus, OpenCode, Claude Code, and remote agents on the Tailnet to invoke all 11 Stenio tools remotely without personal API keys.
+### 4. Native MCP SSE Network Server (`--mcp-sse`)
+Built on `axum` and `tokio`, exposes a local Model Context Protocol (MCP) server over Server-Sent Events (SSE) and JSON-RPC 2.0 (`/sse`, `/message`, `/health`). Allows OpenCode, Claude Code, and remote agents on the Tailnet to invoke all 10 Stenio tools remotely without personal API keys.
 
-### 6. Local Offline Semantic Search (`--semantic`)
+### 5. Local Offline Semantic Search (`--semantic`)
 Pure Rust in-memory TF-IDF vectorizer and cosine similarity ranking (<250ms). Answers natural language queries over the entire vault/codebase offline, with zero external API calls, zero token costs, and zero cloud leaks.
 
-### 7. Mandatory Quality Gate & Anti-Bypass (Rule 0)
+### 6. Mandatory Quality Gate & Anti-Bypass (Rule 0)
 Rule 0 enforces that no AI agent can claim task completion without passing Stênio's static verification. Unhandled unwraps, skipped tests, and suppressed linter flags are treated as critical blocking failures.
 
-### 8. Interactive Didactic Remediation (`--explain`)
+### 7. Interactive Didactic Remediation (`--explain`)
 Whenever a rule violation occurs, agents and developers can execute:
 ```bash
 stenio --explain <RULE_ID>
 ```
 Stênio prints the rule's rationale, bad code examples, good code examples, and the exact remediation recipe.
 
-### 9. Tailscale Mesh & Homelab Observability (`--mesh`, `--health`)
+### 8. Tailscale Mesh & Homelab Observability (`--mesh`, `--health`)
 Performs concurrent asynchronous socket probes across distributed infrastructure nodes (Tailscale / WireGuard) in under **30ms to 100ms**, delivering instant health telemetry of NVMe storage, RAM, and GPU accelerators (NVIDIA RTX).
 ```bash
 stenio --explain <RULE_ID>
@@ -158,7 +155,7 @@ Usage: stenio [OPTIONS]
 
 Options:
       --path <PATH>          Target directory to scan [default: .]
-      --scope <SCOPE>        Audit scope: [hub, homelab, vault, directus, doc, cv, all]
+      --scope <SCOPE>        Audit scope: [hub, homelab, vault, doc, cv, all]
       --rule <RULE_ID>       Execute only a specific rule by ID
       --diff [<REF>]         Audit only files modified relative to git ref (e.g., HEAD~1 or staged)
       --fix                  Apply automatic surgical repairs to violations
@@ -169,7 +166,6 @@ Options:
       --graph                Audit knowledge graph topology (nodes, edges, hubs, density)
       --graph-orphans        List all unreferenced orphan documents in the vault
       --graph-dot            Export the vault knowledge graph in Graphviz DOT format
-      --directus             Audit Directus relational schemas, currency formatting, and governance
       --docker               Audit live Docker containers, failed services, and wildcard binds (bollard)
       --mcp-sse              Run Model Context Protocol HTTP Server-Sent Events daemon
       --mcp-host <HOST>      Host IP for MCP SSE server [default: 0.0.0.0]

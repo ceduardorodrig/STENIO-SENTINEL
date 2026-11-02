@@ -124,17 +124,6 @@ pub fn dispatch_mcp_request(
                         "inputSchema": path_input_schema()
                     },
                     {
-                        "name": "stenio_directus",
-                        "description": "Audits Directus schemas, relational foreign keys, BRL currency formatting, singleton anti-stutter, and ADR consistency in <5ms.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "url": { "type": "string", "description": "Directus base URL (default: http://100.94.209.99:8055)" },
-                                "token": { "type": "string", "description": "Directus API Bearer token" }
-                            }
-                        }
-                    },
-                    {
                         "name": "stenio_docker",
                         "description": "Audits live Docker containers, failed services, and insecure wildcard 0.0.0.0 binds directly via Docker socket in <20ms.",
                         "inputSchema": { "type": "object", "properties": {} }
@@ -273,7 +262,7 @@ pub fn dispatch_mcp_request(
                         - Homelab Mnemocine: psicopompo (dev/gpu), ybyra (edge), kuaray (media), ybytu (cloud exit), kavure (services)\n\
                         - GPU: RTX 5050 Blackwell with local CUDA acceleration\n\
                         - Core Rules: Raw sudo forbidden (use sudoers NOPASSWD or SOPS), GNU legacy tools forbidden in Rust (use xh, walkdir, regex), soft NFS mounts mandatory.\n\
-                        - CLI Tools: use stenio --diff for fast delta scans, stenio --scope directus for Directus governance."
+                        - CLI Tools: use stenio --diff for fast delta scans."
                     )
                 }
                 "stenio_explain" => {
@@ -380,53 +369,6 @@ pub fn dispatch_mcp_request(
                             dry_violations.len(),
                             dry_count
                         )
-                    }
-                }
-                "stenio_directus" => {
-                    let env_url = std::env::var("DIRECTUS_URL").ok();
-                    let base_url = arguments
-                        .get("url")
-                        .and_then(|v| v.as_str())
-                        .or(env_url.as_deref())
-                        .unwrap_or("http://100.94.209.99:8055");
-                    let token = arguments.get("token").and_then(|v| v.as_str());
-
-                    match crate::directus::audit_directus_live(base_url, token) {
-                        Ok(report) => {
-                            let errors = report
-                                .violations
-                                .iter()
-                                .filter(|v| v.severity == crate::directus::Severity::Error)
-                                .count();
-                            let warnings = report
-                                .violations
-                                .iter()
-                                .filter(|v| v.severity == crate::directus::Severity::Warning)
-                                .count();
-                            if report.violations.is_empty() {
-                                format!(
-                                    "✨ [DIRECTUS PASSED] All {} relational and schema checks passed in {:.2}ms.",
-                                    report.checks_passed, report.execution_time_ms
-                                )
-                            } else {
-                                format!(
-                                    "⚠️ [DIRECTUS VIOLATIONS] {} error(s), {} warning(s) in {:.2}ms:\n{}",
-                                    errors,
-                                    warnings,
-                                    report.execution_time_ms,
-                                    report
-                                        .violations
-                                        .iter()
-                                        .map(|v| format!(
-                                            "• [{}] {}: {}",
-                                            v.rule, v.location, v.message
-                                        ))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                )
-                            }
-                        }
-                        Err(e) => format!("Error connecting to Directus: {}", e),
                     }
                 }
                 "stenio_docker" => {
