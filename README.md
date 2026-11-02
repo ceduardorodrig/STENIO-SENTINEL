@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v4.12.0) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel (v4.12.1) — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.12.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities (v4.12.1 Superpowers)](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -33,7 +33,7 @@ Built to pair with autonomous AI agents (Claude Code, Gemini CLI, Cursor, Codex,
 
 ---
 
-## ⚡ Key Capabilities (v4.12.0 Superpowers)
+## ⚡ Key Capabilities (v4.12.1 Superpowers)
 
 ### 1. Sub-Millisecond Multi-Threaded Engine
 Leveraging Rayon and the memory-mapped `ignore` walker, StenioSentinel traverses directories concurrently while honoring `.gitignore` and Syncthing `.stignore` rules. Full audits complete in **1ms to 200ms**.
@@ -149,7 +149,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v4.12.0 — Universal AI Governance & Static Sentinel
+StenioSentinel v4.12.1 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 
