@@ -34,3 +34,10 @@ requires = "app"
 name = "miracena"
 prefix = "MB-"
 dir = "clients/miracena"
+
+[[queue]]
+name = "governance"
+prefix = "GB-"
+dir = "governance"
+linked = true
+self_if_named = true

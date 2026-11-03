@@ -1251,12 +1251,24 @@ mod tests {
                 .iter()
                 .all(|q| q.prefix.ends_with('-') && !q.dir.is_empty())
         );
-        // Only the homelab queue is traced to documents.
+        // Bidirectional tracing is a property of the queues whose documents carry `pending:`
+        // frontmatter — the homelab (HB-) and the governance one (GB-). The product (SB-) and
+        // client (MB-) queues are path-scoped, so linking them would demand `pending:` in files
+        // that never reference the id. This assertion pins that design instead of the old
+        // "only HB- is linked" rule, which stopped being true when GB- became linked.
+        let linked: Vec<&str> = queues
+            .iter()
+            .filter(|q| q.linked)
+            .map(|q| q.prefix.as_str())
+            .collect();
         assert!(
-            queues
-                .iter()
-                .filter(|q| q.linked)
-                .all(|q| q.prefix == "HB-")
+            linked.iter().all(|p| *p == "HB-" || *p == "GB-"),
+            "unexpected linked queue(s): {:?}",
+            linked
+        );
+        assert!(
+            linked.contains(&"HB-") && linked.contains(&"GB-"),
+            "both HB- and GB- must be traced to their documents"
         );
     }
 
