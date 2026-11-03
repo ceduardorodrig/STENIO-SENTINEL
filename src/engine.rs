@@ -345,11 +345,7 @@ impl Engine {
         tag_filter: Option<&str>,
         only_rule: Option<&str>,
     ) -> Vec<Violation> {
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::rule::effective_extension(path);
 
         let content = match fs::read_to_string(path) {
             Ok(c) => c,

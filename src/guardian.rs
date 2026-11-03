@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::engine::Violation;
-use crate::rule::Severity;
+use crate::rule::{Severity, TOKEN_SHAPES};
 
 /// Extensions intentionally NOT scanned for secrets by [`scan_content_for_secrets`].
 ///
@@ -43,6 +43,24 @@ const SECRET_SCAN_SKIP_PATHS: &[&str] = &[
 ///
 /// It returns a [`Violation`] per matching line, never panicking and never unwrapping.
 pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
+    let Some(regex) = secret_pattern() else {
+        return Vec::new();
+    };
+    scan_lines_with(path, content, regex)
+}
+
+/// Same scan restricted to the self-identifying token shapes (no keyword branch).
+///
+/// Used for machine-written JSON that syncs to phones (`.obsidian/*.json`,
+/// `.pandoc/*.json`): keyword heuristics would be noise there, a token shape never is.
+pub fn scan_content_for_token_shapes(path: &Path, content: &str) -> Vec<Violation> {
+    let Some(regex) = token_pattern() else {
+        return Vec::new();
+    };
+    scan_lines_with(path, content, regex)
+}
+
+fn scan_lines_with(path: &Path, content: &str, regex: &regex::Regex) -> Vec<Violation> {
     let path_str = path.to_string_lossy().to_string();
 
     if SECRET_SCAN_SKIP_PATHS
@@ -61,12 +79,13 @@ pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
         return Vec::new();
     }
 
-    let Some(regex) = secret_pattern() else {
-        return Vec::new();
-    };
-
     let mut violations = Vec::new();
     for (line_idx, line) in content.lines().enumerate() {
+        // SOPS output is ciphertext by construction: an `ENC[AES256_GCM,…]` value
+        // and the `sops_*` metadata lines of a dotenv file must never fire.
+        if is_sops_ciphertext_line(line) {
+            continue;
+        }
         let Some(m) = regex.find(line) else {
             continue;
         };
@@ -84,7 +103,7 @@ pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
         // then a variable NAME, not the secret — the leak happened already if the
         // name is the value, but that is not what these lines show. We only
         // suppress when the captured text looks like an ALL_CAPS env var name.
-        if is_variable_name_reference(matched) {
+        if is_variable_name_reference(matched) || is_bearer_variable_reference(matched) {
             continue;
         }
         violations.push(Violation {
@@ -103,6 +122,286 @@ pub fn scan_content_for_secrets(path: &Path, content: &str) -> Vec<Violation> {
     }
 
     violations
+}
+
+/// True when the line carries a self-identifying token shape that is not a documented
+/// placeholder, a variable-name reference or SOPS ciphertext.
+pub fn line_has_token_shape(line: &str) -> bool {
+    if is_sops_ciphertext_line(line) {
+        return false;
+    }
+    let Some(regex) = token_pattern() else {
+        return false;
+    };
+    regex.find_iter(line).any(|m| {
+        let s = m.as_str();
+        !is_placeholder_value(s) && !is_bearer_variable_reference(s)
+    })
+}
+
+/// True for a dotenv line that SOPS produced: an encrypted value
+/// (`KEY=ENC[AES256_GCM,data:…]`) or the `sops_*=` metadata block
+/// (`sops_mac=`, `sops_version=`, `sops_age__list_0__map_enc=` …).
+pub fn is_sops_ciphertext_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("sops_") || line.contains("ENC[AES256_GCM")
+}
+
+/// True when the content carries the SOPS dotenv markers (`sops_mac=`/`sops_version=`)
+/// or at least one `ENC[AES256_GCM` value. Used to accept a `.enc.*` dotenv file as
+/// encrypted, the way `sops:`+`mac:` already identifies the YAML/JSON formats.
+pub fn has_sops_dotenv_markers(content: &str) -> bool {
+    content.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with("sops_mac=") || t.starts_with("sops_version=")
+    }) || content.contains("ENC[AES256_GCM")
+}
+
+/// True when a bearer-header match carries a variable NAME (`Bearer ACCESS_TOKEN`),
+/// not a token: same shape test as [`is_variable_name_reference`].
+fn is_bearer_variable_reference(matched: &str) -> bool {
+    let lowered = matched.to_ascii_lowercase();
+    if !lowered.starts_with("authorization") {
+        return false;
+    }
+    let value = matched
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or("");
+    value.len() >= 4
+        && value
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// True when `path` is a file whose job is to hold secrets or that syncs to phones and
+/// must therefore be scanned even though dotfile walkers skip it: `.env`, `.env.*`,
+/// `*.env`, `*.pem`, `*.key`, `.obsidian/*.json`, `.pandoc/*.json`, `.docker/config.json`.
+pub fn is_secret_candidate(path: &Path) -> bool {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name.ends_with(".example") || name.ends_with(".sample") || name.ends_with(".template") {
+        return false;
+    }
+    is_env_like_name(name) || is_key_material_name(name) || is_token_only_json(path)
+}
+
+/// `.env`, `.env.<anything>` and `<anything>.env`.
+pub fn is_env_like_name(name: &str) -> bool {
+    name == ".env" || name.starts_with(".env.") || name.ends_with(".env")
+}
+
+/// `*.pem` and `*.key`.
+pub fn is_key_material_name(name: &str) -> bool {
+    name.ends_with(".pem") || name.ends_with(".key")
+}
+
+/// Machine-written JSON that is synced or shipped: only token shapes are meaningful.
+fn is_token_only_json(path: &Path) -> bool {
+    let p = path.to_string_lossy();
+    let is_json = p.ends_with(".json");
+    is_json
+        && (p.contains("/.obsidian/")
+            || p.contains("/.pandoc/")
+            || p.ends_with("/.docker/config.json"))
+}
+
+/// Walks `root` including dotfiles and `.gitignore`d files (Syncthing mirrors them all)
+/// and scans every [`is_secret_candidate`] file. `extra_skips` are path fragments the
+/// caller already covers elsewhere (e.g. the vault scope leaves `/mnemocine/` to the
+/// homelab scope).
+///
+/// Content only: permission checks (`SEC-PERM-LEAK`) live in `infra.rs`.
+pub fn secret_candidate_paths(root: &Path, extra_skips: &[&str]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let extra: Vec<String> = extra_skips.iter().map(|s| s.to_string()).collect();
+    let skipped = move |p: &Path| {
+        let s = format!("{}/", p.to_string_lossy());
+        SECRET_SCAN_SKIP_PATHS.iter().any(|f| s.contains(f))
+            || extra.iter().any(|f| s.contains(f.as_str()))
+    };
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .filter_entry(move |e| !skipped(e.path()))
+        .build();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if is_secret_candidate(path) {
+            paths.push(path.to_path_buf());
+        }
+    }
+    paths
+}
+
+/// Candidates the caller has not already visited with its own (gitignore-aware) walk.
+pub fn ignored_secret_candidates(
+    root: &Path,
+    visited: &std::collections::HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    secret_candidate_paths(root, &[])
+        .into_iter()
+        .filter(|p| !visited.contains(p))
+        .collect()
+}
+
+/// Scans every candidate under `root` (see [`secret_candidate_paths`]).
+pub fn audit_secret_candidates(root: &Path, extra_skips: &[&str]) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for path in secret_candidate_paths(root, extra_skips) {
+        let path = path.as_path();
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        if is_token_only_json(path) {
+            violations.extend(scan_content_for_token_shapes(path, &content));
+            continue;
+        }
+        let mut found = scan_content_for_secrets(path, &content);
+        // Dotenv files also get the key-name heuristic of SEC-PLAINTEXT-SECRET
+        // (`*_PASS`, `*_AUTHKEY`, …), minus the lines the keyword scan already flagged.
+        if is_env_like_name(path.file_name().and_then(|s| s.to_str()).unwrap_or("")) {
+            let flagged: std::collections::HashSet<usize> =
+                found.iter().map(|v| v.line_number).collect();
+            found.extend(
+                crate::infra::plaintext_secret_violations(&path.to_string_lossy(), &content, false)
+                    .into_iter()
+                    .filter(|v| !flagged.contains(&v.line_number)),
+            );
+        }
+        violations.extend(found);
+    }
+    violations
+}
+
+/// `--history`: scans the patches of `git log -p --all` of the repository at `root`
+/// for the token shapes. Default off (it walks the whole history). A secret that was
+/// committed and later deleted is still public once pushed; this is the only check
+/// that sees it. Returns one violation per distinct (commit, file, line) hit.
+pub fn scan_git_history(root: &Path) -> Result<Vec<Violation>, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let regex = token_pattern().ok_or_else(|| "token pattern failed to compile".to_string())?;
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(["log", "-p", "--all", "-U0", "--no-color", "--no-ext-diff"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "git produced no stdout".to_string())?;
+
+    let mut violations = Vec::new();
+    let mut commit = String::new();
+    let mut file = String::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in BufReader::new(stdout).split(b'\n').flatten() {
+        let line = String::from_utf8_lossy(&raw);
+        if let Some(rest) = line.strip_prefix("commit ") {
+            commit = rest.chars().take(12).collect();
+        } else if let Some(rest) = line.strip_prefix("+++ b/") {
+            file = rest.to_string();
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            let added = &line[1..];
+            let Some(m) = regex.find(added) else {
+                continue;
+            };
+            if is_placeholder_value(m.as_str())
+                || is_bearer_variable_reference(m.as_str())
+                || is_sops_ciphertext_line(added)
+            {
+                continue;
+            }
+            if !seen.insert((commit.clone(), file.clone(), added.len())) {
+                continue;
+            }
+            violations.push(Violation {
+                rule_id: "SEC-SECRETS-HISTORY".to_string(),
+                rule_name: "Credential in Git History".to_string(),
+                severity: Severity::Error,
+                file_path: file.clone(),
+                line_number: 1,
+                snippet: format!("commit {commit}: {}", mask_secret_snippet(added)),
+                message: "A credential shape was added in this commit. Deleting the line later does not remove it from history.".to_string(),
+                suggestion: Some(
+                    "Revoke the credential at the provider first; rewrite history only if the repository was never pushed."
+                        .to_string(),
+                ),
+            });
+        }
+    }
+    let _ = child.wait();
+    Ok(violations)
+}
+
+/// Synthetic fixtures for `--self-test`: every row is (name, passed). Each rule path has
+/// a case that must fire and one that must stay silent. Tokens are assembled with
+/// `concat!` so this file never contains a literal that the gate itself would flag.
+pub fn self_test_cases() -> Vec<(&'static str, bool)> {
+    let fires =
+        |name: &str, line: &str| !scan_content_for_secrets(Path::new(name), line).is_empty();
+    let gh = concat!("ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789");
+    let aws = concat!("AK", "IAABCDEFGHIJKLMNOP12");
+    let goog = concat!("AI", "zaSyA1234567890abcdefghijklmnopqrstuv");
+    let jwt = concat!(
+        "ey",
+        "Jhbgcioijiuzi1nij9.ey",
+        "Jzdwiioixmjm0nta2nzg5mh0.abc123def456"
+    );
+    let enc = concat!(
+        "DB_PASSWORD=ENC[AES",
+        "256_GCM,data:abcdefabcdef,tag:xyz,type:str]"
+    );
+    vec![
+        (
+            "dotenv .env scanned",
+            fires(".env", "POSTGRES_PASSWORD=Xk29sLm4Qp7vRt8z"),
+        ),
+        (
+            "dotenv .env.prod scanned",
+            fires(".env.prod", "API_KEY=Xk29sLm4Qp7vRt8zAB"),
+        ),
+        ("shape github", fires("n.md", &format!("x {gh}"))),
+        ("shape aws", fires("n.txt", aws)),
+        ("shape google", fires("n.cfg", goog)),
+        ("shape jwt", fires("n.md", jwt)),
+        (
+            "shape bearer",
+            fires(
+                "n.sh",
+                concat!("Authorization: Bea", "rer abcdefghijklmnopqrstuvwx"),
+            ),
+        ),
+        (
+            "shape ec key header",
+            fires("k.pem", concat!("-----BEGIN EC ", "PRIVATE KEY-----")),
+        ),
+        ("sops value silent", !fires("secrets.enc.env", enc)),
+        (
+            "sops marker silent",
+            !fires("secrets.enc.env", "sops_mac=ENC[AES256_GCM,data:abc]"),
+        ),
+        (
+            "bearer var silent",
+            !fires(
+                "n.sh",
+                concat!("Authorization: Bea", "rer ACCESS_TOKEN_VALUE_HERE"),
+            ),
+        ),
+        (
+            "plain prose silent",
+            !fires("n.md", "the AKIA prefix and ghp_ are token prefixes"),
+        ),
+    ]
 }
 
 /// True when the matched fragment carries a placeholder rather than a credential.
@@ -194,12 +493,10 @@ fn secret_pattern() -> Option<&'static regex::Regex> {
     static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
     PATTERN
         .get_or_init(|| {
-            regex::Regex::new(
+            // 1) Self-identifying credentials: `TOKEN_SHAPES` plus OpenAI keys.
+            regex::Regex::new(&format!(
+                "{TOKEN_SHAPES}|sk-[A-Za-z0-9]{{48}}{}",
                 concat!(
-                    // 1) Self-identifying credentials.
-                    r"ghp_[A-Za-z0-9]{36}",
-                    r"|sk-[A-Za-z0-9]{48}",
-                    r"|-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----",
                     // 2) Keyword-anchored, `key=value` / `key: value` form.
                     r"|(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s*[:=]\s*[\x22']?[A-Za-z0-9_\-]{16,}",
                     // 3) Keyword-anchored in Markdown/prose: `| **Senha** | `x` |`,
@@ -210,10 +507,18 @@ fn secret_pattern() -> Option<&'static regex::Regex> {
                     //    `senha \`x\``. The backticks are what make this safe to
                     //    accept a bare space as the separator.
                     r"|(?i)(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|senha)\s+`[A-Za-z0-9_\-]{8,}`",
-                ),
-            )
+                )
+            ))
             .ok()
         })
+        .as_ref()
+}
+
+/// Token shapes only (no keyword branch); see [`scan_content_for_token_shapes`].
+fn token_pattern() -> Option<&'static regex::Regex> {
+    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| regex::Regex::new(&format!("{TOKEN_SHAPES}|sk-[A-Za-z0-9]{{48}}")).ok())
         .as_ref()
 }
 
@@ -558,5 +863,82 @@ mod tests {
     fn ignores_unrelated_prose() {
         assert!(!flagged("| `/api/auth/logout` | POST |"));
         assert!(!flagged("csrf_token = secrets.token_urlsafe(32)"));
+    }
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("stenio-guardian-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn fixtures_all_pass() {
+        for (name, ok) in self_test_cases() {
+            assert!(ok, "fixture failed: {name}");
+        }
+    }
+
+    #[test]
+    fn dotfile_candidates_are_walked_and_scanned() {
+        let dir = tmp_dir("walk");
+        let obsidian = dir.join(".obsidian");
+        let _ = fs::create_dir_all(&obsidian);
+        let _ = fs::write(dir.join(".env"), "POSTGRES_PASSWORD=Xk29sLm4Qp7vRt8z\n");
+        let _ = fs::write(dir.join(".env.prod"), "DB_PASS=Qp7vRt8zXk29sLm4\n");
+        let google = concat!("AI", "zaSyA1234567890abcdefghijklmnopqrstuv");
+        let _ = fs::write(
+            obsidian.join("data.json"),
+            format!("{{\"k\":\"{google}\"}}"),
+        );
+        let _ = fs::write(dir.join("clean.env"), "NAME=value\n");
+        let found = audit_secret_candidates(&dir, &[]);
+        let _ = fs::remove_dir_all(&dir);
+        let files: Vec<String> = found.iter().map(|v| v.file_path.clone()).collect();
+        assert!(files.iter().any(|f| f.ends_with("/.env")), "{files:?}");
+        assert!(files.iter().any(|f| f.ends_with("/.env.prod")), "{files:?}");
+        assert!(files.iter().any(|f| f.ends_with("data.json")), "{files:?}");
+        assert!(!files.iter().any(|f| f.ends_with("clean.env")), "{files:?}");
+    }
+
+    #[test]
+    fn sops_dotenv_never_fires() {
+        let enc = concat!(
+            "A_PASSWORD=ENC[AES",
+            "256_GCM,data:abcdefabcdefabcd,type:str]"
+        );
+        let body = format!("{enc}\nsops_mac=ENC[AES256_GCM,data:zz]\nsops_version=3.9.0\n");
+        assert!(scan_content_for_secrets(Path::new("secrets.enc.env"), &body).is_empty());
+        assert!(has_sops_dotenv_markers(&body));
+        assert!(!has_sops_dotenv_markers("A=b\n"));
+    }
+
+    #[test]
+    fn history_finds_a_deleted_token() {
+        let dir = tmp_dir("history");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(&dir)
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        let token = concat!("ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789");
+        let ready = git(&["init", "-q"])
+            && fs::write(dir.join("a.txt"), format!("t={token}\n")).is_ok()
+            && git(&["add", "."])
+            && git(&["commit", "-q", "-m", "add"])
+            && fs::write(dir.join("a.txt"), "clean\n").is_ok()
+            && git(&["commit", "-qam", "remove"]);
+        let result = scan_git_history(&dir);
+        let _ = fs::remove_dir_all(&dir);
+        if !ready {
+            return;
+        }
+        let found = result.unwrap_or_default();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].rule_id, "SEC-SECRETS-HISTORY");
     }
 }

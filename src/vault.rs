@@ -151,6 +151,19 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
         violations.extend(crate::guardian::scan_content_for_secrets(&path, &content));
     }
 
+    // Validation 3c: secret-bearing files the Markdown walk never sees: `.env`,
+    // `.env.*`, `*.env`, `*.pem`, `*.key` and the Syncthing-synced app configs
+    // (`.obsidian/*.json`, `.pandoc/*.json`). `mnemocine/` belongs to the homelab scope.
+    violations.extend(crate::guardian::audit_secret_candidates(
+        vault_root,
+        &[
+            "/mnemocine/",
+            "/sumaenimahub/",
+            "/docs/external/",
+            "/openwiki/",
+        ],
+    ));
+
     // Validation 4: Strict Directory Naming in projects/ (YYMMDD-contractor-name)
     let projects_dir = vault_root.join("projects");
     if projects_dir.is_dir() {

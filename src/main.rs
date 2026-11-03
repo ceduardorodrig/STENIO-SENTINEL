@@ -115,6 +115,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Also scan the git history (git log -p --all) of --path for credential shapes (default off; slow on large repositories)"
+    )]
+    history: bool,
+
+    #[arg(
+        long,
         help = "Run full health diagnostics on infrastructure, disk, RAM, GPU and services"
     )]
     health: bool,
@@ -453,6 +459,19 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 
     check_case!("Banned Python", "ARCH-NO-PYTHON", "print('hello')", true);
 
+    // ── Secret scanners: infra key-name list, perms, token shapes, SOPS dotenv ──
+    for (name, ok) in guardian::self_test_cases()
+        .into_iter()
+        .chain(infra::self_test_cases())
+    {
+        total += 1;
+        if ok {
+            passed += 1;
+            println!("   ✅ Test {:<24} [secret scan] - OK", name);
+        } else {
+            println!("   ❌ Test {:<24} [secret scan] - FAILED", name);
+        }
+    }
     // ── Gettext catalogue completeness (I18N-PO-INCOMPLETE) ────────────────
     for (name, ok) in i18n::self_test_cases() {
         total += 1;
@@ -517,8 +536,85 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     check_case!(
         "Hardcoded Secret",
         "SEC-SECRETS",
-        "api_key = \"ghp_123456789012345678901234567890123456\"", // stenio-ignore: SEC-SECRETS
+        concat!("api_key = \"ghp", "_123456789012345678901234567890123456\""),
         true
+    );
+    // SEC-SECRETS token shapes (assembled with concat! so this file stays clean).
+    check_case!(
+        "Shape GitHub PAT",
+        "SEC-SECRETS",
+        concat!("github", "_pat_", "11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz"),
+        true
+    );
+    check_case!(
+        "Shape AWS key id",
+        "SEC-SECRETS",
+        concat!("AK", "IAABCDEFGHIJKLMNOP12"),
+        true
+    );
+    check_case!(
+        "Shape Tailscale key",
+        "SEC-SECRETS",
+        concat!("ts", "key-auth-kABCDEFGHIJ-abcdefghij"),
+        true
+    );
+    check_case!(
+        "Shape Google API key",
+        "SEC-SECRETS",
+        concat!("AI", "zaSyA1234567890abcdefghijklmnopqrstuv"),
+        true
+    );
+    check_case!(
+        "Shape Slack token",
+        "SEC-SECRETS",
+        concat!("xo", "xb-1234567890-abcdefghij"),
+        true
+    );
+    check_case!(
+        "Shape GitLab PAT",
+        "SEC-SECRETS",
+        concat!("gl", "pat-abcdefghij0123456789"),
+        true
+    );
+    check_case!(
+        "Shape JWT",
+        "SEC-SECRETS",
+        concat!(
+            "ey",
+            "Jhbgcioijiuzi1nij9.ey",
+            "Jzdwiioixmjm0nta2nzg5mh0.abc123def456"
+        ),
+        true
+    );
+    check_case!(
+        "Shape Bearer header",
+        "SEC-SECRETS",
+        concat!("Authorization: Bea", "rer abcdefghijklmnopqrstuvwx"),
+        true
+    );
+    check_case!(
+        "Shape EC key header",
+        "SEC-SECRETS",
+        concat!("-----BEGIN EC ", "PRIVATE KEY-----"),
+        true
+    );
+    check_case!(
+        "Shape DSA key header",
+        "SEC-SECRETS",
+        concat!("-----BEGIN DSA ", "PRIVATE KEY-----"),
+        true
+    );
+    check_case!(
+        "Shape prefix only",
+        "SEC-SECRETS",
+        "ghp_ and AKIA are token prefixes",
+        false
+    );
+    check_case!(
+        "Shape env reference",
+        "SEC-SECRETS",
+        "Authorization: Bearer $TOKEN",
+        false
     );
     check_case!(
         "Unprotected Sudo",
@@ -2211,6 +2307,20 @@ fn main() -> Result<()> {
     );
 
     let mut report = scan_res?;
+
+    // ── Opt-in git history scan (--history) ────────────────────────────────
+    if args.history {
+        match guardian::scan_git_history(&args.path) {
+            Ok(found) => {
+                for v in found {
+                    report.error_count += 1;
+                    report.total_violations += 1;
+                    report.violations.push(v);
+                }
+            }
+            Err(e) => eprintln!("--history: {e}"),
+        }
+    }
 
     // ── Governance Subsystem (AGENTS.md & skills) ──────────────────────────
     let mut gov_messages = Vec::new();

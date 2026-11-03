@@ -1,5 +1,42 @@
 use crate::config::SteniocheckConfig;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Self-identifying credential shapes shared by the hub rule `SEC-SECRETS` and the
+/// vault/homelab scanner in `guardian.rs` (one definition, no drift).
+///
+/// Covers GitHub tokens (classic, fine-grained), AWS access key ids, Tailscale keys,
+/// Google API keys, Slack tokens, GitLab PATs, JWTs, `Authorization: Bearer` headers
+/// and PEM private-key headers. Shapes are length-anchored so a prefix alone in prose
+/// never matches.
+pub const TOKEN_SHAPES: &str = concat!(
+    r"gh[opsur]_[A-Za-z0-9]{36}",
+    r"|github_pat_[A-Za-z0-9_]{22,}",
+    r"|\bAKIA[0-9A-Z]{16}",
+    r"|tskey-(?:auth|api|client)-[A-Za-z0-9][A-Za-z0-9-]{9,}",
+    r"|\bAIza[0-9A-Za-z_\-]{35}",
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}",
+    r"|glpat-[A-Za-z0-9_\-]{20,}",
+    r"|eyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*",
+    r"|(?i:authorization:\s*bearer\s+[A-Za-z0-9._~+/=\-]{20,})",
+    r"|-----BEGIN (?:RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY-----",
+);
+
+/// File extension used to select rules. A dotfile such as `.env` or `.env.production`
+/// has no usable extension for `Path::extension`, so it maps to `env`; otherwise the
+/// most common secret-bearing file would escape every extension-gated scan.
+pub fn effective_extension(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name == ".env" || name.starts_with(".env.") {
+        return "env".to_string();
+    }
+    ext
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
@@ -213,8 +250,13 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         Severity::Error,
         "Hardcoded Secrets & Credentials",
         "API tokens or private keys must never appear in plaintext within code.",
-        r#"(ghp_[A-Za-z0-9]{36}|-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9]{48})|(?i)(api_key|secret_key)\s*=\s*['"][A-Za-z0-9_\-]{20,}['"]"#,
-        &["py", "rs", "ts", "tsx", "js", "sh"],
+        &format!(
+            r#"({TOKEN_SHAPES}|sk-[A-Za-z0-9]{{48}})|(?i)(api_key|secret_key)\s*=\s*['"][A-Za-z0-9_\-]{{20,}}['"]"#
+        ),
+        &[
+            "py", "rs", "ts", "tsx", "js", "sh", "json", "yml", "yaml", "toml", "env", "php",
+            "ini", "conf",
+        ],
         Some("Remove the plaintext secret and inject via environment variable (.env) or system secret store."),
     ));
 

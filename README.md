@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v4.13.0) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel (v4.14.0) — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.13.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities (v4.14.0 Superpowers)](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -33,7 +33,7 @@ Built to pair with autonomous AI agents (Claude Code, Gemini CLI, Cursor, Codex,
 
 ---
 
-## ⚡ Key Capabilities (v4.13.0 Superpowers)
+## ⚡ Key Capabilities (v4.14.0 Superpowers)
 
 ### 1. Sub-Millisecond Multi-Threaded Engine
 Leveraging Rayon and the memory-mapped `ignore` walker, StenioSentinel traverses directories concurrently while honoring `.gitignore` and Syncthing `.stignore` rules. Full audits complete in **1ms to 200ms**.
@@ -149,7 +149,7 @@ stenio --explain DOC-VIBE-DISCLAIMER
 ## 🛠️ CLI Command Reference
 
 ```text
-StenioSentinel v4.13.0 — Universal AI Governance & Static Sentinel
+StenioSentinel v4.14.0 — Universal AI Governance & Static Sentinel
 
 Usage: stenio [OPTIONS]
 
@@ -175,6 +175,7 @@ Options:
       --typegen              Generate TypeScript types from Rust DTO structs
       --explain <RULE_ID>    Explain why a rule exists with bad/good examples
       --self-test            Run built-in synthetic rule integrity tests
+      --history              Also scan `git log -p --all` of --path for credential shapes (default off)
   -h, --help                 Print help
   -V, --version              Print version
 ```
@@ -194,8 +195,11 @@ Options:
 | `DOC-BACKLOG-RECURRENCE` | Docs | **ERROR/WARN** | Backlog recurrence: a `Recurrence` / `Recurred-by` pair must agree — a recurring item points at an *archived* item, and that archived item points back. Adaptive severity. |
 | `HOMELAB-BACKLOG-STATE` | Homelab | **WARN** | Backlog split: an id must live in exactly one file, and its state must match (a closed state in the queue, an active state in the archive). |
 | `HOMELAB-GPU-UNIFIED` | Homelab | **WARN** | GPU unification: a compose service claiming the GPU (`runtime: nvidia`, `gpus:`, `deploy` device reservations or `NVIDIA_VISIBLE_DEVICES`) must be a registered consumer of the centralized gateway (`hl-infer`, ADR-020). The allowlist is a data file (`mnemocine/network/gpu-consumers.txt`) with an engine fallback. |
-| `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text API keys, GitHub tokens, and private keys. |
-| `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted environment files (`.enc.env`). |
+| `SEC-SECRETS` | Security | **ERROR** | Blocks plain-text credentials by shape in every file type: GitHub tokens (`gh[opsur]_`, `github_pat_`), AWS key ids, Tailscale keys, Google API keys, Slack tokens, GitLab PATs, JWTs, `Authorization: Bearer` headers, SSH/EC/DSA/RSA private-key headers and keyword-anchored passwords. Scans `.env`, `.env.*`, `*.env`, `*.pem`, `*.key` and the phone-synced `.obsidian/*.json` and `.pandoc/*.json`. SOPS ciphertext never fires. |
+| `SEC-PLAINTEXT-SECRET` | Security | **ERROR** | Literal credentials in infrastructure files (`*_PASSWORD`, `*_PASS`, `*_PWD`, `*_SECRET`, `*_SECRET_KEY`, `*_API_KEY`, `*_ACCESS_KEY`, `*PRIVATE_KEY`, `*_AUTHKEY`, `*_AUTH_KEY`, `*_CREDENTIALS`, `*_TOKEN`) plus the token shapes; every hit is reported, not one per file. |
+| `SEC-PERM-LEAK` | Security | **ERROR** | Secret-bearing files must not be group-writable or reachable by others: `.env`, `*.env`, `*.pem`, `*.key`, `.docker/config.json` (and `secrets.env`, `keys.txt`, SSH keys, which must be 0600). |
+| `SEC-SECRETS-HISTORY` | Security | **ERROR** | Opt-in (`--history`): a credential shape added in any commit of `git log -p --all`, even if deleted later. |
+| `SEC-SOPS-UNENCRYPTED` | Security | **ERROR** | Prevents committing unencrypted `.enc.*` files; a dotenv is accepted as encrypted with `sops_mac=`/`sops_version=` markers or `ENC[AES256_GCM` values. |
 | `GOV-AGENT-LAWS` | Gov | **ERROR** | Validates agent constitution and governance rules in `AGENTS.md`. |
 | `VAULT-TAG-TAXONOMY` | Docs | **WARN** | Restricts tags to canonical taxomony cataloged in `_tags.md`. |
 

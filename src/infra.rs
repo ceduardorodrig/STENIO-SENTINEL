@@ -619,6 +619,390 @@ pub fn audit_compose_dir(root: &Path, gpu_consumers: &[String]) -> InfraReport {
     report
 }
 
+/// True when an assignment key names a credential: `*_PASSWORD`, `*_PASS`, `*_PWD`,
+/// `*_SECRET`, `*_SECRET_KEY`, `*_API_KEY`, `*_ACCESS_KEY`, `*PRIVATE_KEY`,
+/// `*_AUTHKEY`, `*_AUTH_KEY`, `*_CREDENTIALS`, `*_TOKEN` and the bare `PASSWORD`/`SECRET`.
+fn key_looks_secret(key: &str) -> bool {
+    let k = key.to_ascii_uppercase();
+    [
+        "PASSWORD",
+        "PASSWD",
+        "SECRET",
+        "API_KEY",
+        "ACCESS_TOKEN",
+        "AUTH_TOKEN",
+        "_TOKEN",
+        "_AUTHKEY",
+        "_AUTH_KEY",
+        "_PASS",
+        "_PWD",
+        "_CREDENTIALS",
+        "PRIVATE_KEY",
+        "ACCESS_KEY",
+        "_SECRET_KEY",
+    ]
+    .iter()
+    .any(|suffix| k.ends_with(suffix))
+        || k == "PASSWORD"
+        || k == "SECRET"
+}
+
+/// A value that points at a file or is a vault reference rather than carrying a secret.
+fn value_is_path_like(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with("file:")
+        || value.starts_with("./")
+        || value.starts_with("~/")
+        || value.ends_with(".pem")
+        || value.ends_with(".key")
+        || value.ends_with(".crt")
+}
+
+/// Cleartext credentials in one infrastructure text file, **every** hit (not one per file).
+///
+/// Two independent detectors: the token shapes (all lines, comments included, because a
+/// token in a comment is still a leak) and the key-name heuristic (`*_PASSWORD=literal`,
+/// ignoring comments, placeholders, vault references and variable substitutions).
+/// SOPS ciphertext lines never fire. `keyword_escape` is the file-wide exemption for
+/// YAML/JSON SOPS documents (`sops:` + `mac:`); dotenv SOPS files are handled per line.
+pub(crate) fn plaintext_secret_violations(
+    path_str: &str,
+    content: &str,
+    keyword_escape: bool,
+) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        if crate::guardian::is_sops_ciphertext_line(line) {
+            continue;
+        }
+        let trimmed = line.trim();
+        let shape_hit = crate::guardian::line_has_token_shape(line);
+        let is_comment = trimmed.starts_with('#') || trimmed.starts_with("//");
+
+        let keyword_hit = !keyword_escape && !is_comment && keyword_secret_hit(trimmed);
+
+        if shape_hit || keyword_hit {
+            violations.push(Violation {
+                rule_id: "SEC-PLAINTEXT-SECRET".to_string(),
+                rule_name: "Cleartext Secret Detected".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.to_string(),
+                line_number: line_idx + 1,
+                snippet: mask_snippet(trimmed),
+                message: "Cleartext credential or token found in infrastructure file.".to_string(),
+                suggestion: Some(
+                    "Replace value with environment variable or encrypt via sops/age.".to_string(),
+                ),
+            });
+        }
+    }
+    violations
+}
+
+/// Key-name heuristic for one trimmed line (see [`plaintext_secret_violations`]).
+fn keyword_secret_hit(trimmed: &str) -> bool {
+    // Matches pattern even with YAML/Compose prefixes
+    // (`- VAR=value`), JSON/YAML keys (`VAR: value`), Markdown
+    // tables and bold (`**Password:** value`), and suffixes
+    // (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
+    let trimmed_no_prefix = trimmed
+        .trim_start_matches(['-', ' '])
+        .trim_start_matches("export ")
+        .replace("**", "")
+        .replace("[", "")
+        .replace("]", "")
+        .replace("`", " ");
+    let trimmed_no_prefix = trimmed_no_prefix.trim();
+    let (maybe_key, maybe_value) = trimmed_no_prefix
+        .split_once('=')
+        .or_else(|| trimmed_no_prefix.split_once(':'))
+        .unwrap_or(("", ""));
+    let key = maybe_key.trim().trim_matches('"');
+    let value = maybe_value.trim().trim_matches(['"', '\'']);
+    let looks_like_secret_key = key_looks_secret(key);
+
+    let value_is_literal = value.len() >= 8
+            && !value.is_empty()
+            && !value.contains("${")
+            && !value.contains("$(")
+            && !value.contains("ENC[AES256_GCM")
+            && value != "\"\""
+            && value != "''"
+            // Obvious placeholders are not secret leaks
+            && !value.eq_ignore_ascii_case("changeme")
+            && !value.eq_ignore_ascii_case("placeholder")
+            && !value.eq_ignore_ascii_case("example")
+            && !value.eq_ignore_ascii_case("your_password")
+            && !value.starts_with('<')
+            && !value.starts_with('%')
+            // Configuration templates are not plaintext secrets: values are
+            // populated at runtime (e.g. Go templates in indexers like `{{ .Config.password }}`).
+            && !value.contains("{{")
+            && !value.contains("}}")
+            && !value.contains("<%")
+            && !value.contains("${{")
+            // Vault reference declarations: referencing a secret in a store
+            // (e.g. `Password: in the sops store`) is a pointer, not a secret leak.
+            && !value.contains("sops")
+            && !value.contains("SOPS")
+            && !value.contains("secrets.env")
+            && !value.contains("cofre")
+            && !value.contains("secret manager")
+            && !value.contains("vault")
+            // Prose continuations: actual secrets do not begin with these prepositions.
+            && !value.starts_with("in ")
+            && !value.starts_with("no ")
+            && !value.starts_with("em ")
+            && !value.starts_with("(in ")
+            && !value.starts_with("(no ")
+            && !value.starts_with("(em ")
+            // Environment variable name instead of value: if the
+            // "value" is uppercase/underscore only, it is the variable
+            // identifier (e.g. `PI_HOLE_ADMIN_PASSWORD`), not the
+            // credential. Real values almost always have lowercase,
+            // digits, or symbols.
+            && !value
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+            // Parenthesized text describes the source, not the value.
+            // Accepts open parenthesis on same line (e.g.
+            // `(in .env — NPM_ADMIN_PASSWORD / SOPS)`).
+            && !value.starts_with('(')
+            // File/config path is not a credential.
+            && !value.ends_with(".env")
+            && !value.ends_with(".yml")
+            && !value.ends_with(".yaml")
+            && !value.ends_with(".toml")
+            && !value.ends_with(".json")
+            && !value_is_path_like(value);
+
+    trimmed.starts_with("ghp_")
+        || trimmed.starts_with("github_pat_")
+        || (looks_like_secret_key && value_is_literal && !is_documentation_example(trimmed, value))
+}
+
+/// Which permission policy applies to a secret-bearing file name.
+#[derive(Debug, PartialEq, Eq)]
+enum SecretFileKind {
+    /// `secrets.env`, `keys.txt`, SSH keys: anything above 0600 leaks (original policy).
+    Strict,
+    /// `.env`, `*.env`, `*.pem`, `*.key`, `.docker/config.json`: group-write or any
+    /// world bit leaks, once the content proves the file carries a secret.
+    Bearing,
+}
+
+fn classify_secret_file(path_str: &str, file_name: &str) -> Option<SecretFileKind> {
+    if file_name == "secrets.env"
+        || file_name == "keys.txt"
+        || file_name.contains("id_ed25519")
+        || file_name.contains("id_rsa")
+    {
+        return Some(SecretFileKind::Strict);
+    }
+    if file_name.ends_with(".example")
+        || file_name.ends_with(".sample")
+        || file_name.ends_with(".template")
+    {
+        return None;
+    }
+    if crate::guardian::is_env_like_name(file_name)
+        || crate::guardian::is_key_material_name(file_name)
+        || path_str.ends_with("/.docker/config.json")
+    {
+        return Some(SecretFileKind::Bearing);
+    }
+    None
+}
+
+/// True when the content proves the file holds a secret: a key-name assignment with a
+/// value, a token shape, a private-key header or a docker registry `auth`. SOPS
+/// ciphertext lines do not count (the encrypted store is meant to sync).
+fn content_bears_secret(file_name: &str, content: &str) -> bool {
+    if file_name.ends_with(".pem") {
+        return content.contains("PRIVATE KEY-----");
+    }
+    if file_name.ends_with(".key") {
+        return true;
+    }
+    if file_name == "config.json" {
+        return content.contains("\"auth\"") || content.contains("\"identitytoken\"");
+    }
+    content.lines().any(|line| {
+        if crate::guardian::is_sops_ciphertext_line(line) {
+            return false;
+        }
+        let t = line.trim();
+        if t.starts_with('#') {
+            return false;
+        }
+        let assigned = t
+            .trim_start_matches("export ")
+            .split_once('=')
+            .is_some_and(|(k, v)| key_looks_secret(k.trim()) && !v.trim().is_empty());
+        assigned || crate::guardian::line_has_token_shape(line)
+    })
+}
+
+/// `SEC-PERM-LEAK` for one file given its mode; pure so the fixtures can drive it.
+fn secret_mode_violation(
+    path_str: &str,
+    file_name: &str,
+    kind: &SecretFileKind,
+    mode: u32,
+) -> Option<Violation> {
+    let (unsafe_mode, expected) = match kind {
+        SecretFileKind::Strict => (mode > 0o600, "0600 or 0400"),
+        // Group-write (0o020) or any world bit (0o007); owner-only and 0640 pass.
+        SecretFileKind::Bearing => (mode & 0o027 != 0, "0600, 0640 or 0400"),
+    };
+    if !unsafe_mode {
+        return None;
+    }
+    Some(Violation {
+        rule_id: "SEC-PERM-LEAK".to_string(),
+        rule_name: "Insecure POSIX Permissions on Secret File".to_string(),
+        severity: Severity::Error,
+        file_path: path_str.to_string(),
+        line_number: 1,
+        snippet: format!("Current mode: 0{:o}", mode),
+        message: format!(
+            "Sensitive file '{}' has permissions 0{:o} (must be {}).",
+            file_name, mode, expected
+        ),
+        suggestion: Some("Remediate immediately by executing: chmod 0600 <file>.".to_string()),
+    })
+}
+
+#[cfg(unix)]
+fn secret_file_mode_violation(path: &Path, path_str: &str, file_name: &str) -> Option<Violation> {
+    use std::os::unix::fs::PermissionsExt;
+    let kind = classify_secret_file(path_str, file_name)?;
+    let mode = fs::metadata(path).ok()?.permissions().mode() & 0o777;
+    if kind == SecretFileKind::Bearing {
+        let content = fs::read_to_string(path).ok()?;
+        if !content_bears_secret(file_name, &content) {
+            return None;
+        }
+    }
+    secret_mode_violation(path_str, file_name, &kind, mode)
+}
+
+#[cfg(not(unix))]
+fn secret_file_mode_violation(_: &Path, _: &str, _: &str) -> Option<Violation> {
+    None
+}
+
+/// Files the gitignore-aware main walk never visits (a git-ignored `.env` is exactly
+/// where real secrets live, and Syncthing mirrors it anyway): content and permissions.
+fn ignored_candidate_violations(path: &Path) -> Vec<Violation> {
+    let path_str = path.to_string_lossy().to_string();
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let mut violations = Vec::new();
+    if let Ok(content) = fs::read_to_string(path) {
+        if content.contains("-----BEGIN")
+            && content.contains("PRIVATE KEY-----")
+            && !content.contains("-----BEGIN AGE ENCRYPTED FILE-----")
+        {
+            violations.push(Violation {
+                rule_id: "SEC-PRIVATE-KEY-CLEARTEXT".to_string(),
+                rule_name: "Cleartext Private Key Detected".to_string(),
+                severity: Severity::Error,
+                file_path: path_str.clone(),
+                line_number: 1,
+                snippet: format!("{}-BEGIN PRIVATE KEY-{}", "----", "----"),
+                message: "Unprotected SSH/TLS private key found in repository.".to_string(),
+                suggestion: Some("Move to ~/.ssh/ or store encrypted with sops/age in mnemocine/secrets.enc.env.".to_string()),
+            });
+        }
+        violations.extend(plaintext_secret_violations(&path_str, &content, false));
+    }
+    violations.extend(secret_file_mode_violation(path, &path_str, file_name));
+    violations
+}
+
+/// Synthetic fixtures for `--self-test` (name, passed): the key-name list, the token
+/// shapes in infra files, SOPS dotenv and the permission policy, each with a case that
+/// must fire and one that must not. Tokens are assembled at compile time.
+pub fn self_test_cases() -> Vec<(&'static str, bool)> {
+    let hits = |content: &str| plaintext_secret_violations("x.env", content, false).len();
+    let gh = concat!("ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789");
+    let mut cases = vec![
+        ("suffix _AUTHKEY", hits("TS_AUTHKEY=Xk29sLm4Qp7vRt8z") == 1),
+        (
+            "suffix _AUTH_KEY",
+            hits("TS_AUTH_KEY=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        ("suffix _PASS", hits("DB_PASS=Xk29sLm4Qp7vRt8z") == 1),
+        ("suffix _PWD", hits("DB_PWD=Xk29sLm4Qp7vRt8z") == 1),
+        (
+            "suffix _CREDENTIALS",
+            hits("GCP_CREDENTIALS=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        (
+            "suffix PRIVATE_KEY",
+            hits("SIGNING_PRIVATE_KEY=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        (
+            "suffix ACCESS_KEY",
+            hits("AWS_ACCESS_KEY=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        (
+            "suffix _SECRET_KEY",
+            hits("APP_SECRET_KEY=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        (
+            "every hit reported",
+            hits("A_PASS=Xk29sLm4Qp7vRt8z\nB_PWD=Qp7vRt8zXk29sLm4") == 2,
+        ),
+        ("token in comment", hits(&format!("# {gh}")) == 1),
+        ("var reference silent", hits("DB_PASS=${DB_PASS_FILE}") == 0),
+        (
+            "path value silent",
+            hits("TLS_PRIVATE_KEY=/etc/ssl/private/site.pem") == 0,
+        ),
+        (
+            "sops dotenv silent",
+            hits(concat!(
+                "DB_PASS=ENC[AES",
+                "256_GCM,data:abcdefabcdefabcd,type:str]\nsops_mac=ENC[AES",
+                "256_GCM,data:abc]\nsops_version=3.9.0"
+            )) == 0,
+        ),
+    ];
+    let strict = classify_secret_file("/v/secrets.env", "secrets.env");
+    let bearing = classify_secret_file("/v/.env", ".env");
+    let mode = |k: &Option<SecretFileKind>, m: u32| {
+        k.as_ref()
+            .and_then(|k| secret_mode_violation("/v/f", "f", k, m))
+            .is_some()
+    };
+    cases.extend([
+        ("perm .env 0644 fires", mode(&bearing, 0o644)),
+        ("perm .env 0660 fires", mode(&bearing, 0o660)),
+        ("perm .env 0600 silent", !mode(&bearing, 0o600)),
+        ("perm .env 0640 silent", !mode(&bearing, 0o640)),
+        ("perm secrets.env 0640 fires", mode(&strict, 0o640)),
+        ("perm secrets.env 0600 silent", !mode(&strict, 0o600)),
+        (
+            "perm *.pem classified",
+            classify_secret_file("/v/a.pem", "a.pem").is_some(),
+        ),
+        (
+            "perm *.key classified",
+            classify_secret_file("/v/a.key", "a.key").is_some(),
+        ),
+        (
+            "perm docker config classified",
+            classify_secret_file("/h/.docker/config.json", "config.json").is_some(),
+        ),
+        (
+            "perm readme ignored",
+            classify_secret_file("/v/README.md", "README.md").is_none(),
+        ),
+    ]);
+    cases
+}
+
 /// `code_debt` gates the rules that only make sense for code WE own.
 ///
 /// `homelab` passes `true`: a loose `.py` in our own tree is debt to migrate.
@@ -631,6 +1015,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
     let mut messages = Vec::new();
     let mut violations = Vec::new();
     let mut scanned_count = 0;
+    let mut visited_candidates = std::collections::HashSet::new();
 
     // Resolved once for the whole audit and threaded into every compose check.
     let gpu_consumers = load_gpu_consumers(root);
@@ -655,13 +1040,28 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         }
 
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if crate::guardian::is_secret_candidate(&path) {
+            visited_candidates.insert(path.clone());
+        }
 
         // ── 1. SOPS / Age Deep Secret Guard (SEC-SOPS-UNENCRYPTED) ──────────────
         // Covers 100% of infrastructure text and configuration files
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        // `effective_extension` maps `.env` and `.env.*` to `env` (a dotfile has no extension).
+        let ext = crate::rule::effective_extension(&path);
         let is_text_or_config = matches!(
-            ext,
-            "yml" | "yaml" | "env" | "json" | "sh" | "conf" | "service" | "md" | "php" | "htaccess"
+            ext.as_str(),
+            "yml"
+                | "yaml"
+                | "env"
+                | "json"
+                | "sh"
+                | "conf"
+                | "service"
+                | "md"
+                | "php"
+                | "htaccess"
+                | "pem"
+                | "key"
         );
 
         if is_text_or_config {
@@ -670,7 +1070,12 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 let is_sops_encrypted = content.contains("sops:") && content.contains("mac:");
                 let is_age_armored = content.contains("-----BEGIN AGE ENCRYPTED FILE-----");
 
-                if file_name.contains(".enc.") && !is_sops_encrypted && !is_age_armored {
+                let has_dotenv_sops = crate::guardian::has_sops_dotenv_markers(&content);
+                if file_name.contains(".enc.")
+                    && !is_sops_encrypted
+                    && !has_dotenv_sops
+                    && !is_age_armored
+                {
                     violations.push(Violation {
                         rule_id: "SEC-SOPS-UNENCRYPTED".to_string(),
                         rule_name: ".enc File Missing SOPS/Age Encryption".to_string(),
@@ -700,122 +1105,19 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                     });
                 }
 
-                // Detects literal tokens and passwords in plaintext (outside templates/examples)
+                // Literal tokens and passwords in plaintext (outside templates/examples).
+                // Every hit is reported; token shapes also fire on lines the key-name
+                // heuristic cannot see (any file type, comments included).
                 if !path_str.contains(".template")
                     && !path_str.contains(".example")
                     && !path_str.contains("templates/")
+                    && !is_age_armored
                 {
-                    for (line_idx, line) in content.lines().enumerate() {
-                        let trimmed = line.trim();
-                        // Ignore comments and empty lines
-                        if trimmed.starts_with('#') || trimmed.starts_with("//") {
-                            continue;
-                        }
-
-                        // Matches pattern even with YAML/Compose prefixes
-                        // (`- VAR=value`), JSON/YAML keys (`VAR: value`), Markdown
-                        // tables and bold (`**Password:** value`), and suffixes
-                        // (`INITIAL_ADMIN_PASSWORD`, `MYSQL_ROOT_PASSWORD`).
-                        let trimmed_no_prefix = trimmed
-                            .trim_start_matches(['-', ' '])
-                            .trim_start_matches("export ")
-                            .replace("**", "")
-                            .replace("[", "")
-                            .replace("]", "")
-                            .replace("`", " ");
-                        let trimmed_no_prefix = trimmed_no_prefix.trim();
-                        let (maybe_key, maybe_value) = trimmed_no_prefix
-                            .split_once('=')
-                            .or_else(|| trimmed_no_prefix.split_once(':'))
-                            .unwrap_or(("", ""));
-                        let key = maybe_key.trim().trim_matches('"');
-                        let value = maybe_value.trim().trim_matches(['"', '\'']);
-                        let key_upper = key.to_ascii_uppercase();
-
-                        let looks_like_secret_key = key_upper.ends_with("PASSWORD")
-                            || key_upper.ends_with("PASSWD")
-                            || key_upper.ends_with("SECRET")
-                            || key_upper.ends_with("API_KEY")
-                            || key_upper.ends_with("ACCESS_TOKEN")
-                            || key_upper.ends_with("AUTH_TOKEN")
-                            || key_upper.ends_with("_TOKEN")
-                            || key_upper == "PASSWORD"
-                            || key_upper == "SECRET";
-
-                        let value_is_literal = value.len() >= 8
-                            && !value.is_empty()
-                            && !value.contains("${")
-                            && !value.contains("$(")
-                            && !value.contains("ENC[AES256_GCM")
-                            && value != "\"\""
-                            && value != "''"
-                            // Obvious placeholders are not secret leaks
-                            && !value.eq_ignore_ascii_case("changeme")
-                            && !value.eq_ignore_ascii_case("placeholder")
-                            && !value.eq_ignore_ascii_case("example")
-                            && !value.eq_ignore_ascii_case("your_password")
-                            && !value.starts_with('<')
-                            && !value.starts_with('%')
-                            // Configuration templates are not plaintext secrets: values are
-                            // populated at runtime (e.g. Go templates in indexers like `{{ .Config.password }}`).
-                            && !value.contains("{{")
-                            && !value.contains("}}")
-                            && !value.contains("<%")
-                            && !value.contains("${{")
-                            // Vault reference declarations: referencing a secret in a store
-                            // (e.g. `Password: in the sops store`) is a pointer, not a secret leak.
-                            && !value.contains("sops")
-                            && !value.contains("SOPS")
-                            && !value.contains("secrets.env")
-                            && !value.contains("cofre")
-                            && !value.contains("secret manager")
-                            && !value.contains("vault")
-                            // Prose continuations: actual secrets do not begin with these prepositions.
-                            && !value.starts_with("in ")
-                            && !value.starts_with("no ")
-                            && !value.starts_with("em ")
-                            && !value.starts_with("(in ")
-                            && !value.starts_with("(no ")
-                            && !value.starts_with("(em ")
-                            // Environment variable name instead of value: if the
-                            // "value" is uppercase/underscore only, it is the variable
-                            // identifier (e.g. `PI_HOLE_ADMIN_PASSWORD`), not the
-                            // credential. Real values almost always have lowercase,
-                            // digits, or symbols.
-                            && !value
-                                .chars()
-                                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-                            // Parenthesized text describes the source, not the value.
-                            // Accepts open parenthesis on same line (e.g.
-                            // `(in .env — NPM_ADMIN_PASSWORD / SOPS)`).
-                            && !value.starts_with('(')
-                            // File/config path is not a credential.
-                            && !value.ends_with(".env")
-                            && !value.ends_with(".yml")
-                            && !value.ends_with(".yaml")
-                            && !value.ends_with(".toml")
-                            && !value.ends_with(".json");
-
-                        let is_leak = (trimmed.starts_with("ghp_")
-                            || trimmed.starts_with("github_pat_"))
-                            || (looks_like_secret_key
-                                && value_is_literal
-                                && !is_documentation_example(trimmed, value));
-
-                        if is_leak && !is_sops_encrypted && !is_age_armored {
-                            violations.push(Violation {
-                                rule_id: "SEC-PLAINTEXT-SECRET".to_string(),
-                                rule_name: "Cleartext Secret Detected".to_string(),
-                                severity: Severity::Error,
-                                file_path: path_str.clone(),
-                                line_number: line_idx + 1,
-                                snippet: mask_snippet(trimmed),
-                                message: "Cleartext credential or token found in infrastructure file.".to_string(),
-                                suggestion: Some("Replace value with environment variable or encrypt via sops/age.".to_string()),
-                            });
-                            break; // 1 warning per file
-                        }
-                    }
+                    violations.extend(plaintext_secret_violations(
+                        &path_str,
+                        &content,
+                        is_sops_encrypted,
+                    ));
                 }
             }
         }
@@ -936,34 +1238,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         // ── 6. Insecure POSIX Permissions on Secrets Audit (SEC-PERM-LEAK) ────
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if file_name == "secrets.env"
-                || file_name == "keys.txt"
-                || file_name.contains("id_ed25519")
-                || file_name.contains("id_rsa")
-            {
-                if let Ok(meta) = fs::metadata(&path) {
-                    let mode = meta.permissions().mode() & 0o777;
-                    if mode > 0o600 {
-                        violations.push(Violation {
-                            rule_id: "SEC-PERM-LEAK".to_string(),
-                            rule_name: "Insecure POSIX Permissions on Secret File".to_string(),
-                            severity: Severity::Error,
-                            file_path: path_str.clone(),
-                            line_number: 1,
-                            snippet: format!("Current mode: 0{:o}", mode),
-                            message: format!(
-                                "Sensitive file '{}' has permissions 0{:o} (must be 0600 or 0400).",
-                                file_name, mode
-                            ),
-                            suggestion: Some(
-                                "Remediate immediately by executing: chmod 0600 <file>."
-                                    .to_string(),
-                            ),
-                        });
-                    }
-                }
-            }
+            violations.extend(secret_file_mode_violation(&path, &path_str, file_name));
 
             // ── 8. Prohibited High-Risk Plugins (SEC-WORDPRESS-BANNED-PLUGIN) ────
             if path_str.contains("wp-content/plugins/wp-file-manager")
@@ -981,6 +1256,12 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 });
             }
         }
+    }
+
+    // ── 5b. Secret-bearing files the gitignore-aware walk skipped ─────────────
+    // A git-ignored `.env` is where real secrets live, and Syncthing mirrors it.
+    for path in crate::guardian::ignored_secret_candidates(root, &visited_candidates) {
+        violations.extend(ignored_candidate_violations(&path));
     }
 
     // ── 9. Production Static Parity Verification (OPS-STATIC-PARITY) ──────
