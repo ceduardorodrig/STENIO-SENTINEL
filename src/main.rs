@@ -26,6 +26,7 @@ mod graph;
 mod guardian;
 mod health;
 mod homelab;
+mod i18n;
 mod infra;
 mod learner;
 mod mcp;
@@ -451,6 +452,17 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     }
 
     check_case!("Banned Python", "ARCH-NO-PYTHON", "print('hello')", true);
+
+    // ── Gettext catalogue completeness (I18N-PO-INCOMPLETE) ────────────────
+    for (name, ok) in i18n::self_test_cases() {
+        total += 1;
+        if ok {
+            passed += 1;
+            println!("   ✅ Test {:<24} [{}] - OK", name, i18n::RULE_ID.cyan());
+        } else {
+            println!("   ❌ Test {:<24} [{}] - FAILED", name, i18n::RULE_ID.red());
+        }
+    }
     check_case!(
         "Tokio Thread Sleep",
         "RUST-ASYNC-SLEEP",
@@ -1518,6 +1530,10 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     //     a drift on a 🔴 item blocks delivery; every other finding is a Warning.
     collect_blocking(&mut blocker_errors, &backlog_result.violations);
 
+    // 3c. Gettext catalogues (empty/fuzzy msgstr, strings missing from the .po, placeholders)
+    let i18n_result = i18n::audit_gettext(&args.path);
+    collect_blocking(&mut blocker_errors, &i18n_result.violations);
+
     // 4. Guardian anti-tampering
     for alert in &guardian_report.tamper_alerts {
         blocker_errors.push(format!("[GUARDIAN] {}", alert));
@@ -2235,6 +2251,20 @@ fn main() -> Result<()> {
             } else {
                 report.warning_count += 1;
             }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Gettext catalogues (locale/*.po and the sources next to them) ──────
+    let should_audit_i18n = (tag_lower.as_deref() == Some("i18n") || tag_lower.is_none())
+        && (only_rule.is_none()
+            || only_rule
+                .map(|s| s.eq_ignore_ascii_case(i18n::RULE_ID))
+                .unwrap_or(false));
+    if should_audit_i18n {
+        for v in i18n::audit_gettext(&args.path).violations {
+            report.error_count += 1;
             report.total_violations += 1;
             report.violations.push(v);
         }

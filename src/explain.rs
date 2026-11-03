@@ -741,6 +741,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add a descriptive alt=\"...\" attribute or aria-hidden=\"true\" for purely decorative graphics.",
     },
     RuleExplanation {
+        id: "I18N-PO-INCOMPLETE",
+        name: "Gettext Catalogue Incomplete",
+        severity: "ERROR",
+        tag: "i18n",
+        summary: "Fails when a locale/*.po catalogue has an empty or fuzzy msgstr, when a string passed to _(), __(), _lt() or {% trans %} is missing from the project's catalogues, or when {0}, %s and %(name)s placeholders differ between msgid and msgstr.",
+        rationale: "gettext shows the original English text for every message that is missing, empty or fuzzy, so the user sees a half-translated screen. Finding such strings one at a time in the browser is not a quality gate; the check must be deterministic and run on every delivery. A project is a locale/ directory with its .po files plus the sources next to it; tests, node_modules and build output are skipped. The rule has no suppression directive.",
+        bad_example: "# locale/pt_BR.po\nmsgid \"Email is required.\"\nmsgstr \"\"\n\n# app.py\nfrappe.throw(_(\"Brand new text\"))   # not in any .po",
+        good_example: "msgid \"Email is required.\"\nmsgstr \"O e-mail é obrigatório.\"\n\nmsgid \"Brand new text\"\nmsgstr \"Texto novo\"",
+        remediation: "Translate every reported msgid in locale/<lang>.po (copy the msgid only for symbols, codes and URLs), add the strings that are missing together with their msgctxt, remove `#, fuzzy` after reviewing, and keep placeholders identical. For Frappe: extract with `bench generate-pot-file --app <app>` and merge with `msgmerge`, then translate.",
+    },
+    RuleExplanation {
         id: "FRONT-I18N-NAMESPACE",
         name: "Missing Explicit Namespace in useTranslation",
         severity: "ERROR",
