@@ -894,6 +894,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "# Payment Architecture\nThis document details the settlement workflow...",
         remediation: "Translate the technical document to English per the backlog translation plan (SB-017).",
     },
+    RuleExplanation {
+        id: "DOC-UNVERIFIED-INTERFACE",
+        name: "Hardware Interface Claim Without Verification Date",
+        severity: "WARN",
+        tag: "doc",
+        summary: "Flags a server or service document that names a sysfs path, an I2C address or a charger/PMIC chip without a verification marker in the same section.",
+        rationale: "A documented interface is a hypothesis until someone reads it on the host. On 2026-11-03 the notes for `kururu` claimed an `axp20x` PMIC with a `voltage_max` sysfs knob; the real charger is a Summit SMB327 at I2C `6-0034` exposing `sec-charger/{reg,data}`, so an entire procedure (voltage ladder, OpenRC persistence) had been written against hardware that does not exist. Wiring docs were correct and unusable. The claim is not judged: it is asked to carry provenance — bus:address, the kernel source file, and the date it was read. `Verified|measured|implemented|confirmed|checked|read on` plus an ISO date within the section (or in an ancestor heading) silences it.",
+        bad_example: "| Charger | AXP228 PMIC, cap via `/sys/class/power_supply/axp20x-battery/voltage_max` |",
+        good_example: "## Hardware Specifications (verified 2026-11-03)\n| Charger | Summit SMB327 at I2C `6-0034`, `sec-charger/{reg,data}` (kernel `smb328_charger.c`) |",
+        remediation: "Read the interface on the host (`/sys/bus/i2c/devices/`, `dmesg`, the kernel source) and record the bus:address plus a `Verified YYYY-MM-DD` marker in the section.",
+    },
+    RuleExplanation {
+        id: "DOC-STALE-ACCESS-CLAIM",
+        name: "Access Limitation Claim Without Verification Date",
+        severity: "WARN",
+        tag: "doc",
+        summary: "Flags prose asserting that a host has no administrative path or access, when nothing in the section says when that was last checked.",
+        rationale: "An access limitation is a finding with a date, not a premise. `HB-060` recorded that `kururu` had 'no administrative path' and the claim was inherited as fact for weeks, although the node had answered over the tailnet on 2026-10-13; the blocker was an ACL packet filter plus a `tailscale up --ssh` interception, both fixable in an afternoon. Stale claims close avenues of work before anyone explores them, so the rule keeps the date attached to the claim. It matches the claim shape only ('no administrative path/access', 'sem caminho administrativo'), never the ordinary word 'unreachable', which is legitimate alert prose.",
+        bad_example: "| `kururu` | **unmapped** | no admin path from the audit session |",
+        good_example: "| `kururu` | **mapped** (2026-11-03) | administrative path restored — HB-060 resolved |",
+        remediation: "Probe the host, then either date the claim (`Verified YYYY-MM-DD` plus the command used) or point at the backlog item tracking the recovery.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

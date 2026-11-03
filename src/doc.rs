@@ -1,4 +1,5 @@
 use ignore::WalkBuilder;
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -541,6 +542,15 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         }
     }
 
+    // ── 6. Claims about hardware and access must carry a verification date (GB-007) ──
+    // Two documented defects cost a full task on 2026-11-03: a server note claimed an `axp20x`
+    // PMIC with a `voltage_max` sysfs knob (the charger is a Summit SMB327 at I2C `6-0034`
+    // exposing `sec-charger/{reg,data}`), and an inherited "no administrative path" claim had
+    // been false for three weeks. Prose cannot be proven wrong statically, so both rules are
+    // Warnings: they mark the claim, they do not judge it. A nearby verification marker
+    // ("verified/measured/implemented/confirmed ... YYYY-MM-DD") silences the finding.
+    audit_unverified_claims(repo_root, &mut violations, &mut total_docs);
+
     if violations.is_empty() && broken_links.is_empty() {
         messages.push(format!("✅ {} technical documents (services, servers, ADRs and cold storage) audited and intact.", total_docs));
     } else {
@@ -561,6 +571,211 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
         broken_links,
         messages,
         violations,
+    }
+}
+
+/// Words that turn an ISO date into a verification marker: together they say "someone looked at
+/// the host and wrote down when". One shared list, so the two claim rules cannot drift apart.
+const VERIFICATION_MARKERS: &[&str] = &[
+    "verified",
+    "measured",
+    "implemented",
+    "confirmed",
+    "checked",
+    "read on",
+];
+
+/// True when the line carries an ISO date **and** one of the verification words.
+fn is_verification_marker(line: &str, iso_date: &Regex) -> bool {
+    if !iso_date.is_match(line) {
+        return false;
+    }
+    let lower = line.to_lowercase();
+    VERIFICATION_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+/// Heading level of a Markdown ATX heading (1-6), or None. Requires the space after the hashes,
+/// so a shell comment inside a fenced block (`# Inspect the register`) is not a heading.
+fn heading_level(line: &str) -> Option<usize> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if hashes == 0 || hashes > 6 || !line[hashes..].starts_with(' ') {
+        return None;
+    }
+    Some(hashes)
+}
+
+/// Heading positions with their level, ignoring anything inside a fenced code block.
+fn collect_headings(lines: &[&str]) -> Vec<(usize, usize)> {
+    let mut headings = Vec::new();
+    let mut in_fence = false;
+    for (idx, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if let Some(level) = heading_level(line) {
+            headings.push((idx, level));
+        }
+    }
+    headings
+}
+
+/// How far from a claim a verification marker may sit and still cover it.
+const CLAIM_WINDOW: usize = 25;
+
+/// True when the claim at `idx` is anchored to a date: a marker inside its own section (or within
+/// `CLAIM_WINDOW` lines), or in the text of any ancestor heading. An ancestor heading such as
+/// `## Battery charge cap ... implemented 2026-11-03` vouches for its subsections; a sibling
+/// section's body never does, which is what keeps the rule from going vacuous in a long file.
+fn has_nearby_verification(
+    lines: &[&str],
+    headings: &[(usize, usize)],
+    idx: usize,
+    iso_date: &Regex,
+) -> bool {
+    let position = headings.iter().rposition(|(line_idx, _)| *line_idx <= idx);
+    let (start, level) = match position {
+        Some(p) => (headings[p].0, headings[p].1),
+        None => (0, 0),
+    };
+    let end = headings
+        .iter()
+        .find(|(line_idx, lvl)| *line_idx > idx && *lvl <= level)
+        .map(|(line_idx, _)| *line_idx)
+        .unwrap_or(lines.len());
+
+    let lo = start.max(idx.saturating_sub(CLAIM_WINDOW));
+    let hi = end.min(idx + CLAIM_WINDOW + 1);
+    if lines[lo..hi]
+        .iter()
+        .any(|candidate| is_verification_marker(candidate, iso_date))
+    {
+        return true;
+    }
+
+    if let Some(p) = position {
+        let mut child_level = headings[p].1;
+        for (line_idx, lvl) in headings[..p].iter().rev() {
+            if *lvl < child_level {
+                if is_verification_marker(lines[*line_idx], iso_date) {
+                    return true;
+                }
+                child_level = *lvl;
+            }
+        }
+    }
+
+    false
+}
+
+/// Rules `DOC-UNVERIFIED-INTERFACE` and `DOC-STALE-ACCESS-CLAIM` (GB-007).
+///
+/// Both flag a claim that is not anchored to a date: a hardware interface (sysfs path, I2C
+/// address, charger/PMIC name) named without a verification, and an inaccessibility claim
+/// ("no administrative path", "no admin access") with nothing to say when it was last true.
+/// Warning severity, never Error: prose cannot be proven false statically, only stale.
+fn audit_unverified_claims(
+    repo_root: &Path,
+    violations: &mut Vec<Violation>,
+    total_docs: &mut usize,
+) {
+    let mnemocine = repo_root.join("mnemocine");
+    if !mnemocine.is_dir() {
+        return;
+    }
+
+    let interface_re = match Regex::new(
+        r"/sys/(?:class|bus|devices)/|\b\d-00[0-9a-f]{2}\b|\b(?:axp2[0-9a-z]{2}|smb3[0-9]{2}|bq25[0-9]{2})\b",
+    ) {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let claim_re = match Regex::new(
+        r"(?i)\bno administrat(?:ive|or)\s+(?:path|access)\b|\bno admin\s+(?:path|access)\b|sem caminho administrativo",
+    ) {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+    let iso_re = match Regex::new(r"\d{4}-\d{2}-\d{2}") {
+        Ok(re) => re,
+        Err(_) => return,
+    };
+
+    const MAX_PER_FILE: usize = 3;
+
+    for path in collect_md_files(&mnemocine) {
+        let path_str = path.to_string_lossy().to_string();
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        *total_docs += 1;
+
+        let display = path
+            .strip_prefix(repo_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .to_string();
+        let lines: Vec<&str> = content.lines().collect();
+        let headings = collect_headings(&lines);
+        // Hardware claims only mean something where the hardware is described.
+        let hardware_scope =
+            path_str.contains("/servers/") || path_str.contains("/services/");
+
+        let mut interface_hits = 0usize;
+        let mut claim_hits = 0usize;
+
+        for (idx, line) in lines.iter().enumerate() {
+            let wants_interface = hardware_scope && interface_re.is_match(line);
+            let wants_claim = claim_re.is_match(line);
+            if !wants_interface && !wants_claim {
+                continue;
+            }
+
+            if has_nearby_verification(&lines, &headings, idx, &iso_re) {
+                continue;
+            }
+
+            let snippet = line.trim().to_string();
+            let snippet: String = snippet.chars().take(160).collect();
+
+            if wants_interface && interface_hits < MAX_PER_FILE {
+                interface_hits += 1;
+                violations.push(Violation {
+                    rule_id: "DOC-UNVERIFIED-INTERFACE".to_string(),
+                    rule_name: "Hardware Interface Claim Without Verification Date".to_string(),
+                    severity: Severity::Warning,
+                    file_path: display.clone(),
+                    line_number: idx + 1,
+                    snippet: snippet.clone(),
+                    message: "Names a sysfs path, I2C address or charger/PMIC chip with no verification date in the same section.".to_string(),
+                    suggestion: Some(
+                        "Record how it was read and when: bus:address and the kernel source file, plus a `Verified YYYY-MM-DD` marker in the section.".to_string(),
+                    ),
+                });
+            }
+
+            if wants_claim && claim_hits < MAX_PER_FILE {
+                claim_hits += 1;
+                violations.push(Violation {
+                    rule_id: "DOC-STALE-ACCESS-CLAIM".to_string(),
+                    rule_name: "Access Limitation Claim Without Verification Date".to_string(),
+                    severity: Severity::Warning,
+                    file_path: display.clone(),
+                    line_number: idx + 1,
+                    snippet,
+                    message: "Asserts that a host has no administrative path or access, with no date saying when that was last checked.".to_string(),
+                    suggestion: Some(
+                        "Probe the host and date the claim (`Verified YYYY-MM-DD`, with the command used), or point at the backlog item that tracks access recovery.".to_string(),
+                    ),
+                });
+            }
+        }
     }
 }
 
@@ -595,4 +810,74 @@ fn collect_md_files(dir: &Path) -> Vec<PathBuf> {
         }
     }
     files
+}
+
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+
+    fn iso() -> Regex {
+        match Regex::new(r"\d{4}-\d{2}-\d{2}") {
+            Ok(re) => re,
+            Err(_) => panic!("the ISO date pattern is a compile-time constant"),
+        }
+    }
+
+    #[test]
+    fn heading_level_requires_the_space_after_the_hashes() {
+        assert_eq!(heading_level("## Battery cap (verified 2026-11-03)"), Some(2));
+        assert_eq!(heading_level("### Implementation"), Some(3));
+        assert_eq!(heading_level("#register write"), None);
+        assert_eq!(heading_level("plain prose"), None);
+    }
+
+    #[test]
+    fn fenced_shell_comments_are_not_headings() {
+        let lines = vec![
+            "## Real heading",
+            "```sh",
+            "# Inspect the register",
+            "echo 2 > /sys/class/power_supply/sec-charger/reg",
+            "```",
+            "text",
+        ];
+        let headings = collect_headings(&lines);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0], (0, 2));
+    }
+
+    #[test]
+    fn marker_in_the_section_silences_the_claim() {
+        let lines = vec![
+            "## Battery cap (implemented 2026-11-03)",
+            "Writes `0x42` to `/sys/class/power_supply/sec-charger/reg`.",
+        ];
+        let headings = collect_headings(&lines);
+        assert!(has_nearby_verification(&lines, &headings, 1, &iso()));
+    }
+
+    #[test]
+    fn ancestor_heading_vouches_for_its_subsection() {
+        let lines = vec![
+            "## Battery cap — implemented 2026-11-03",
+            "### Implementation & Persistence (commit 92d82f9)",
+            "Boot hook writes `/sys/class/power_supply/sec-charger/reg`.",
+        ];
+        let headings = collect_headings(&lines);
+        assert!(has_nearby_verification(&lines, &headings, 2, &iso()));
+    }
+
+    #[test]
+    fn sibling_body_marker_does_not_vouch_across_sections() {
+        let lines = vec![
+            "## DNS (verified 2026-11-03)",
+            "Unrelated body mentioning /sys/class/power_supply/.",
+            "## Hardware",
+            "Charger is a Summit SMB327 on I2C 6-0034.",
+        ];
+        let headings = collect_headings(&lines);
+        assert!(!has_nearby_verification(&lines, &headings, 3, &iso()));
+        // Control: the first section's own line is covered by its heading.
+        assert!(has_nearby_verification(&lines, &headings, 1, &iso()));
+    }
 }
