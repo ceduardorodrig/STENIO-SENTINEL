@@ -123,6 +123,25 @@ pub struct FrappeConfig {
     pub rehearsal_dir_glob: Option<String>,
     /// Tag of the custom rules run by `pre-release` (`stenio --tag <tag> --strict --compact`).
     pub custom_rules_tag: Option<String>,
+    /// Technical strings (Select options, labels) that need no translation.
+    pub label_allowlist: Option<Vec<String>>,
+    /// JSON files (path substrings) a patch force-reloads, exempt from the `modified` bump rule.
+    pub modified_allowlist: Option<Vec<String>>,
+}
+
+/// One managed file: `repo` is the source of truth, `path` its place on `host`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ParityFile {
+    pub host: String,
+    pub path: String,
+    pub repo: String,
+}
+
+/// `[parity]` table: managed-file parity checked by `stenio verify-host`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ParityConfig {
+    #[serde(default)]
+    pub files: Vec<ParityFile>,
 }
 
 #[allow(dead_code)]
@@ -138,6 +157,7 @@ pub struct SteniocheckConfig {
     pub topology: Option<TopologyConfig>,
     pub custom_rules: Option<Vec<CustomRuleConfig>>,
     pub frappe: Option<FrappeConfig>,
+    pub parity: Option<ParityConfig>,
 }
 
 impl SteniocheckConfig {

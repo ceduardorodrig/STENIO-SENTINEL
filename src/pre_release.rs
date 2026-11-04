@@ -279,14 +279,6 @@ fn check_translations(o: &Opts, app: &str) -> Check {
                 v.message.split(':').next().unwrap_or("")
             ));
         }
-        for e in fresh.iter().filter(|e| e.plural.is_none()) {
-            let tr = e.strs.first().cloned().unwrap_or_default();
-            if !tr.trim().is_empty() {
-                for p in frappe::case_problems(&e.msgid, &tr) {
-                    problems.push(format!("{}:{} {} ({p})", po, e.line, e.msgid));
-                }
-            }
-        }
     }
     if problems.is_empty() {
         mk(
@@ -309,6 +301,124 @@ fn check_translations(o: &Opts, app: &str) -> Check {
                     .join("; ")
             ),
         )
+    }
+}
+
+fn modified_of(v: &serde_json::Value) -> Option<String> {
+    v.get("modified")
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+}
+
+fn entry_key(v: &serde_json::Value) -> String {
+    let f = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    format!("{}/{}", f("doctype"), f("name"))
+}
+
+/// `FRAPPE-JSON-MODIFIED-BUMP`: Frappe imports a JSON only when its `modified` is newer.
+pub fn modified_problems(
+    repo: &Path,
+    app: &str,
+    prev: &str,
+    allow: &[String],
+) -> Result<Vec<String>, String> {
+    let names = git(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "--diff-filter=M",
+            prev,
+            "HEAD",
+            "--",
+            &format!("{app}/"),
+        ],
+    )
+    .ok_or("git diff failed")?;
+    let kinds = [
+        "/doctype/",
+        "/sidebar/",
+        "/workspace/",
+        "/number_card/",
+        "/dashboard_chart/",
+        "/fixtures/",
+    ];
+    let mut problems = Vec::new();
+    for f in names
+        .lines()
+        .filter(|f| f.ends_with(".json") && kinds.iter().any(|k| f.contains(k)))
+    {
+        if allow.iter().any(|a| f.contains(a.as_str())) {
+            continue;
+        }
+        let old: serde_json::Value =
+            serde_json::from_str(&git(repo, &["show", &format!("{prev}:{f}")]).unwrap_or_default())
+                .unwrap_or_default();
+        let new: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(repo.join(f)).unwrap_or_default())
+                .unwrap_or_default();
+        if old == new {
+            continue;
+        }
+        let pairs: Vec<(String, &serde_json::Value, Option<&serde_json::Value>)> =
+            match (&new, &old) {
+                (serde_json::Value::Array(n), serde_json::Value::Array(o)) => n
+                    .iter()
+                    .map(|e| {
+                        (
+                            entry_key(e),
+                            e,
+                            o.iter().find(|x| entry_key(x) == entry_key(e)),
+                        )
+                    })
+                    .collect(),
+                _ => vec![(String::new(), &new, Some(&old))],
+            };
+        for (key, n, o) in pairs {
+            let Some(o) = o else { continue };
+            if n == o {
+                continue;
+            }
+            if let (Some(nm), Some(om)) = (modified_of(n), modified_of(o))
+                && nm <= om
+            {
+                {
+                    problems.push(format!(
+                        "{f}{} modified {nm} is not newer than {om}",
+                        if key.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{key}]")
+                        }
+                    ));
+                }
+            }
+        }
+    }
+    Ok(problems)
+}
+
+fn check_modified(o: &Opts, app: &str) -> Check {
+    let Some(prev) = &o.prev else {
+        return mk(Status::Warn, "json-modified", "no --prev: skipped");
+    };
+    let allow = o.fc.modified_allowlist.clone().unwrap_or_default();
+    match modified_problems(&o.repo, app, prev, &allow) {
+        Ok(p) if p.is_empty() => mk(
+            Status::Pass,
+            "json-modified",
+            "every changed DocType/sidebar/workspace/card/chart/fixture JSON has a newer `modified`",
+        ),
+        Ok(p) => mk(
+            Status::Fail,
+            "json-modified",
+            format!(
+                "FRAPPE-JSON-MODIFIED-BUMP {}: {}",
+                p.len(),
+                p.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+            ),
+        ),
+        Err(e) => mk(Status::Fail, "json-modified", e),
     }
 }
 
@@ -512,6 +622,7 @@ pub fn run_checks(o: &Opts) -> Vec<Check> {
             out.extend(check_git(o));
             out.push(check_classification(o, &app));
             out.push(check_translations(o, &app));
+            out.push(check_modified(o, &app));
             out.push(check_secrets(o));
             out.push(check_dockerfile(o));
             if o.after_build {
@@ -573,6 +684,7 @@ enum Variant {
     ReusedTag,
     Dirty,
     MissingTranslation,
+    StaleModified,
 }
 
 fn sh(dir: &Path, args: &[&str]) -> bool {
@@ -608,7 +720,11 @@ fn build_repo(v: Variant) -> Option<(PathBuf, PathBuf)> {
         fs::create_dir_all(path.parent()?).ok()?;
         fs::write(
             path,
-            t.replace("__version__ = \"0.1.0\"", "__version__ = \"0.1.0-rc1\""),
+            t.replace("__version__ = \"0.1.0\"", "__version__ = \"0.1.0-rc1\"")
+                .replace(
+                    "\"fields\":[]}",
+                    "\"fields\":[],\"modified\":\"2026-01-01 00:00:00.000000\"}",
+                ),
         )
         .ok()?;
     }
@@ -619,6 +735,21 @@ fn build_repo(v: Variant) -> Option<(PathBuf, PathBuf)> {
     if v != Variant::StaleVersion {
         fs::write(&init, "__version__ = \"0.1.0-rc2\"\n").ok()?;
     }
+    let part = work.join("demoapp/demo/doctype/part/part.json");
+    let bumped = if v == Variant::StaleModified {
+        "2026-01-01 00:00:00.000000"
+    } else {
+        "2026-02-02 00:00:00.000000"
+    };
+    let part_text = fs::read_to_string(&part).ok()?;
+    fs::write(
+        &part,
+        part_text.replace(
+            "\"modified\":\"2026-01-01 00:00:00.000000\"",
+            &format!("\"modified\":\"{bumped}\",\"x\":1"),
+        ),
+    )
+    .ok()?;
     let po = work.join("demoapp/locale/pt_BR.po");
     let mut text = fs::read_to_string(&po).ok()?;
     text.push_str(if v == Variant::MissingTranslation {
@@ -692,8 +823,24 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "pre-release missing translation".to_string(),
             want(Variant::MissingTranslation, "new-translations"),
         ),
+        (
+            "pre-release stale modified".to_string(),
+            want(Variant::StaleModified, "json-modified"),
+        ),
         ("pre-release classify".to_string(), classify_case()),
     ]
+}
+
+/// TEXT-ONLY needs a diff of translations only: compare the first commit with a po-only change.
+fn classify_text_only(work: &Path) -> bool {
+    let po = work.join("demoapp/locale/pt_BR.po");
+    let text = fs::read_to_string(&po).unwrap_or_default();
+    if fs::write(&po, format!("{text}\nmsgid \"Extra\"\nmsgstr \"Extra\"\n")).is_err()
+        || !sh(work, &["commit", "-q", "-am", "po only"])
+    {
+        return true;
+    }
+    classify(work, "demoapp", "HEAD~1").0
 }
 
 fn classify_case() -> bool {
@@ -702,8 +849,9 @@ fn classify_case() -> bool {
     };
     let (full, _) = classify(&work, "demoapp", "v0.1.0-rc1");
     let (bad, _) = classify(&work, "demoapp", "no-such-ref");
+    let text_only = !classify_text_only(&work);
     let _ = fs::remove_dir_all(&base);
-    !full && bad
+    full && bad && text_only
 }
 
 #[cfg(test)]

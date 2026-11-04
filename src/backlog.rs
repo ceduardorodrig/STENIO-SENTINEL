@@ -862,6 +862,128 @@ fn collect_orphans(lines: &[&str], prefix: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// Next free id of a queue, looking at the active file **and** the archive (an id is never reused).
+pub fn next_id_in(prefix: &str, texts: &[&str]) -> String {
+    let p = prefix.trim_end_matches('-').to_uppercase();
+    let pat = format!(r"\b{}-(\d+)", regex::escape(&p));
+    let max = regex::Regex::new(&pat)
+        .map(|re| {
+            texts
+                .iter()
+                .flat_map(|t| {
+                    re.captures_iter(t)
+                        .filter_map(|c| c[1].parse::<u32>().ok())
+                        .collect::<Vec<_>>()
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    format!("{p}-{:03}", max + 1)
+}
+
+/// `stenio --backlog --next-id MB`: the next free id of the queue with that prefix.
+pub fn next_id(repo_root: &Path, prefix: &str) -> Result<String, String> {
+    let wanted = prefix.trim_end_matches('-').to_uppercase();
+    let q = registry()
+        .into_iter()
+        .find(|q| q.prefix.trim_end_matches('-').eq_ignore_ascii_case(&wanted))
+        .ok_or_else(|| format!("no queue with prefix '{wanted}' in backlog-queues.toml"))?;
+    let dir = resolve_queue_dir(repo_root, &q)
+        .ok_or_else(|| format!("queue {wanted} not found under {}", repo_root.display()))?;
+    let active = fs::read_to_string(dir.join(BACKLOG_REL))
+        .map_err(|e| format!("cannot read the active file: {e}"))?;
+    let archive = fs::read_to_string(dir.join(ARCHIVE_REL)).unwrap_or_default();
+    Ok(next_id_in(&wanted, &[&active, &archive]))
+}
+
+/// Adds `id` to the `pending:` list of a document's frontmatter, touching nothing else.
+/// None when the document has no frontmatter or uses a block list (left for a human).
+pub fn add_pending(doc: &str, id: &str) -> Option<String> {
+    let rest = doc.strip_prefix("---")?;
+    let end = rest.find("\n---")?;
+    let (front, tail) = rest.split_at(end);
+    let mut lines: Vec<String> = front.split('\n').map(str::to_string).collect();
+    match lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("pending:"))
+    {
+        Some(i) => {
+            let open = lines[i].find('[')?;
+            let close = lines[i].rfind(']')?;
+            if close < open {
+                return None;
+            }
+            let inner = lines[i][open + 1..close].trim().to_string();
+            if inner.split(',').any(|t| t.trim() == id) {
+                return Some(doc.to_string());
+            }
+            let sep = if inner.is_empty() { "" } else { ", " };
+            lines[i] = format!(
+                "{}{}{}{}{}",
+                lines[i][..close].trim_end(),
+                sep,
+                id,
+                "",
+                &lines[i][close..]
+            );
+        }
+        None => lines.push(format!("pending: [{id}]")),
+    }
+    Some(format!("---{}{}", lines.join("\n"), tail))
+}
+
+/// `--backlog --fix`: adds the missing ids to the `pending:` frontmatter of the referenced documents.
+/// Returns (documents changed, ids that need a human).
+pub fn fix_drift(repo_root: &Path) -> (usize, Vec<String>) {
+    let (mut changed, mut manual) = (0usize, Vec::new());
+    for q in registry().into_iter().filter(|q| q.linked) {
+        let Some(dir) = resolve_queue_dir(repo_root, &q) else {
+            continue;
+        };
+        let report = audit_queue(repo_root, &dir, &q);
+        for v in report
+            .violations
+            .iter()
+            .filter(|v| v.rule_id == "DOC-BACKLOG-DRIFT" && v.message.contains("does not declare"))
+        {
+            let path = repo_root.join(&v.file_path);
+            let Ok(doc) = fs::read_to_string(&path) else {
+                manual.push(format!("{} ({})", v.snippet, v.file_path));
+                continue;
+            };
+            match add_pending(&doc, &v.snippet) {
+                Some(new) if new != doc && fs::write(&path, &new).is_ok() => changed += 1,
+                Some(_) => {}
+                None => manual.push(format!("{} ({})", v.snippet, v.file_path)),
+            }
+        }
+    }
+    (changed, manual)
+}
+
+pub fn self_test_cases() -> Vec<(String, bool)> {
+    let doc = "---\ntags: [a]\npending: [HB-001]\nkind: x\n---\n# Body\npending: [HB-999]\n";
+    let bare = "---\ntags: [a]\n---\nbody\n";
+    vec![
+        (
+            "backlog next-id spans the archive".to_string(),
+            next_id_in("MB", &["| MB-029 |", "| MB-031 |", "MB-9"]) == "MB-032"
+                && next_id_in("GB-", &["x"]) == "GB-001",
+        ),
+        (
+            "backlog fix adds only the id".to_string(),
+            add_pending(doc, "HB-002").as_deref()
+                == Some(
+                    "---\ntags: [a]\npending: [HB-001, HB-002]\nkind: x\n---\n# Body\npending: [HB-999]\n",
+                )
+                && add_pending(bare, "HB-002").as_deref()
+                    == Some("---\ntags: [a]\npending: [HB-002]\n---\nbody\n")
+                && add_pending("no frontmatter", "HB-002").is_none(),
+        ),
+    ]
+}
+
 /// Reads the `pending: [HB-xxx, ...]` list from a document's frontmatter only.
 fn parse_pending(content: &str, prefix: &str) -> Vec<String> {
     let mut ids = Vec::new();

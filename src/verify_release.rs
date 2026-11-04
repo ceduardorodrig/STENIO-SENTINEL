@@ -89,11 +89,13 @@ pub enum Cmd {
     RemoteNow,
     LocalImageId(String),
     GitRev(String),
+    Sha256(String),
+    ContainerPolicies,
 }
 
 impl Cmd {}
 
-fn safe(s: &str, extra: &str) -> bool {
+pub(crate) fn safe(s: &str, extra: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c) || extra.contains(c))
@@ -142,6 +144,8 @@ impl Cmd {
             Cmd::RemoteNow => "date +%s".to_string(),
             Cmd::LocalImageId(i) => format!("docker image inspect -f {{{{.Id}}}} {i}"),
             Cmd::GitRev(r) => format!("rev-parse {r}"),
+            Cmd::Sha256(p) => format!("sha256sum {p}"),
+            Cmd::ContainerPolicies => "docker ps -aq | xargs -r docker inspect -f '{{.Name}}|{{.HostConfig.RestartPolicy.Name}}|{{.State.Status}}|{{.State.ExitCode}}|{{index .Config.Labels \"homelab.restart-exempt\"}}'".to_string(),
         })
     }
 }
@@ -161,7 +165,7 @@ pub struct SshTransport {
     pub timeout: Duration,
 }
 
-fn spawn_with_timeout(mut command: Command, timeout: Duration) -> Result<Out, String> {
+pub(crate) fn spawn_with_timeout(mut command: Command, timeout: Duration) -> Result<Out, String> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -762,7 +766,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 }
 
 // ── offline tests with a fake transport ────────────────────────────────────
-struct Fake(BTreeMap<Cmd, (i32, String)>);
+pub(crate) struct Fake(pub(crate) BTreeMap<Cmd, (i32, String)>);
 
 impl Transport for Fake {
     fn run(&self, cmd: &Cmd, _c: &Ctx) -> Result<Out, String> {

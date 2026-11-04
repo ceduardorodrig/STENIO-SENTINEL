@@ -44,6 +44,7 @@ mod tools;
 mod typegen;
 mod util;
 mod vault;
+mod verify_host;
 mod verify_release;
 mod watch;
 
@@ -94,6 +95,12 @@ struct Args {
         help = "steniocheck.toml to use instead of <path>/steniocheck.toml (scope frappe)"
     )]
     config: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "With --backlog: print the next free id of a queue (HB, SB, MB, GB), archive included"
+    )]
+    next_id: Option<String>,
 
     #[arg(long, help = "Root path for scanning", default_value = ".")]
     path: PathBuf,
@@ -486,6 +493,9 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .into_iter()
         .chain(verify_release::self_test_cases())
         .chain(pre_release::self_test_cases())
+        .chain(infra::compose_restart_cases())
+        .chain(backlog::self_test_cases())
+        .chain(verify_host::self_test_cases())
     {
         total += 1;
         if ok {
@@ -1799,13 +1809,17 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
 }
 
 fn main() -> Result<()> {
-    let argv: Vec<String> = std::env::args().collect();
+    let mut argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("backlog") {
+        argv[1] = "--backlog".to_string(); // `stenio backlog --next-id MB`
+    }
     match argv.get(1).map(String::as_str) {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
+        Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
         _ => {}
     }
-    let args = Args::parse();
+    let args = Args::parse_from(&argv);
 
     // ── Modo Deploy Automatizado (--deploy [target]) ────────────────────────
     if let Some(ref target) = args.deploy {
@@ -1994,6 +2008,27 @@ fn main() -> Result<()> {
     //
     // Prints the active queue; with --search it greps the queue **and** the archive, so a
     // recurring problem is visible before it becomes a new item.
+    if let Some(prefix) = args.next_id.as_deref() {
+        match backlog::next_id(&args.path, prefix) {
+            Ok(id) => println!("{id}"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    if args.backlog && args.fix {
+        let (changed, manual) = backlog::fix_drift(&args.path);
+        println!(
+            "DOC-BACKLOG-DRIFT fix: {changed} document(s) updated, {} need a human",
+            manual.len()
+        );
+        for m in &manual {
+            println!("  manual: {m}");
+        }
+        return Ok(());
+    }
     if args.backlog || args.search.is_some() {
         backlog::run_backlog_report(&args.path, args.search.as_deref());
         return Ok(());

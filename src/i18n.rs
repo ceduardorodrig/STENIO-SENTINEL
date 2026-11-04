@@ -31,6 +31,7 @@ use crate::engine::Violation;
 use crate::rule::Severity;
 
 pub const RULE_ID: &str = "I18N-PO-INCOMPLETE";
+pub const CASE_RULE_ID: &str = "I18N-CASE";
 const RULE_NAME: &str = "Gettext Catalogue Incomplete";
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -267,6 +268,23 @@ pub fn audit_catalogue(display_path: &str, text: &str) -> (Vec<Violation>, HashS
                 "Translate it (copy the msgid only when it is a symbol, code or URL).",
             ));
             continue;
+        }
+        if e.plural.is_none() {
+            for problem in crate::frappe::case_problems(
+                &e.msgid,
+                e.strs.first().map(String::as_str).unwrap_or(""),
+            ) {
+                let mut v = violation(
+                    display_path,
+                    e.line,
+                    &e.msgid,
+                    format!("Capitalisation: {problem}."),
+                    "Match the source: an uppercase first letter stays uppercase, and a Title Case label (2 to 6 words) keeps Title Case except small words.",
+                );
+                v.rule_id = CASE_RULE_ID.to_string();
+                v.rule_name = "Translation Capitalisation".to_string();
+                violations.push(v);
+            }
         }
         if let Some(re) = ph.as_ref() {
             let source = placeholders(re, &e.msgid);
@@ -525,6 +543,10 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
     let source = "a = _(\"Save\")\nb = _(\"Open\", context=\"email\")\nc = _(\"Brand new\")\n\
         d = _(f\"x {y}\")\ne = _(name)\nf = _(\"Hello {0}\").format(n)\ng = _(\"Open\")\n";
 
+    let case_bad_po = "msgid \"Save\"\nmsgstr \"salvar\"\n\nmsgid \"Open Door Sign\"\nmsgstr \"Placa de porta aberta\"\n";
+    let case_good_po = "msgid \"Save\"\nmsgstr \"Salvar\"\n\nmsgid \"Open Door Sign\"\nmsgstr \"Placa de Porta Aberta\"\n\nmsgid \"Open the door\"\nmsgstr \"Abrir a porta\"\n";
+    let (case_bad, _) = audit_catalogue("fixture/case-bad.po", case_bad_po);
+    let (case_good, _) = audit_catalogue("fixture/case-good.po", case_good_po);
     let (bad, _) = audit_catalogue("fixture/bad.po", bad_po);
     let (good, keys) = audit_catalogue("fixture/good.po", good_po);
     let missing: Vec<String> = audit_source_text("fixture/app.py", source, &keys)
@@ -537,6 +559,11 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
             bad.len() == 4 && bad.iter().all(|v| v.rule_id == RULE_ID),
         ),
         ("Complete catalogue", good.is_empty()),
+        (
+            "Case: first letter and Title Case",
+            case_bad.len() == 2 && case_bad.iter().all(|v| v.rule_id == CASE_RULE_ID),
+        ),
+        ("Case: sentence case is not forced", case_good.is_empty()),
         (
             "Missing source msgid",
             missing == vec!["3:Brand new".to_string(), "7:Open".to_string()],

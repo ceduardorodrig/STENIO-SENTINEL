@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.14.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities (v4.16.0 Superpowers)](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -188,6 +188,8 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 
 - `stenio --scope frappe [--path <app root>]`: the nine rules above.
 - `stenio pre-release --repo <app root> --tag vX [--prev vY] [--after-build] [--tagged]`: frappe, fork and custom-rule scopes in parallel, `__version__` = tag, tag unused (or at HEAD with `--tagged`), clean tree, HEAD = origin/main, FULL/TEXT-ONLY classification (fail-safe FULL), new msgids translated and cased, no credential shape in the diff, Dockerfile `APP_REF`, built image `.built-from`.
+- `stenio backlog --next-id <HB|SB|MB|GB>`: next free id counting the active file and the archive; `stenio backlog --fix` adds missing ids to the `pending:` frontmatter (DOC-BACKLOG-DRIFT) without touching other keys (v4.16.0).
+- `stenio verify-host --host H --config <toml> --repo-root <dir>`: `[[parity.files]]` (host, path, repo) compared by sha256 over ssh (PASS/FAIL/DRIFT with both hashes) plus restart policies of all containers (v4.16.0).
 - `stenio verify-release --host H --tag T [--project-dir D] [--repo R] [--protected-record 'DocType:name:modified'] [--expect-main]`: read-only post-deploy checks over ssh from a fixed command allowlist; one PASS/FAIL/WARN line each, exit 1 on any FAIL.
 
 ## 🔍 Built-in Rule Catalog & Scopes
@@ -209,6 +211,10 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 | `FRAPPE-ROLE-DEFINED` | Frappe | **ERROR** | Every role named in DocType permissions exists in a Role fixture, a patch, or the core list. |
 | `FRAPPE-SELECT-CASE` | Frappe | **ERROR** | Select option translations keep the capitalisation pattern of the source. |
 | `FRAPPE-WHITELIST-PERMISSION` | Frappe | **WARN** | A `@frappe.whitelist()` function with no permission check. |
+| `FRAPPE-DOCTYPE-LABEL-TRANSLATED` | Frappe | **ERROR** | Every label, description, Select option and chart/card label in DocType, sidebar, workspace, number card and dashboard chart JSON has a msgid with a non-empty translation in the app `.po`. |
+| `FRAPPE-JSON-MODIFIED-BUMP` | Frappe | **ERROR** | `stenio pre-release --prev`: a changed DocType/Sidebar/Workspace/card/chart/fixture JSON must carry a strictly newer `modified` (Frappe imports only newer files); `[frappe] modified_allowlist` for forced reloads. |
+| `I18N-CASE` | i18n | **ERROR** | `.po` pairs: uppercase first letter follows the msgid; Title Case msgids (2 to 6 words) need a Title Case msgstr except small Portuguese words; sentence case is not forced. |
+| `INFRA-COMPOSE-RESTART-POLICY` | Infra | **ERROR** (WARN in the read-only mirror) | Long-running compose services must be `unless-stopped` or `always`; exempt: profiles `cold`/`tunnel`, one-shots awaited with `service_completed_successfully`, label `homelab.restart-exempt`. |
 | `DOC-BACKLOG-RECURRENCE` | Docs | **ERROR/WARN** | Backlog recurrence: a `Recurrence` / `Recurred-by` pair must agree — a recurring item points at an *archived* item, and that archived item points back. Adaptive severity. |
 | `DOC-UNVERIFIED-INTERFACE` | Docs | **WARN** | A server/service document names a sysfs path, an I2C address or a charger/PMIC chip with no verification marker in the same section. Silenced by `verified\|measured\|implemented\|confirmed\|checked\|read on` plus an ISO date, in the claim's section or in an ancestor heading. Born from GB-007: notes claimed an `axp20x` PMIC with a `voltage_max` knob on a device whose charger is a Summit SMB327. |
 | `DOC-STALE-ACCESS-CLAIM` | Docs | **WARN** | A document asserts that a host has no administrative path or access with nothing saying when that was last true. Matches the claim shape only (`no administrative path/access`, `no admin path`, `sem caminho administrativo`), never the ordinary word "unreachable", which is legitimate alert prose. Same date-marker escape as the rule above. |

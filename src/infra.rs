@@ -307,6 +307,81 @@ pub fn check_service_naming(file_name: &str, path_str: &str) -> Option<Violation
     })
 }
 
+/// Services that another service waits for with `condition: service_completed_successfully`.
+fn completed_successfully_targets(services: &serde_yaml::Mapping) -> Vec<String> {
+    let mut out = Vec::new();
+    for (_, svc) in services {
+        if let Some(deps) = svc.get("depends_on").and_then(|d| d.as_mapping()) {
+            for (name, cond) in deps {
+                let done = cond.get("condition").and_then(|c| c.as_str())
+                    == Some("service_completed_successfully");
+                if let (true, Some(n)) = (done, name.as_str()) {
+                    out.push(n.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `INFRA-COMPOSE-RESTART-POLICY`: a long-running service must be `unless-stopped` or `always`.
+/// Exempt: profiles `cold` / `tunnel`, one-shot services (`restart: "no"` that a dependant waits
+/// for with `service_completed_successfully`) and the label `homelab.restart-exempt: "<reason>"`.
+fn restart_policy_finding(
+    name: &str,
+    svc: &serde_yaml::Value,
+    one_shot: &[String],
+) -> Option<ComposeFinding> {
+    let value = match svc.get("restart")? {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Bool(false) => "no".to_string(),
+        _ => return None,
+    };
+    if value == "unless-stopped" || value == "always" {
+        return None;
+    }
+    let profiles = svc.get("profiles").and_then(|p| p.as_sequence());
+    let exempt_profile = profiles.is_some_and(|p| {
+        p.iter()
+            .any(|x| matches!(x.as_str(), Some("cold" | "tunnel")))
+    });
+    let labelled = svc.get("labels").is_some_and(|l| match l {
+        serde_yaml::Value::Mapping(m) => m.contains_key("homelab.restart-exempt"),
+        serde_yaml::Value::Sequence(q) => q.iter().any(|x| {
+            x.as_str()
+                .is_some_and(|t| t.starts_with("homelab.restart-exempt"))
+        }),
+        _ => false,
+    });
+    let one_shot_ok = value == "no" && one_shot.iter().any(|n| n == name);
+    if exempt_profile || labelled || one_shot_ok {
+        return None;
+    }
+    Some((
+        "INFRA-COMPOSE-RESTART-POLICY",
+        "Long-Running Service Restart Policy",
+        Severity::Error,
+        format!(
+            "Service '{name}' has 'restart: {value}': a long-running service must be 'unless-stopped' or 'always', otherwise it stays down after a Docker daemon restart."
+        ),
+        Some("Set 'restart: unless-stopped'; for a one-shot keep 'restart: \"no\"' and make a dependant wait with 'condition: service_completed_successfully'; otherwise label it 'homelab.restart-exempt: <reason>'.".to_string()),
+    ))
+}
+
+pub fn compose_restart_cases() -> Vec<(String, bool)> {
+    let bad = "services:\n  web:\n    image: x\n    restart: on-failure\n    healthcheck: {test: [CMD, true]}\n";
+    let good = "services:\n  init:\n    image: x\n    restart: \"no\"\n  web:\n    image: x\n    restart: unless-stopped\n    healthcheck: {test: [CMD, true]}\n    depends_on:\n      init: {condition: service_completed_successfully}\n  job:\n    image: x\n    restart: \"no\"\n    profiles: [cold]\n";
+    let fires = |text: &str| {
+        check_compose_file("fixture/compose.yml", text, &[])
+            .iter()
+            .any(|v| v.rule_id == "INFRA-COMPOSE-RESTART-POLICY")
+    };
+    vec![
+        ("compose restart on-failure".to_string(), fires(bad)),
+        ("compose restart exempt cases".to_string(), !fires(good)),
+    ]
+}
+
 fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mirror_info = parse_mirror_path(path_str);
@@ -319,6 +394,7 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
     match serde_yaml::from_str::<serde_yaml::Value>(content) {
         Ok(yaml_val) => {
             if let Some(services) = yaml_val.get("services").and_then(|s| s.as_mapping()) {
+                let one_shot_services = completed_successfully_targets(services);
                 for (svc_key, svc_val) in services {
                     let svc_name = svc_key.as_str().unwrap_or("unknown");
                     let snippet = format!("{}:", svc_name);
@@ -362,6 +438,18 @@ fn check_compose_file(path_str: &str, content: &str, gpu_consumers: &[String]) -
                             message,
                             suggestion,
                         ));
+                    }
+
+                    // Long-running services must come back after a daemon restart
+                    // (`on-failure` left the Miracena stack down for ten hours on 2026-11-04).
+                    if let Some(mut f) =
+                        restart_policy_finding(svc_name, svc_val, &one_shot_services)
+                    {
+                        // A read-only mirror is captured content: the fix belongs to the source.
+                        if mirror_info.is_some() || path_str.contains("/.archive") {
+                            f.2 = Severity::Warning;
+                        }
+                        findings.push(f);
                     }
 
                     // Healthcheck (or explicit exception label for distroless images).

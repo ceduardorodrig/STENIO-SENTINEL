@@ -60,6 +60,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-DOCTYPE-LABEL-TRANSLATED",
+        "JSON Label Without Translation",
+        Severity::Error,
+    ),
+    (
         "FRAPPE-WHITELIST-PERMISSION",
         "Whitelisted Function Without Permission Check",
         Severity::Warning,
@@ -907,6 +912,102 @@ fn rule_select_case(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-DOCTYPE-LABEL-TRANSLATED ────────────────────────────────────────
+fn collect_translatable(v: &Value, doctype_file: bool, out: &mut Vec<String>) {
+    match v {
+        Value::Object(m) => {
+            let select_options = (m.get("fieldtype").and_then(|x| x.as_str()) == Some("Select"))
+                .then(|| m.get("options").and_then(|x| x.as_str()))
+                .flatten();
+            if let Some(o) = select_options {
+                out.extend(o.split('\n').map(|x| x.trim().to_string()));
+            }
+            for (k, val) in m {
+                match (k.as_str(), val) {
+                    ("label" | "chart_name", Value::String(t)) => out.push(t.trim().to_string()),
+                    ("description", Value::String(t)) if doctype_file => {
+                        out.push(t.trim().to_string())
+                    }
+                    _ => collect_translatable(val, doctype_file, out),
+                }
+            }
+        }
+        Value::Array(a) => a
+            .iter()
+            .for_each(|x| collect_translatable(x, doctype_file, out)),
+        _ => {}
+    }
+}
+
+fn technical(s: &str, allow: &[String]) -> bool {
+    !s.chars().any(|c| c.is_alphabetic())
+        || s.contains("{{")
+        || (s
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_.-/".contains(c)))
+        || allow.iter().any(|a| a == s)
+}
+
+fn rule_labels(c: &Ctx) -> Vec<Violation> {
+    let Some((pr, map)) = catalogue(c) else {
+        return Vec::new();
+    };
+    let allow = c.cfg.label_allowlist.clone().unwrap_or_default();
+    let kinds = [
+        "doctype",
+        "workspace",
+        "number_card",
+        "dashboard_chart",
+        "sidebar",
+    ];
+    let mut out = Vec::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
+    {
+        let dirs: Vec<String> = rel(&c.pkg, p).split('/').map(str::to_string).collect();
+        let stem = p.file_stem().and_then(|x| x.to_str()).unwrap_or("");
+        let is_fixture =
+            dirs.first().map(|d| d == "fixtures").unwrap_or(false) && kinds.contains(&stem);
+        let in_kind = dirs
+            .iter()
+            .rev()
+            .skip(2)
+            .take(1)
+            .any(|d| kinds.contains(&d.as_str()));
+        if !(is_fixture || in_kind) {
+            continue;
+        }
+        let text = read(p);
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let mut strings = Vec::new();
+        collect_translatable(&v, dirs.iter().any(|d| d == "doctype"), &mut strings);
+        let sidebar = dirs.iter().any(|d| d == "sidebar");
+        let mut seen = BTreeSet::new();
+        for t in strings
+            .into_iter()
+            .filter(|t| !t.is_empty() && !technical(t, &allow))
+        {
+            if !seen.insert(t.clone()) {
+                continue;
+            }
+            let why = match map.get(&t) {
+                None if sidebar => continue, // reported by FRAPPE-SIDEBAR-COVERAGE
+                None => "has no msgid",
+                Some(m) if m.trim().is_empty() => "has an empty translation",
+                Some(_) => continue,
+            };
+            out.push(viol("FRAPPE-DOCTYPE-LABEL-TRANSLATED", &rel(&c.root, p), line_of(&text, &format!("\"{}\"", t.split('\n').next().unwrap_or(""))), &t,
+                format!("`{t}` {why} in {pr}: the desk shows it in English."),
+                "Add the msgid with its translation (copy it only for symbols), or list a technical option in label_allowlist."));
+        }
+    }
+    out
+}
+
 // ── FRAPPE-ROLE-DEFINED ────────────────────────────────────────────────────
 fn rule_roles(c: &Ctx) -> Vec<Violation> {
     let mut defined: BTreeSet<String> = CORE_ROLES
@@ -1028,6 +1129,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_sidebar,
         rule_roles,
         rule_select_case,
+        rule_labels,
         rule_whitelist,
     ] {
         all.extend(f(&c));
@@ -1039,10 +1141,10 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 }
 
 // ── self-test fixtures ─────────────────────────────────────────────────────
-const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"}],"permissions":[{"role":"ROLE"}]}"#;
+const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"}],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
 const PART_JSON_BAD: &str = r#"{"doctype":"DocType","name":"Part","fields":[]}"#;
-const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n";
+const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
@@ -1089,7 +1191,9 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f("demoapp/demo/doctype/thing/__init__.py", ""),
         f(
             "demoapp/demo/doctype/thing/thing.json",
-            &THING_JSON.replace("ROLE", if bad { "Ghost Role" } else { "Demo Role" }),
+            &THING_JSON
+                .replace("ROLE", if bad { "Ghost Role" } else { "Demo Role" })
+                .replace("LBL", if bad { "Mystery label" } else { "Part" }),
         ),
         f(
             "demoapp/fixtures/role.json",
