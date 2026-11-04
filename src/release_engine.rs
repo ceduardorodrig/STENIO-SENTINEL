@@ -207,7 +207,10 @@ fn ci_runs(
             runs.push((text("workflowName"), text("status"), text("conclusion")));
         }
         let pending = runs.iter().any(|(_, s, _)| s != "completed");
-        if !pending {
+        // An empty list is not "CI already finished": GitHub registers the runs a few seconds
+        // after the push, and treating it as done ended the wait instantly (v4.19.0, step ci).
+        let appearing = runs.is_empty() && start.elapsed() <= wait;
+        if !pending && !appearing {
             return Ok(runs);
         }
         if start.elapsed() > wait {
