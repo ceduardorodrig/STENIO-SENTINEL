@@ -724,8 +724,7 @@ fn audit_unverified_claims(
         let lines: Vec<&str> = content.lines().collect();
         let headings = collect_headings(&lines);
         // Hardware claims only mean something where the hardware is described.
-        let hardware_scope =
-            path_str.contains("/servers/") || path_str.contains("/services/");
+        let hardware_scope = path_str.contains("/servers/") || path_str.contains("/services/");
 
         let mut interface_hits = 0usize;
         let mut claim_hits = 0usize;
@@ -825,7 +824,10 @@ mod claim_tests {
 
     #[test]
     fn heading_level_requires_the_space_after_the_hashes() {
-        assert_eq!(heading_level("## Battery cap (verified 2026-11-03)"), Some(2));
+        assert_eq!(
+            heading_level("## Battery cap (verified 2026-11-03)"),
+            Some(2)
+        );
         assert_eq!(heading_level("### Implementation"), Some(3));
         assert_eq!(heading_level("#register write"), None);
         assert_eq!(heading_level("plain prose"), None);

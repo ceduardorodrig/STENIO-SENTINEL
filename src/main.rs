@@ -18,6 +18,7 @@ mod dry;
 mod dry_ast;
 mod engine;
 mod explain;
+mod frappe;
 mod frontend;
 mod gaming;
 mod gov;
@@ -34,6 +35,7 @@ mod mcp_server;
 mod mesh;
 mod migrations;
 mod ports;
+mod pre_release;
 mod reconcile;
 pub mod remote;
 mod rule;
@@ -42,6 +44,7 @@ mod tools;
 mod typegen;
 mod util;
 mod vault;
+mod verify_release;
 mod watch;
 
 use guardian::audit_stenio_integrity;
@@ -85,6 +88,12 @@ struct Args {
 
     #[arg(short, long, help = "Fast mode: scan only Git-modified files")]
     fast: bool,
+
+    #[arg(
+        long,
+        help = "steniocheck.toml to use instead of <path>/steniocheck.toml (scope frappe)"
+    )]
+    config: Option<PathBuf>,
 
     #[arg(long, help = "Root path for scanning", default_value = ".")]
     path: PathBuf,
@@ -472,6 +481,21 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
             println!("   ❌ Test {:<24} [secret scan] - FAILED", name);
         }
     }
+    // ── Frappe rules, verify-release and pre-release fixtures (GB-007) ─────
+    for (name, ok) in frappe::self_test_cases()
+        .into_iter()
+        .chain(verify_release::self_test_cases())
+        .chain(pre_release::self_test_cases())
+    {
+        total += 1;
+        if ok {
+            passed += 1;
+            println!("   ✅ Test {:<34} [frappe] - OK", name);
+        } else {
+            println!("   ❌ Test {:<34} [frappe] - FAILED", name);
+        }
+    }
+
     // ── Gettext catalogue completeness (I18N-PO-INCOMPLETE) ────────────────
     for (name, ok) in i18n::self_test_cases() {
         total += 1;
@@ -1710,7 +1734,77 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     std::process::exit(1);
 }
 
+/// `--scope frappe`: prints the findings of the Frappe rules and returns the exit code.
+fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
+    let fc = cfg.frappe.clone().unwrap_or_default();
+    if args.list {
+        for (id, name, sev) in frappe::RULES {
+            println!(
+                "{:<30} {:<6} {}",
+                id,
+                if *sev == Severity::Error {
+                    "ERROR"
+                } else {
+                    "WARN"
+                },
+                name
+            );
+        }
+        return 0;
+    }
+    baseline::print_banner("StenioSentinel - scope frappe");
+    let violations = match frappe::audit(&args.path, &fc) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{} {}", "ERROR".red().bold(), e);
+            return 2;
+        }
+    };
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&violations).unwrap_or_default()
+        );
+    } else {
+        for v in &violations {
+            let sev = if v.severity == Severity::Error {
+                "ERROR".red().bold()
+            } else {
+                "WARN".yellow().bold()
+            };
+            println!(
+                "{} [{}] {}:{} {}",
+                sev,
+                v.rule_id.cyan(),
+                v.file_path,
+                v.line_number,
+                v.message
+            );
+        }
+        for (id, _, _) in frappe::RULES {
+            let n = violations.iter().filter(|v| v.rule_id == *id).count();
+            println!("  {:<30} {}", id, n);
+        }
+    }
+    let errors = violations
+        .iter()
+        .filter(|v| v.severity == Severity::Error)
+        .count();
+    println!(
+        "{} error(s), {} warning(s)",
+        errors,
+        violations.len() - errors
+    );
+    i32::from(errors > 0)
+}
+
 fn main() -> Result<()> {
+    let argv: Vec<String> = std::env::args().collect();
+    match argv.get(1).map(String::as_str) {
+        Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
+        Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
+        _ => {}
+    }
     let args = Args::parse();
 
     // ── Modo Deploy Automatizado (--deploy [target]) ────────────────────────
@@ -1987,6 +2081,15 @@ fn main() -> Result<()> {
     } else {
         cfg_scope_val
     };
+    if scope_opt.eq_ignore_ascii_case("frappe") {
+        let cfg = args
+            .config
+            .as_deref()
+            .map(|p| SteniocheckConfig::load_from_file(p))
+            .unwrap_or_else(|| steniocheck_cfg.clone());
+        std::process::exit(run_frappe_scope(&args, &cfg));
+    }
+
     if scope_opt.eq_ignore_ascii_case("fork") || scope_opt.eq_ignore_ascii_case("derived") {
         let allowed_prefixes: &[&str] = &[
             "SEC-",

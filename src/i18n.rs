@@ -64,15 +64,15 @@ pub struct I18nReport {
 }
 
 #[derive(Debug, Default, Clone)]
-struct PoEntry {
-    ctx: Option<String>,
-    msgid: String,
-    plural: Option<String>,
-    strs: Vec<String>,
-    fuzzy: bool,
-    obsolete: bool,
-    line: usize,
-    has_id: bool,
+pub(crate) struct PoEntry {
+    pub(crate) ctx: Option<String>,
+    pub(crate) msgid: String,
+    pub(crate) plural: Option<String>,
+    pub(crate) strs: Vec<String>,
+    pub(crate) fuzzy: bool,
+    pub(crate) obsolete: bool,
+    pub(crate) line: usize,
+    pub(crate) has_id: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -133,7 +133,7 @@ fn append(entry: &mut PoEntry, field: Field, text: &str) {
     }
 }
 
-fn parse_po(text: &str) -> Vec<PoEntry> {
+pub(crate) fn parse_po(text: &str) -> Vec<PoEntry> {
     let mut entries = Vec::new();
     let mut cur = PoEntry::default();
     let mut field = Field::None;

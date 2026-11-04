@@ -182,6 +182,14 @@ Options:
 
 ---
 
+### Frappe release flow (v4.15.0)
+
+Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project name in the engine; `--config <file>` overrides).
+
+- `stenio --scope frappe [--path <app root>]`: the nine rules above.
+- `stenio pre-release --repo <app root> --tag vX [--prev vY] [--after-build] [--tagged]`: frappe, fork and custom-rule scopes in parallel, `__version__` = tag, tag unused (or at HEAD with `--tagged`), clean tree, HEAD = origin/main, FULL/TEXT-ONLY classification (fail-safe FULL), new msgids translated and cased, no credential shape in the diff, Dockerfile `APP_REF`, built image `.built-from`.
+- `stenio verify-release --host H --tag T [--project-dir D] [--repo R] [--protected-record 'DocType:name:modified'] [--expect-main]`: read-only post-deploy checks over ssh from a fixed command allowlist; one PASS/FAIL/WARN line each, exit 1 on any FAIL.
+
 ## 🔍 Built-in Rule Catalog & Scopes
 
 | Rule ID | Category | Severity | Description |
@@ -192,6 +200,15 @@ Options:
 | `DOC-VIBE-DISCLAIMER` | Docs | **ERROR** | Enforces the standardized human-AI governance disclaimer across all repositories. |
 | `DOC-BACKLOG-DRIFT` | Docs | **ERROR/WARN** | Backlog traceability: the active queue (`mnemocine/backlog.md`) and each document's `pending:` frontmatter must agree bidirectionally. Adaptive severity — a drift on a 🔴 item blocks; any other drift warns. |
 | `I18N-PO-INCOMPLETE` | i18n | **ERROR** | Gettext catalogues (`locale/*.po`) must be complete: no empty or fuzzy `msgstr` (plural forms included), every static string passed to `_()`, `__()`, `_lt()` or `{% trans %}` in the sources next to the catalogue must be a `msgid` (with its `msgctxt`), and `{0}`, `%s`, `%(name)s` placeholders must match. Tests and vendored code are skipped. No suppression directive exists for it. |
+| `FRAPPE-DOCTYPE-CONTROLLER` | Frappe | **ERROR** | Scope `frappe`: every DocType folder with a `.json` has `<name>.py` defining a class and an `__init__.py` (the rc68 migrate break). |
+| `FRAPPE-LINK-TITLE` | Frappe | **ERROR** | A Link field whose target DocType in the app has neither `title_field` + `show_title_field_in_link` nor `search_fields`. Core targets are allowlisted. |
+| `FRAPPE-PATCH-REGISTERED` | Frappe | **ERROR** | Every `patches/*.py` is in `patches.txt` and every `patches.txt` line resolves to a module. |
+| `FRAPPE-HOOK-TARGETS` | Frappe | **ERROR** | Every dotted app path in `hooks.py` resolves to an existing module and function (static lookup). |
+| `FRAPPE-TEST-REGISTERED` | Frappe | **ERROR** | Every `tests/*.py` with `run()` is in the test-list section named by `[frappe] test_list_file` / `test_list_anchor`. |
+| `FRAPPE-SIDEBAR-COVERAGE` | Frappe | **ERROR** | Every non-child DocType is in the sidebar JSON or in the allowlist file (with a reason); every sidebar label has a msgid. |
+| `FRAPPE-ROLE-DEFINED` | Frappe | **ERROR** | Every role named in DocType permissions exists in a Role fixture, a patch, or the core list. |
+| `FRAPPE-SELECT-CASE` | Frappe | **ERROR** | Select option translations keep the capitalisation pattern of the source. |
+| `FRAPPE-WHITELIST-PERMISSION` | Frappe | **WARN** | A `@frappe.whitelist()` function with no permission check. |
 | `DOC-BACKLOG-RECURRENCE` | Docs | **ERROR/WARN** | Backlog recurrence: a `Recurrence` / `Recurred-by` pair must agree — a recurring item points at an *archived* item, and that archived item points back. Adaptive severity. |
 | `DOC-UNVERIFIED-INTERFACE` | Docs | **WARN** | A server/service document names a sysfs path, an I2C address or a charger/PMIC chip with no verification marker in the same section. Silenced by `verified\|measured\|implemented\|confirmed\|checked\|read on` plus an ISO date, in the claim's section or in an ancestor heading. Born from GB-007: notes claimed an `axp20x` PMIC with a `voltage_max` knob on a device whose charger is a Summit SMB327. |
 | `DOC-STALE-ACCESS-CLAIM` | Docs | **WARN** | A document asserts that a host has no administrative path or access with nothing saying when that was last true. Matches the claim shape only (`no administrative path/access`, `no admin path`, `sem caminho administrativo`), never the ordinary word "unreachable", which is legitimate alert prose. Same date-marker escape as the rule above. |

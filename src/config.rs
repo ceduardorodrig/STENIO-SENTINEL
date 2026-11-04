@@ -91,6 +91,40 @@ pub struct CustomRuleConfig {
     pub path_exclude: Option<Vec<String>>,
 }
 
+/// `[frappe]` table: static rules over a Frappe app tree (`--scope frappe`) and the
+/// post-deploy checks of `stenio verify-release`. No project name lives in the engine.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct FrappeConfig {
+    /// App package directory name (the folder with `hooks.py`); inferred when absent.
+    pub app: Option<String>,
+    /// File holding the registered test list (absolute, or relative to the repo root).
+    pub test_list_file: Option<String>,
+    /// Heading line that opens the section of that file listing the tests.
+    pub test_list_anchor: Option<String>,
+    /// File listing DocTypes that need no sidebar entry (`Name | reason` per line).
+    pub sidebar_allowlist: Option<String>,
+    /// Roles that exist without a fixture (added to the built-in Frappe core list).
+    pub role_allowlist: Option<Vec<String>>,
+    /// Link targets that are not checked for a title field (added to the core list).
+    pub link_allowlist: Option<Vec<String>>,
+    /// Extra substrings that count as a permission check in a whitelisted function.
+    pub permission_markers: Option<Vec<String>>,
+    /// Catalogue used by the sidebar and Select rules, relative to the package.
+    pub locale_file: Option<String>,
+    /// Docker image repository (verify-release).
+    pub image: Option<String>,
+    /// Frappe site name (verify-release).
+    pub site: Option<String>,
+    /// URL of the ping endpoint as seen from the deploy host (verify-release).
+    pub ping_url: Option<String>,
+    /// Compose project name of rehearsal stacks (verify-release).
+    pub rehearsal_project: Option<String>,
+    /// Shell glob of rehearsal directories on the host (verify-release).
+    pub rehearsal_dir_glob: Option<String>,
+    /// Tag of the custom rules run by `pre-release` (`stenio --tag <tag> --strict --compact`).
+    pub custom_rules_tag: Option<String>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SteniocheckConfig {
@@ -103,9 +137,17 @@ pub struct SteniocheckConfig {
     pub dry: Option<DryConfig>,
     pub topology: Option<TopologyConfig>,
     pub custom_rules: Option<Vec<CustomRuleConfig>>,
+    pub frappe: Option<FrappeConfig>,
 }
 
 impl SteniocheckConfig {
+    pub fn load_from_file(toml_path: &Path) -> Self {
+        fs::read_to_string(toml_path)
+            .ok()
+            .and_then(|c| toml::from_str::<SteniocheckConfig>(&c).ok())
+            .unwrap_or_default()
+    }
+
     pub fn load_from_dir(repo_root: &Path) -> Self {
         let toml_path = repo_root.join("steniocheck.toml");
         if toml_path.is_file() {

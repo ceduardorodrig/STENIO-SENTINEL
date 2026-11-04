@@ -695,6 +695,14 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["I18N-PO-INCOMPLETE", "no suppression directive"],
         ),
         (
+            "frappe.rs",
+            &[
+                "FRAPPE-DOCTYPE-CONTROLLER",
+                "FRAPPE-HOOK-TARGETS",
+                "no suppression directive",
+            ],
+        ),
+        (
             "backlog.rs",
             &[
                 "DOC-BACKLOG-DRIFT",
