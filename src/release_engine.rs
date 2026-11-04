@@ -361,7 +361,12 @@ fn check_install(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
             }
         }
     }
-    if let Err(e) = std::fs::copy(&fresh, &installed) {
+    // Write next to the target and rename: a running binary cannot be overwritten in place
+    // (ETXTBSY), and the rename swaps the inode atomically.
+    let tmp = dir.join(format!(".stenio.new.{}", std::process::id()));
+    let written = std::fs::copy(&fresh, &tmp).and_then(|_| std::fs::rename(&tmp, &installed));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
         return fail(
             "install",
             format!("cannot install {}: {e}", installed.display()),
