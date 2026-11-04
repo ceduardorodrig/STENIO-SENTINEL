@@ -236,6 +236,12 @@ fn audit_queue(repo_root: &Path, base_dir: &Path, q: &Queue) -> BacklogReport {
             item,
             ACTIVE_LAYOUT,
         ));
+        violations.extend(crate::opportunity::check_format(
+            &active_display,
+            row_at(&active_content, item.line),
+            &item.id,
+            item.line,
+        ));
         if CLOSED_STATES.contains(&item.state.as_str()) {
             violations.push(state_violation(
                 &active_display,

@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.16.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities (v4.17.0 Superpowers)](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -188,7 +188,8 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 
 - `stenio --scope frappe [--path <app root>]`: the nine rules above.
 - `stenio pre-release --repo <app root> --tag vX [--prev vY] [--after-build] [--tagged]`: frappe, fork and custom-rule scopes in parallel, `__version__` = tag, tag unused (or at HEAD with `--tagged`), clean tree, HEAD = origin/main, FULL/TEXT-ONLY classification (fail-safe FULL), new msgids translated and cased, no credential shape in the diff, Dockerfile `APP_REF`, built image `.built-from`.
-- `stenio backlog --next-id <HB|SB|MB|GB>`: next free id counting the active file and the archive; `stenio backlog --fix` adds missing ids to the `pending:` frontmatter (DOC-BACKLOG-DRIFT) without touching other keys (v4.16.0).
+- `stenio --backlog --next-id <HB|SB|MB|GB>`: next free id counting the active file and the archive; `stenio backlog --fix` adds missing ids to the `pending:` frontmatter (DOC-BACKLOG-DRIFT) without touching other keys (v4.16.0).
+- `stenio opportunity add --title '<RULE-ID>' --evidence ... --desired ... --acceptance ... [--origin 'agent, harness'] [--priority 🟠] [--ref <doc>] [--path <vault>] [--dry-run]`: the one command every agent uses to log a Stenio opportunity. Allocates the next `GB-` id, inserts the formatted row after the last `GB` row of `governance/backlog.md` (read, insert one line, write; refused if the file changed meanwhile; keeps one `.bak-<timestamp>`), adds the id to `pending:` of the `--ref` document (default `governance/stenio-troubleshooting.md`), runs the backlog audit and prints the id (v4.17.0).
 - `stenio verify-host --host H --config <toml> --repo-root <dir>`: `[[parity.files]]` (host, path, repo) compared by sha256 over ssh (PASS/FAIL/DRIFT with both hashes) plus restart policies of all containers (v4.16.0).
 - `stenio verify-release --host H --tag T [--project-dir D] [--repo R] [--protected-record 'DocType:name:modified'] [--expect-main]`: read-only post-deploy checks over ssh from a fixed command allowlist; one PASS/FAIL/WARN line each, exit 1 on any FAIL.
 
@@ -214,6 +215,8 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 | `FRAPPE-DOCTYPE-LABEL-TRANSLATED` | Frappe | **ERROR** | Every label, description, Select option and chart/card label in DocType, sidebar, workspace, number card and dashboard chart JSON has a msgid with a non-empty translation in the app `.po`. |
 | `FRAPPE-JSON-MODIFIED-BUMP` | Frappe | **ERROR** | `stenio pre-release --prev`: a changed DocType/Sidebar/Workspace/card/chart/fixture JSON must carry a strictly newer `modified` (Frappe imports only newer files); `[frappe] modified_allowlist` for forced reloads. |
 | `I18N-CASE` | i18n | **ERROR** | `.po` pairs: uppercase first letter follows the msgid; Title Case msgids (2 to 6 words) need a Title Case msgstr except small Portuguese words; sentence case is not forced. |
+| `AGENT-ENTRYPOINT-RULES` | Agent | **ERROR** (WARN for optional entries) | Every harness entry file listed in `governance/agent-entrypoints.toml` (Claude Code, OpenCode, Antigravity, Hermes) exists and contains its `must_reference` strings (`agent-global-rules.md`, the rituals reminder); `host_only` entries are skipped with INFO on other hosts. Scopes `vault` and `homelab` (v4.17.0). |
+| `STENIO-ITEM-FORMAT` | Backlog | **ERROR** | A backlog row titled `Stenio:` must contain `Evidence:`, `Desired behaviour:`, `Acceptance:`, `Origin:` and `Status:` (v4.17.0). |
 | `INFRA-COMPOSE-RESTART-POLICY` | Infra | **ERROR** (WARN in the read-only mirror) | Long-running compose services must be `unless-stopped` or `always`; exempt: profiles `cold`/`tunnel`, one-shots awaited with `service_completed_successfully`, label `homelab.restart-exempt`. |
 | `DOC-BACKLOG-RECURRENCE` | Docs | **ERROR/WARN** | Backlog recurrence: a `Recurrence` / `Recurred-by` pair must agree — a recurring item points at an *archived* item, and that archived item points back. Adaptive severity. |
 | `DOC-UNVERIFIED-INTERFACE` | Docs | **WARN** | A server/service document names a sysfs path, an I2C address or a charger/PMIC chip with no verification marker in the same section. Silenced by `verified\|measured\|implemented\|confirmed\|checked\|read on` plus an ISO date, in the claim's section or in an ancestor heading. Born from GB-007: notes claimed an `axp20x` PMIC with a `voltage_max` knob on a device whose charger is a Summit SMB327. |

@@ -17,6 +17,7 @@ mod docker;
 mod dry;
 mod dry_ast;
 mod engine;
+mod entrypoints;
 mod explain;
 mod frappe;
 mod frontend;
@@ -34,6 +35,7 @@ mod mcp;
 mod mcp_server;
 mod mesh;
 mod migrations;
+mod opportunity;
 mod ports;
 mod pre_release;
 mod reconcile;
@@ -496,6 +498,8 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(infra::compose_restart_cases())
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
+        .chain(entrypoints::self_test_cases())
+        .chain(opportunity::self_test_cases())
     {
         total += 1;
         if ok {
@@ -1817,6 +1821,11 @@ fn main() -> Result<()> {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
+        Some("opportunity") if argv.get(2).map(String::as_str) == Some("add") => {
+            let mut rest = vec!["stenio opportunity add".to_string()];
+            rest.extend_from_slice(&argv[3..]);
+            std::process::exit(opportunity::run_cli(&rest))
+        }
         _ => {}
     }
     let args = Args::parse_from(&argv);
@@ -2494,6 +2503,26 @@ fn main() -> Result<()> {
     if let Some(doc) = doc_res {
         doc_messages = doc.messages;
         for v in doc.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Harness entry points (AGENT-ENTRYPOINT-RULES, GB-033) ──────────────
+    let should_audit_entrypoints = (is_vault_active || is_homelab_active)
+        && (tag_lower.is_none() || tag_lower.as_deref() == Some("agent"))
+        && only_rule
+            .map(|s| s.eq_ignore_ascii_case(entrypoints::RULE_ID))
+            .unwrap_or(true);
+    if should_audit_entrypoints {
+        let ep = entrypoints::audit(&args.path);
+        doc_messages.extend(ep.messages);
+        for v in ep.violations {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {
