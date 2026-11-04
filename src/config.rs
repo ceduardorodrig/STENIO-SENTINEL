@@ -121,6 +121,10 @@ pub struct FrappeConfig {
     pub rehearsal_project: Option<String>,
     /// Shell glob of rehearsal directories on the host (verify-release).
     pub rehearsal_dir_glob: Option<String>,
+    /// Shell glob of the scheduled (timer-driven) database dumps on the host (verify-release).
+    pub scheduled_backup_glob: Option<String>,
+    /// Age limit in hours for the scheduled dump (verify-release; default 26, the timer period plus slack).
+    pub scheduled_backup_max_age_hours: Option<u64>,
     /// Tag of the custom rules run by `pre-release` (`stenio --tag <tag> --strict --compact`).
     pub custom_rules_tag: Option<String>,
     /// Technical strings (Select options, labels) that need no translation.
@@ -137,11 +141,13 @@ pub struct ParityFile {
     pub repo: String,
 }
 
-/// `[parity]` table: managed-file parity checked by `stenio verify-host`.
+/// `[parity]` table: managed-file parity and engine version parity checked by `stenio verify-host`.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct ParityConfig {
     #[serde(default)]
     pub files: Vec<ParityFile>,
+    /// Container on the host that runs the engine (`docker exec <name> stenio --version`).
+    pub stenio_container: Option<String>,
 }
 
 #[allow(dead_code)]

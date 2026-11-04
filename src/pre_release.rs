@@ -860,10 +860,6 @@ mod tests {
 
     #[test]
     fn fixtures() {
-        assert!(
-            self_test_cases().iter().all(|(_, ok)| *ok),
-            "{:?}",
-            self_test_cases()
-        );
+        crate::testkit::assert_cases(self_test_cases());
     }
 }

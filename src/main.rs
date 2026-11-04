@@ -39,9 +39,12 @@ mod opportunity;
 mod ports;
 mod pre_release;
 mod reconcile;
+mod release_engine;
 pub mod remote;
 mod rule;
 mod semantic;
+#[cfg(test)]
+mod testkit;
 mod tools;
 mod typegen;
 mod util;
@@ -498,6 +501,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(infra::compose_restart_cases())
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
+        .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(opportunity::self_test_cases())
     {
@@ -1816,11 +1820,22 @@ fn main() -> Result<()> {
     let mut argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("backlog") {
         argv[1] = "--backlog".to_string(); // `stenio backlog --next-id MB`
+        // GB-031: the documented subcommand form defaults --path to the vault root, so it works
+        // from any directory instead of failing with "queue GB not found under .".
+        if !argv
+            .iter()
+            .skip(2)
+            .any(|a| a == "--path" || a.starts_with("--path="))
+        {
+            argv.push("--path".to_string());
+            argv.push(opportunity::vault_root(None).display().to_string());
+        }
     }
     match argv.get(1).map(String::as_str) {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
+        Some("release-engine") => std::process::exit(release_engine::run_cli(&argv[1..])),
         Some("opportunity") if argv.get(2).map(String::as_str) == Some("add") => {
             let mut rest = vec!["stenio opportunity add".to_string()];
             rest.extend_from_slice(&argv[3..]);

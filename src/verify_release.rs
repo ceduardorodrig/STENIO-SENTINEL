@@ -87,6 +87,8 @@ pub enum Cmd {
     Sql(String),
     BackupList,
     RemoteNow,
+    ContainerVersion(String),
+    ScheduledBackupNewest(String),
     LocalImageId(String),
     GitRev(String),
     Sha256(String),
@@ -142,6 +144,10 @@ impl Cmd {
                 c.site
             ),
             Cmd::RemoteNow => "date +%s".to_string(),
+            Cmd::ContainerVersion(name) => format!("docker exec {name} stenio --version"),
+            Cmd::ScheduledBackupNewest(glob) => format!(
+                "f=$(ls -t {glob} 2>/dev/null | head -1); [ -n \"$f\" ] && stat -c %Y \"$f\" || echo"
+            ),
             Cmd::LocalImageId(i) => format!("docker image inspect -f {{{{.Id}}}} {i}"),
             Cmd::GitRev(r) => format!("rev-parse {r}"),
             Cmd::Sha256(p) => format!("sha256sum {p}"),
@@ -515,6 +521,8 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
 
     // 10. last backup age
     out.push(check_backup(t, &c, o.max_backup_age_hours));
+    // 11. scheduled (timer-driven) dump age: the real health signal, independent of a manual backup
+    out.push(check_scheduled_backup(t, &c, &o.fc));
     out
 }
 
@@ -657,6 +665,58 @@ fn check_backup(t: &dyn Transport, c: &Ctx, max_hours: u64) -> Check {
     }
 }
 
+/// Age of the newest scheduled dump (`[frappe] scheduled_backup_glob`). A fresh manual `bench backup`
+/// never masks a stopped timer: this line reads only what the timer wrote.
+fn check_scheduled_backup(t: &dyn Transport, c: &Ctx, fc: &FrappeConfig) -> Check {
+    let Some(glob) = fc.scheduled_backup_glob.as_deref() else {
+        return check(
+            Status::Warn,
+            "backup-age-scheduled",
+            "not configured ([frappe] scheduled_backup_glob)",
+        );
+    };
+    let max_hours = fc.scheduled_backup_max_age_hours.unwrap_or(26);
+    let (newest, now) = (
+        t.run(&Cmd::ScheduledBackupNewest(glob.to_string()), c),
+        t.run(&Cmd::RemoteNow, c),
+    );
+    match (newest, now) {
+        (Ok(n), Ok(cur)) if n.code == 0 => {
+            let now: u64 = one_line(&cur).parse().unwrap_or(0);
+            match one_line(&n).parse::<u64>() {
+                Ok(ts) if now >= ts => {
+                    let age = (now - ts) / 3600;
+                    if age <= max_hours {
+                        check(
+                            Status::Pass,
+                            "backup-age-scheduled",
+                            format!("newest scheduled dump {age}h old (limit {max_hours}h)"),
+                        )
+                    } else {
+                        check(
+                            Status::Fail,
+                            "backup-age-scheduled",
+                            format!("newest scheduled dump {age}h old (limit {max_hours}h)"),
+                        )
+                    }
+                }
+                _ => check(
+                    Status::Fail,
+                    "backup-age-scheduled",
+                    "no scheduled dump found by the configured glob",
+                ),
+            }
+        }
+        (a, b) => check(
+            Status::Fail,
+            "backup-age-scheduled",
+            a.err()
+                .or(b.err())
+                .unwrap_or_else(|| "scheduled dump listing failed".into()),
+        ),
+    }
+}
+
 fn parse_protected(raw: &[String]) -> Result<Vec<(String, String, String)>, String> {
     raw.iter()
         .map(|s| {
@@ -713,6 +773,11 @@ pub fn run_cli(argv: &[String]) -> i32 {
             .unwrap_or(true)
         && fc
             .rehearsal_dir_glob
+            .as_deref()
+            .map(|s| safe(s, "/*"))
+            .unwrap_or(true)
+        && fc
+            .scheduled_backup_glob
             .as_deref()
             .map(|s| safe(s, "/*"))
             .unwrap_or(true)
@@ -788,6 +853,8 @@ fn fixture_opts() -> Opts {
         ping_url: Some("http://127.0.0.1:8081/api/method/ping".into()),
         rehearsal_project: Some("acme-rc".into()),
         rehearsal_dir_glob: Some("/srv/acme/app-rc*".into()),
+        scheduled_backup_glob: Some("/srv/acme/offbox/daily/frappe/*database.sql.gz".into()),
+        scheduled_backup_max_age_hours: Some(26),
         ..FrappeConfig::default()
     };
     Opts {
@@ -861,6 +928,10 @@ fn good_fake(o: &Opts) -> BTreeMap<Cmd, (i32, String)> {
         Cmd::BackupList,
         ok("-rw-r--r-- 1 f r 100 1000 20260101_000000-frontend-database.sql.gz"),
     );
+    m.insert(
+        Cmd::ScheduledBackupNewest("/srv/acme/offbox/daily/frappe/*database.sql.gz".into()),
+        ok("4500"),
+    );
     m.insert(Cmd::RemoteNow, ok("4600"));
     let _ = o;
     m
@@ -913,6 +984,31 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "verify-release params".to_string(),
             parse_protected(&["Member:a'b:x".into()]).is_err()
                 && parse_protected(&["Member:ana:2026".into()]).is_ok(),
+        ),
+        (
+            "verify-release scheduled dump stale beats a fresh manual backup".to_string(),
+            {
+                let mut stale = good_fake(&o);
+                stale.insert(Cmd::RemoteNow, (0, "200000\n".into()));
+                stale.insert(
+                    Cmd::BackupList,
+                    (
+                        0,
+                        "-rw-r--r-- 1 f r 100 199000 20260101_000000-frontend-database.sql.gz\n"
+                            .into(),
+                    ),
+                );
+                stale.insert(
+                    Cmd::ScheduledBackupNewest(
+                        "/srv/acme/offbox/daily/frappe/*database.sql.gz".into(),
+                    ),
+                    (0, "92000\n".into()),
+                );
+                let out = run_checks(&Fake(stale), &o);
+                let st = |n: &str| out.iter().find(|c| c.name == n).map(|c| c.status);
+                st("backup-age") == Some(Status::Pass)
+                    && st("backup-age-scheduled") == Some(Status::Fail)
+            },
         ),
     ]
 }

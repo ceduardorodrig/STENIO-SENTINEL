@@ -146,6 +146,60 @@ pub fn check_policies(t: &dyn Transport) -> Line {
     }
 }
 
+/// Engine version parity (GB-030): the local binary against the container on the host, so an
+/// install that reached one side only is a FAIL instead of a silent drift.
+pub fn check_version(t: &dyn Transport, container: &str) -> Line {
+    let name = "stenio-version";
+    if container.is_empty() || !safe(container, "") {
+        return line(
+            Verdict::Pass,
+            name,
+            "no engine container configured ([parity] stenio_container): skipped",
+        );
+    }
+    let local = env!("CARGO_PKG_VERSION");
+    let ctx = Ctx {
+        dir: "/".into(),
+        site: String::new(),
+    };
+    match t.run(&Cmd::ContainerVersion(container.to_string()), &ctx) {
+        Ok(o) if o.code == 0 => {
+            let remote = o
+                .stdout
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if remote.is_empty() {
+                line(
+                    Verdict::Fail,
+                    name,
+                    format!("{container} printed no version"),
+                )
+            } else if remote == local {
+                line(
+                    Verdict::Pass,
+                    name,
+                    format!("{container} {remote} == local {local}"),
+                )
+            } else {
+                line(
+                    Verdict::Fail,
+                    name,
+                    format!("DRIFT {container} {remote} != local {local}: redeploy the container"),
+                )
+            }
+        }
+        Ok(_) => line(
+            Verdict::Fail,
+            name,
+            format!("cannot read the version inside {container}"),
+        ),
+        Err(e) => line(Verdict::Fail, name, e),
+    }
+}
+
 fn local_hash(path: &std::path::Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     Some(
@@ -165,14 +219,15 @@ pub fn run_cli(argv: &[String]) -> i32 {
         }
     };
     let cfg = SteniocheckConfig::load_from_file(&a.config);
-    let files: Vec<ParityFile> = cfg
-        .parity
-        .unwrap_or_default()
+    let parity = cfg.parity.clone().unwrap_or_default();
+    let container = parity.stenio_container.clone().unwrap_or_default();
+    let files: Vec<ParityFile> = parity
         .files
         .into_iter()
         .filter(|f| f.host == a.host)
         .collect();
     if !safe(&a.host, "")
+        || (!container.is_empty() && !safe(&container, ""))
         || files
             .iter()
             .any(|f| !safe(&f.path, "/") || !f.path.starts_with('/'))
@@ -195,6 +250,9 @@ pub fn run_cli(argv: &[String]) -> i32 {
         .map(|f| check_parity(&t, f, local_hash(&a.repo_root.join(&f.repo))))
         .collect();
     lines.push(check_policies(&t));
+    if !container.is_empty() {
+        lines.push(check_version(&t, &container));
+    }
     for l in &lines {
         let tag = match l.verdict {
             Verdict::Pass => "PASS",
@@ -215,10 +273,15 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         repo: "x".into(),
     };
     let sha_cmd = Cmd::Sha256(file.path.clone());
+    let version_cmd = Cmd::ContainerVersion("c".into());
     let fake = |hash: &str, policies: &str| {
         let mut m = BTreeMap::new();
         m.insert(sha_cmd.clone(), (0, format!("{hash}  /usr/local/bin/x\n")));
         m.insert(Cmd::ContainerPolicies, (0, policies.to_string()));
+        m.insert(
+            version_cmd.clone(),
+            (0, format!("stenio {}\n", env!("CARGO_PKG_VERSION"))),
+        );
         Fake(m)
     };
     let good = fake(
@@ -242,6 +305,19 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (
             "verify-host policies fail".to_string(),
             check_policies(&bad).verdict == Verdict::Fail,
+        ),
+        (
+            "verify-host version parity pass".to_string(),
+            check_version(&good, "c").verdict == Verdict::Pass,
+        ),
+        ("verify-host version parity drift".to_string(), {
+            let mut m = BTreeMap::new();
+            m.insert(version_cmd.clone(), (0, "stenio 0.0.1\n".into()));
+            check_version(&Fake(m), "c").verdict == Verdict::Fail
+        }),
+        (
+            "verify-host version parity unconfigured".to_string(),
+            check_version(&bad, "").verdict == Verdict::Pass,
         ),
     ]
 }

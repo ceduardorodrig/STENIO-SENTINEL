@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.17.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities (v4.18.0 Superpowers)](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -188,10 +188,12 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 
 - `stenio --scope frappe [--path <app root>]`: the nine rules above.
 - `stenio pre-release --repo <app root> --tag vX [--prev vY] [--after-build] [--tagged]`: frappe, fork and custom-rule scopes in parallel, `__version__` = tag, tag unused (or at HEAD with `--tagged`), clean tree, HEAD = origin/main, FULL/TEXT-ONLY classification (fail-safe FULL), new msgids translated and cased, no credential shape in the diff, Dockerfile `APP_REF`, built image `.built-from`.
-- `stenio --backlog --next-id <HB|SB|MB|GB>`: next free id counting the active file and the archive; `stenio backlog --fix` adds missing ids to the `pending:` frontmatter (DOC-BACKLOG-DRIFT) without touching other keys (v4.16.0).
+- `stenio --backlog --next-id <HB|SB|MB|GB>`: next free id counting the active file and the archive; `stenio backlog --fix` adds missing ids to the `pending:` frontmatter (DOC-BACKLOG-DRIFT) without touching other keys (v4.16.0). Since v4.18.0 the documented subcommand form (`stenio backlog --next-id GB`) defaults `--path` to the vault root found from the working directory (else the standard vault), so it works from any directory (GB-031).
 - `stenio opportunity add --title '<RULE-ID>' --evidence ... --desired ... --acceptance ... [--origin 'agent, harness'] [--priority 🟠] [--ref <doc>] [--path <vault>] [--dry-run]`: the one command every agent uses to log a Stenio opportunity. Allocates the next `GB-` id, inserts the formatted row after the last `GB` row of `governance/backlog.md` (read, insert one line, write; refused if the file changed meanwhile; keeps one `.bak-<timestamp>`), adds the id to `pending:` of the `--ref` document (default `governance/stenio-troubleshooting.md`), runs the backlog audit and prints the id (v4.17.0).
-- `stenio verify-host --host H --config <toml> --repo-root <dir>`: `[[parity.files]]` (host, path, repo) compared by sha256 over ssh (PASS/FAIL/DRIFT with both hashes) plus restart policies of all containers (v4.16.0).
-- `stenio verify-release --host H --tag T [--project-dir D] [--repo R] [--protected-record 'DocType:name:modified'] [--expect-main]`: read-only post-deploy checks over ssh from a fixed command allowlist; one PASS/FAIL/WARN line each, exit 1 on any FAIL.
+- `stenio verify-host --host H --config <toml> --repo-root <dir>`: `[[parity.files]]` (host, path, repo) compared by sha256 over ssh (PASS/FAIL/DRIFT with both hashes) plus restart policies of all containers (v4.16.0). With `[parity] stenio_container = "<name>"` it also compares the engine version inside that container with the local binary and fails on DRIFT (v4.18.0, GB-030).
+- `stenio verify-release --host H --tag T [--project-dir D] [--repo R] [--protected-record 'DocType:name:modified'] [--expect-main]`: read-only post-deploy checks over ssh from a fixed command allowlist; one PASS/FAIL/WARN line each, exit 1 on any FAIL. Since v4.18.0 it prints two backup lines: `backup-age` (newest `bench backup`) and `backup-age-scheduled` (newest dump matched by `[frappe] scheduled_backup_glob`, limit `scheduled_backup_max_age_hours`, default 26 h), so a fresh manual backup never masks a stopped timer (GB-032).
+- `stenio release-engine --tag vX [--repo .] [--host kuaray] [--container miracena-stenio] [--compose-dir /srv/data/miracena] [--service stenio] [--image-repo ghcr.io/ceduardorodrig/stenio-sentinel] [--wait-secs N] [--build-timeout-secs N] [--install-dir D] [--skip-ci] [--dry-run]`: the release pass from tag to both hosts — local tag at HEAD, tag pushed to origin, the three GitHub runs (`gh run list`, waits), `cargo build --release --locked`, install with a rollback copy `stenio.prev-<old>`, kuaray image retag/pull/`compose up`, container version parity, `--self-test` and the `vault`/`homelab` scopes; one PASS/FAIL/SKIP line per step, exit 1 on any FAIL (v4.18.0, GB-034).
+- MCP: `stenio_pre_release`, `stenio_verify_release` and `stenio_verify_host` are tools of the MCP server (stdio and `--mcp-sse`), so an agent on any harness calls them instead of shelling out; arguments are validated and run as an argv vector, and the tool returns the exit code plus the PASS/FAIL lines (v4.18.0, GB-022).
 
 ## 🔍 Built-in Rule Catalog & Scopes
 

@@ -149,6 +149,50 @@ pub fn dispatch_mcp_request(
                             },
                             "required": ["query"]
                         }
+                    },
+                    {
+                        "name": "stenio_pre_release",
+                        "description": "Pre-release gate for a Frappe app tag (frappe/fork/custom-rule scopes, version and tag checks, FULL/TEXT-ONLY classification). Returns the PASS/FAIL lines and the exit code.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "repo": { "type": "string", "description": "App repository root" },
+                                "tag": { "type": "string", "description": "Release tag, e.g. v0.1.0-rc77" },
+                                "prev": { "type": "string", "description": "Previous tag (diff base)" },
+                                "after_build": { "type": "boolean", "description": "Also check the local image and its .built-from" },
+                                "tagged": { "type": "boolean", "description": "The tag already exists and must point at HEAD" }
+                            },
+                            "required": ["repo", "tag"]
+                        }
+                    },
+                    {
+                        "name": "stenio_verify_release",
+                        "description": "Read-only post-deploy checks of a Frappe release over ssh: one PASS/FAIL/WARN line each, exit code 1 on any FAIL.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "host": { "type": "string", "description": "Deploy host, e.g. kuaray" },
+                                "tag": { "type": "string", "description": "Image tag, e.g. 0.1.0-rc77" },
+                                "repo": { "type": "string", "description": "Repository holding the app (default: .)" },
+                                "project_dir": { "type": "string", "description": "Compose project directory on the host" },
+                                "previous_tag": { "type": "string", "description": "Previous image tag expected to be the only other one" },
+                                "expect_main": { "type": "boolean", "description": "Require .built-from to equal main as well" }
+                            },
+                            "required": ["host", "tag"]
+                        }
+                    },
+                    {
+                        "name": "stenio_verify_host",
+                        "description": "Managed-file parity, container restart policies and engine version parity of one host (read-only).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "host": { "type": "string", "description": "Host, e.g. kuaray" },
+                                "config": { "type": "string", "description": "steniocheck.toml with a [parity] table" },
+                                "repo_root": { "type": "string", "description": "Directory the repo paths are relative to" }
+                            },
+                            "required": ["host", "config"]
+                        }
                     }
                 ]
             });
@@ -482,6 +526,81 @@ pub fn dispatch_mcp_request(
                         msg
                     }
                 }
+                "stenio_pre_release" => match (
+                    mcp_arg(&arguments, "repo", "/._-"),
+                    mcp_arg(&arguments, "tag", "."),
+                ) {
+                    (Ok(repo), Ok(tag)) => {
+                        let mut cmd = vec![
+                            "pre-release".to_string(),
+                            "--repo".to_string(),
+                            repo,
+                            "--tag".to_string(),
+                            tag,
+                        ];
+                        if let Ok(prev) = mcp_arg(&arguments, "prev", ".") {
+                            cmd.push("--prev".to_string());
+                            cmd.push(prev);
+                        }
+                        if mcp_flag(&arguments, "after_build") {
+                            cmd.push("--after-build".to_string());
+                        }
+                        if mcp_flag(&arguments, "tagged") {
+                            cmd.push("--tagged".to_string());
+                        }
+                        run_as_subcommand(&cmd)
+                    }
+                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                },
+                "stenio_verify_release" => match (
+                    mcp_arg(&arguments, "host", ""),
+                    mcp_arg(&arguments, "tag", "."),
+                ) {
+                    (Ok(host), Ok(tag)) => {
+                        let mut cmd = vec![
+                            "verify-release".to_string(),
+                            "--host".to_string(),
+                            host,
+                            "--tag".to_string(),
+                            tag,
+                        ];
+                        for (key, flag) in [
+                            ("repo", "--repo"),
+                            ("project_dir", "--project-dir"),
+                            ("previous_tag", "--previous-tag"),
+                        ] {
+                            if let Ok(v) = mcp_arg(&arguments, key, "/._-") {
+                                cmd.push(flag.to_string());
+                                cmd.push(v);
+                            }
+                        }
+                        if mcp_flag(&arguments, "expect_main") {
+                            cmd.push("--expect-main".to_string());
+                        }
+                        run_as_subcommand(&cmd)
+                    }
+                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                },
+                "stenio_verify_host" => match (
+                    mcp_arg(&arguments, "host", ""),
+                    mcp_arg(&arguments, "config", "/._-"),
+                ) {
+                    (Ok(host), Ok(config)) => {
+                        let mut cmd = vec![
+                            "verify-host".to_string(),
+                            "--host".to_string(),
+                            host,
+                            "--config".to_string(),
+                            config,
+                        ];
+                        if let Ok(root) = mcp_arg(&arguments, "repo_root", "/._-") {
+                            cmd.push("--repo-root".to_string());
+                            cmd.push(root);
+                        }
+                        run_as_subcommand(&cmd)
+                    }
+                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                },
                 other => format!("Unknown tool: '{}'", other),
             };
 
@@ -545,6 +664,46 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
     }
 
     Ok(())
+}
+
+/// Reads a string argument and rejects anything that could become another flag or a shell token.
+fn mcp_arg(arguments: &Value, key: &str, extra: &str) -> Result<String, String> {
+    match arguments.get(key).and_then(Value::as_str) {
+        Some(v) if !v.starts_with('-') && crate::verify_release::safe(v, extra) => {
+            Ok(v.to_string())
+        }
+        Some(v) => Err(format!("unsafe or empty value for '{key}': '{v}'")),
+        None => Err(format!("missing required argument '{key}'")),
+    }
+}
+
+fn mcp_flag(arguments: &Value, key: &str) -> bool {
+    arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Runs this same binary as a subcommand (argv vector, never a shell) and returns its exit code
+/// with the PASS/FAIL lines the subcommand printed.
+fn run_as_subcommand(args: &[String]) -> String {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => return format!("cannot locate the stenio binary: {e}"),
+    };
+    match std::process::Command::new(exe).args(args).output() {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            format!(
+                "exit={}\n{}{}",
+                o.status.code().unwrap_or(-1),
+                stdout,
+                stderr
+            )
+        }
+        Err(e) => format!(
+            "cannot run stenio {}: {e}",
+            args.first().map(String::as_str).unwrap_or("")
+        ),
+    }
 }
 
 fn format_violation_line(v: &Violation) -> String {

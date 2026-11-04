@@ -98,7 +98,7 @@ fn clean(s: &str) -> String {
         .to_string()
 }
 
-fn vault_root(given: Option<&Path>) -> PathBuf {
+pub(crate) fn vault_root(given: Option<&Path>) -> PathBuf {
     if let Some(p) = given {
         return p.to_path_buf();
     }
