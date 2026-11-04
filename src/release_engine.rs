@@ -414,12 +414,18 @@ fn check_retag(r: &dyn Runner, a: &RelArgs, version: &str, old: &str) -> Line {
 
 fn check_pull(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
     let image = format!("{}:{version}", a.image_repo);
-    let script = format!("docker pull {image}");
+    let target = format!("{}:{}", a.image_repo, tag_major(version));
+    let script = format!("docker pull {image} && docker tag {image} {target}");
     match remote(r, a, &script, Duration::from_secs(600)) {
-        Ok(o) if out_ok(&o) => pass("kuaray-pull", image),
-        Ok(o) => fail("kuaray-pull", format!("docker pull exited {}", o.code)),
+        Ok(o) if out_ok(&o) => pass("kuaray-pull", format!("{image} -> {target}")),
+        Ok(o) => fail("kuaray-pull", format!("docker pull/tag exited {}", o.code)),
         Err(e) => fail("kuaray-pull", e),
     }
+}
+
+/// The moving major tag a compose file references (`4` for `4.18.0`).
+fn tag_major(version: &str) -> &str {
+    version.split('.').next().unwrap_or(version)
 }
 
 fn check_up(r: &dyn Runner, a: &RelArgs) -> Line {
@@ -552,7 +558,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("build", format!("cargo build --release --locked (in {})", a.repo.display())),
         ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
-        ("kuaray-pull", format!("ssh {} docker pull {}:{version}", a.host, a.image_repo)),
+        ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
         ("kuaray-version", format!("ssh {} docker exec {} stenio --version", a.host, a.container)),
         ("self-test", "~/.cargo/bin/stenio --self-test".to_string()),
@@ -716,7 +722,9 @@ fn scripted(
         ok(""),
     );
     m.insert(
-        ssh(&format!("docker pull {DEFAULT_IMAGE_REPO}:4.18.0")),
+        ssh(&format!(
+            "docker pull {DEFAULT_IMAGE_REPO}:4.18.0 && docker tag {DEFAULT_IMAGE_REPO}:4.18.0 {DEFAULT_IMAGE_REPO}:4"
+        )),
         ok(""),
     );
     m.insert(
