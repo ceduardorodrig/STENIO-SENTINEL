@@ -1831,6 +1831,10 @@ fn main() -> Result<()> {
             argv.push(opportunity::vault_root(None).display().to_string());
         }
     }
+    if argv.get(1).map(String::as_str) == Some("preflight") {
+        argv[1] = "pre-release".to_string(); // `stenio preflight --repo R` = `pre-release --static-only`
+        argv.push("--static-only".to_string());
+    }
     match argv.get(1).map(String::as_str) {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),

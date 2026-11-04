@@ -69,6 +69,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Whitelisted Function Without Permission Check",
         Severity::Warning,
     ),
+    (
+        "FRAPPE-DOCTYPE-HEADER-KEYS",
+        "DocType JSON Missing Header Key",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-AUTONAME-COLLISION",
+        "Duplicate Guard Defeated By Autoname",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -455,6 +465,129 @@ fn rule_controller(c: &Ctx) -> Vec<Violation> {
             out.push(viol("FRAPPE-DOCTYPE-CONTROLLER", &r, 1, stem,
                 format!("DocType `{stem}` has no `{stem}.py` defining a class: migrate fails on it (child DocTypes too)."),
                 "Add `<name>.py` with `class <Name>(Document): pass` next to the JSON."));
+        }
+    }
+    out
+}
+
+// ── FRAPPE-DOCTYPE-HEADER-KEYS / FRAPPE-AUTONAME-COLLISION ────────────────
+fn doctype_json(p: &Path) -> bool {
+    p.extension().map(|e| e == "json").unwrap_or(false)
+        && p.parent()
+            .and_then(|d| d.parent())
+            .and_then(|d| d.file_name())
+            .and_then(|n| n.to_str())
+            == Some("doctype")
+        && p.file_stem() == p.parent().and_then(|d| d.file_name())
+}
+
+/// The keys Frappe needs to import a DocType. A JSON without `doctype` is dropped by
+/// `load_doctype` and becomes invisible to every other rule, so it must fail loudly here.
+fn rule_doctype_headers(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for json in c.files.iter().filter(|p| doctype_json(p)) {
+        let r = rel(&c.root, json);
+        let stem = json.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let text = read(json);
+        let v: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                out.push(viol(
+                    "FRAPPE-DOCTYPE-HEADER-KEYS",
+                    &r,
+                    1,
+                    stem,
+                    format!("DocType JSON does not parse ({e}): migrate cannot read it."),
+                    "Fix the JSON syntax.",
+                ));
+                continue;
+            }
+        };
+        if str_of(&v, "doctype") != "DocType" {
+            let got = str_of(&v, "doctype");
+            out.push(viol("FRAPPE-DOCTYPE-HEADER-KEYS", &r, 1, "\"doctype\"",
+                if got.is_empty() {
+                    format!("DocType JSON `{stem}` has no `doctype` key: Frappe discards it on import and the engine sees no DocType at all.")
+                } else {
+                    format!("DocType JSON `{stem}` has `doctype: {got}`: Frappe only imports `doctype: DocType`.")
+                },
+                "Add \"doctype\": \"DocType\" as the first key."));
+        }
+        for key in ["name", "fields"] {
+            if v.get(key).is_none() {
+                out.push(viol(
+                    "FRAPPE-DOCTYPE-HEADER-KEYS",
+                    &r,
+                    1,
+                    key,
+                    format!("DocType JSON `{stem}` has no `{key}` key: migrate fails on import."),
+                    "Export the DocType from a working site instead of writing the JSON by hand.",
+                ));
+            }
+        }
+        let name = str_of(&v, "name");
+        let want = name.to_lowercase().replace([' ', '-'], "_");
+        if !name.is_empty() && !stem.is_empty() && want != stem {
+            out.push(viol("FRAPPE-DOCTYPE-HEADER-KEYS", &r, 1, stem,
+                format!("DocType `{name}` lives in the folder `{stem}`: the folder must be the name in snake_case."),
+                "Rename the folder (and its .py/__init__.py) to match the DocType name."));
+        }
+    }
+    out
+}
+
+/// A deterministic autoname (`format:`, `field:`, `prompt:`) fills `doc.name` **before**
+/// `validate`, so a duplicate guard that compares the found name with `doc.name` is always
+/// false and the insert reaches the primary key. rc80 and rc81 of the Miracena app burned
+/// exactly this way.
+fn rule_autoname_collision(c: &Ctx) -> Vec<Violation> {
+    let cmp = match Regex::new(r"!=\s*(?:doc|self)\.name\b") {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let safe = Regex::new(r"\b(?:is_new\(\)|__islocal|get_doc_before_save\()").ok();
+    let mut out = Vec::new();
+    let mut reported: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for json in c.files.iter().filter(|p| doctype_json(p)) {
+        let v: Value = match serde_json::from_str(&read(json)) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let autoname = str_of(&v, "autoname");
+        let deterministic = ["format:", "field:", "prompt:"]
+            .iter()
+            .any(|p| autoname.starts_with(p));
+        if !deterministic {
+            continue;
+        }
+        let stem = json.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let name = str_of(&v, "name");
+        // The guard is not always in the controller: it may live in a module the controller
+        // imports (Miracena keeps it in `salary.py`), so the search covers every module of the
+        // package that names this DocType.
+        for py in c
+            .files
+            .iter()
+            .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false) && p.starts_with(&c.pkg))
+        {
+            let text = read(py);
+            let names_it = (!name.is_empty() && text.contains(&name)) || text.contains(stem);
+            if !names_it || !text.contains("db.exists") || !cmp.is_match(&text) {
+                continue;
+            }
+            let exempt = safe.as_ref().map(|re| re.is_match(&text)).unwrap_or(false);
+            if exempt {
+                continue;
+            }
+            let key = rel(&c.root, py);
+            if !reported.insert(key.clone()) {
+                break;
+            }
+            let line = line_of(&text, ".name");
+            out.push(viol("FRAPPE-AUTONAME-COLLISION", &key, line, "!= doc.name",
+                format!("`{stem}` uses autoname `{autoname}`, so doc.name is already set at validate: comparing the existing row with doc.name never matches and the duplicate reaches the primary key."),
+                "Use `doc.is_new() or clash != doc.name`, or `get_doc_before_save()`."));
+            break;
         }
     }
     out
@@ -1121,7 +1254,9 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     let c = build_ctx(root, cfg)?;
     let mut all: Vec<Violation> = Vec::new();
     for f in [
+        rule_doctype_headers,
         rule_controller,
+        rule_autoname_collision,
         rule_link_title,
         rule_patches,
         rule_hooks,
@@ -1229,6 +1364,27 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
     } else {
         v.push(f("demoapp/patches/second.py", "def execute():\n    pass\n"));
         v.push(f("demoapp/tests/beta.py", "def run():\n    pass\n"));
+        // FRAPPE-AUTONAME-COLLISION: deterministic autoname plus a guard that compares the
+        // found row with doc.name, which is already filled at validate.
+        v.push(f("demoapp/demo/doctype/slot/__init__.py", ""));
+        v.push(f(
+            "demoapp/demo/doctype/slot/slot.json",
+            "{\"doctype\":\"DocType\",\"name\":\"Slot\",\"autoname\":\"format:SLOT-{code}\",\"fields\":[{\"fieldname\":\"code\",\"fieldtype\":\"Data\"}],\"permissions\":[{\"role\":\"Demo Role\"}]}",
+        ));
+        v.push(f(
+            "demoapp/demo/doctype/slot/slot.py",
+            "import frappe\n\n\nclass Slot:\n    def validate(self):\n        clash = frappe.db.exists(\"Slot\", {\"code\": self.code})\n        if clash and clash != self.name:\n            frappe.throw(\"duplicate\")\n",
+        ));
+        // FRAPPE-DOCTYPE-HEADER-KEYS: no `doctype` key, invisible to every other rule.
+        v.push(f("demoapp/demo/doctype/nohead/__init__.py", ""));
+        v.push(f(
+            "demoapp/demo/doctype/nohead/nohead.json",
+            "{\"name\":\"Nohead\",\"fields\":[],\"permissions\":[]}",
+        ));
+        v.push(f(
+            "demoapp/demo/doctype/nohead/nohead.py",
+            "class Nohead:\n    pass\n",
+        ));
     }
     v
 }

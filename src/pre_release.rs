@@ -4,6 +4,9 @@
 //! consistency, git state, scope classification (FULL or TEXT-ONLY, fail-safe FULL), new
 //! translations, secrets in the diff, Dockerfile consistency and (after the build) the
 //! `.built-from` of the local image. One PASS/FAIL/WARN line each; exit 1 on any FAIL.
+//!
+//! `--static-only` (exposed as `stenio preflight`) keeps just the part that decides without a
+//! site, a git history, Docker or a tag: the scope checks and the engine's own self-tests.
 
 use clap::Parser;
 use regex::Regex;
@@ -26,8 +29,12 @@ use crate::verify_release::{Check, Status};
 struct PreArgs {
     #[arg(long, default_value = ".")]
     repo: PathBuf,
-    #[arg(long, help = "Release tag, e.g. v0.1.0-rc76")]
-    tag: String,
+    #[arg(
+        long,
+        required_unless_present = "static_only",
+        help = "Release tag, e.g. v0.1.0-rc76"
+    )]
+    tag: Option<String>,
     #[arg(
         long,
         help = "Previous tag (diff base for scope, translations and secrets)"
@@ -45,6 +52,11 @@ struct PreArgs {
     tagged: bool,
     #[arg(
         long,
+        help = "Static only: scope checks and engine self-tests; no tag, git, Docker or site"
+    )]
+    static_only: bool,
+    #[arg(
+        long,
         help = "steniocheck.toml with the [frappe] table (default <repo>/steniocheck.toml)"
     )]
     config: Option<PathBuf>,
@@ -57,6 +69,7 @@ pub struct Opts {
     pub after_build: bool,
     pub tagged: bool,
     pub run_scopes: bool,
+    pub static_only: bool,
     pub fc: FrappeConfig,
 }
 
@@ -611,7 +624,73 @@ fn scope_checks(o: &Opts) -> Vec<Check> {
         .collect()
 }
 
+/// `preflight`: the checks that decide without a tag, git history, Docker or a site.
+///
+/// Order is the precedence order of the failure: the Frappe scope names the offending rule first,
+/// then the fork scope and the custom-rule tag, and only then the engine's own fixtures. The
+/// self-test suite runs in its own thread: it costs about as much as the scopes, so it overlaps.
+fn static_checks(o: &Opts, engine_self_test: impl FnOnce() -> Check + Send) -> Vec<Check> {
+    std::thread::scope(|s| {
+        let engine = s.spawn(engine_self_test);
+        let mut out = if o.run_scopes {
+            scope_checks(o)
+        } else {
+            Vec::new()
+        };
+        out.push(
+            engine
+                .join()
+                .unwrap_or_else(|_| mk(Status::Fail, "self-test", "check panicked")),
+        );
+        out
+    })
+}
+
+/// Runs this same binary with `--self-test`: the engine proves its rules before judging the app.
+fn check_self_test() -> Check {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            return mk(
+                Status::Fail,
+                "self-test",
+                format!("engine path unknown: {e}"),
+            );
+        }
+    };
+    match Command::new(exe).arg("--self-test").output() {
+        Ok(r) if r.status.success() => mk(Status::Pass, "self-test", "every engine fixture green"),
+        Ok(_) => mk(
+            Status::Fail,
+            "self-test",
+            "engine fixtures failed: run `stenio --self-test` for the list",
+        ),
+        Err(e) => mk(
+            Status::Fail,
+            "self-test",
+            format!("cannot run the engine: {e}"),
+        ),
+    }
+}
+
+/// The one actionable line printed after the first blocking FAIL of `preflight`.
+fn remedy(name: &str) -> &'static str {
+    match name {
+        "scope-frappe" => {
+            "run `stenio --scope frappe --path <repo>`: every violation carries its own suggestion"
+        }
+        "scope-fork" => "run `stenio --scope fork --path <repo>` and fix the listed violations",
+        "custom-rules" => {
+            "run `stenio --tag <custom_rules_tag> --strict --compact --path <repo>` to list them"
+        }
+        _ => "run `stenio --self-test` and fix the engine fixture that broke before shipping",
+    }
+}
+
 pub fn run_checks(o: &Opts) -> Vec<Check> {
+    if o.static_only {
+        return static_checks(o, check_self_test);
+    }
     let mut out = Vec::new();
     if o.run_scopes {
         out.extend(scope_checks(o));
@@ -655,14 +734,21 @@ pub fn run_cli(argv: &[String]) -> i32 {
             .frappe
             .unwrap_or_default(),
         repo: a.repo,
-        tag: a.tag,
+        tag: a.tag.unwrap_or_default(),
         prev: a.prev,
         after_build: a.after_build,
         tagged: a.tagged,
         run_scopes: true,
+        static_only: a.static_only,
     };
-    println!("stenio pre-release repo={} tag={}", o.repo.display(), o.tag);
+    let started = std::time::Instant::now();
+    if o.static_only {
+        println!("stenio preflight repo={}", o.repo.display());
+    } else {
+        println!("stenio pre-release repo={} tag={}", o.repo.display(), o.tag);
+    }
     let results = run_checks(&o);
+    let fails = results.iter().filter(|r| r.status == Status::Fail).count();
     for r in &results {
         let l = match r.status {
             Status::Pass => "PASS",
@@ -670,9 +756,22 @@ pub fn run_cli(argv: &[String]) -> i32 {
             Status::Warn => "WARN",
         };
         println!("{l} {:<18} {}", r.name, r.detail);
+        // `preflight` stops at the first blocking error and leaves one line saying what to run.
+        if o.static_only && r.status == Status::Fail {
+            println!("REMEDY {:<16} {}", r.name, remedy(r.name));
+            break;
+        }
     }
-    let fails = results.iter().filter(|r| r.status == Status::Fail).count();
-    println!("{} check(s): {} FAIL", results.len(), fails);
+    if o.static_only {
+        println!(
+            "{} check(s): {} FAIL in {} ms",
+            results.len(),
+            fails,
+            started.elapsed().as_millis()
+        );
+    } else {
+        println!("{} check(s): {} FAIL", results.len(), fails);
+    }
     i32::from(fails > 0)
 }
 
@@ -778,6 +877,7 @@ fn opts_for(work: &Path) -> Opts {
         after_build: false,
         tagged: false,
         run_scopes: false,
+        static_only: false,
         fc: frappe::fixture_config(),
     }
 }
@@ -828,7 +928,69 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             want(Variant::StaleModified, "json-modified"),
         ),
         ("pre-release classify".to_string(), classify_case()),
+        (
+            "preflight parses without tag".to_string(),
+            preflight_args_case(),
+        ),
+        (
+            "preflight drops tag and git".to_string(),
+            preflight_static_case(),
+        ),
+        ("preflight remedy line".to_string(), preflight_remedy_case()),
     ]
+}
+
+/// `preflight` parses without `--tag`; plain `pre-release` still refuses to run without one.
+fn preflight_args_case() -> bool {
+    let preflight = PreArgs::try_parse_from(["stenio preflight", "--repo", ".", "--static-only"]);
+    let tagless = PreArgs::try_parse_from(["stenio pre-release", "--repo", "."]);
+    let tagged = PreArgs::try_parse_from(["stenio pre-release", "--repo", ".", "--tag", "v1"]);
+    preflight.is_ok() && tagless.is_err() && tagged.is_ok()
+}
+
+/// The static path never reaches the version/git checks: they need a tag and a real history.
+fn preflight_static_case() -> bool {
+    let Some(root) = frappe::write_fixture("frappe-preflight", &frappe::fixture_files(false))
+    else {
+        return false;
+    };
+    let base = Opts {
+        repo: root.clone(),
+        tag: String::new(),
+        prev: None,
+        after_build: false,
+        tagged: false,
+        run_scopes: false,
+        static_only: true,
+        fc: frappe::fixture_config(),
+    };
+    let stub = || mk(Status::Pass, "self-test", "stub");
+    let names: Vec<&str> = static_checks(&base, stub).iter().map(|c| c.name).collect();
+    let dynamic = [
+        "version",
+        "tag-free",
+        "tree-clean",
+        "pushed",
+        "dockerfile",
+        "new-translations",
+    ];
+    let leaked = names.iter().any(|n| dynamic.contains(n));
+    let judged = run_checks(&Opts {
+        static_only: false,
+        ..base
+    })
+    .iter()
+    .any(|c| c.name == "version" && c.status == Status::Fail);
+    let _ = fs::remove_dir_all(&root);
+    !leaked && names == ["self-test"] && judged
+}
+
+/// Every blocking check must leave one runnable remedy behind.
+fn preflight_remedy_case() -> bool {
+    ["scope-frappe", "scope-fork", "custom-rules", "self-test"]
+        .iter()
+        .all(|n| remedy(n).contains("stenio"))
+        && remedy("unknown-check").contains("--self-test")
 }
 
 /// TEXT-ONLY needs a diff of translations only: compare the first commit with a po-only change.
