@@ -94,6 +94,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Exception Swallowed Without A Record",
         Severity::Error,
     ),
+    (
+        "FRAPPE-PY-MIN-SYNTAX",
+        "Syntax Newer Than The Bench Python",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-PRIVILEGED-READ-IN-SAVE",
+        "Permission-Sensitive Read Inside A Write Hook",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -1873,6 +1883,589 @@ fn rule_silent_except(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-PY-MIN-SYNTAX ───────────────────────────────────────────────────
+// Why it exists: `miracena/ritual_dates.py:88` wrote `except TypeError, ValueError:` — PEP 758
+// syntax that only Python 3.14 accepts. Production runs 3.14.10, so nobody noticed; a standard
+// Frappe 15 bench on Python 3.12 raises SyntaxError at import and the module never loads.
+//
+// The engine has no embedded CPython (ARCH-NO-PYTHON), so the check is textual and deliberately
+// narrow: it covers the constructs Python 3.14 introduced and earlier versions reject, NOT the
+// whole grammar. A false negative is the accepted cost, and the shape must be unambiguous before
+// a line is flagged; both scans run over a masked copy of the line, so prose never matches.
+
+/// `line` with the content of its string literals and its trailing comment blanked. Quote
+/// characters are kept (a scan can still see where a literal starts); only content is lost, which
+/// can hide a finding but cannot invent one.
+fn py_mask_code(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut comment = false;
+    for ch in line.chars() {
+        if comment {
+            out.push(' ');
+            continue;
+        }
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                    out.push(' ');
+                } else if ch == '\\' {
+                    escaped = true;
+                    out.push(' ');
+                } else if ch == q {
+                    quote = None;
+                    out.push(ch);
+                } else {
+                    out.push(' ');
+                }
+            }
+            None => match ch {
+                '#' => {
+                    comment = true;
+                    out.push(' ');
+                }
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    out.push(ch);
+                }
+                _ => out.push(ch),
+            },
+        }
+    }
+    out
+}
+
+/// The exception expression of the `except` header starting at `start`, masking only the header
+/// lines (comments, strings and docstrings blanked), plus the index of its last header line.
+/// `None` when the header never closes.
+fn py_except_expr(raw: &[&str], start: usize) -> Option<(String, usize)> {
+    let mut header = String::new();
+    let mut j = start;
+    loop {
+        header.push_str(py_mask_code(raw.get(j)?).trim());
+        header.push(' ');
+        if py_clause_colon(&header).is_some() {
+            break;
+        }
+        j += 1;
+    }
+    let colon = py_clause_colon(&header)?;
+    let head = header[..colon].trim();
+    let expr = head
+        .strip_prefix("except")
+        .unwrap_or(head)
+        .trim_start_matches('*')
+        .trim()
+        .to_string();
+    Some((expr, j))
+}
+
+/// True when `line` opens an `except` clause (bare, `except X:`, `except*` or `except(`).
+fn py_starts_except(line: &str) -> bool {
+    match line.trim_start().strip_prefix("except") {
+        Some(rest) => {
+            rest.is_empty()
+                || rest.starts_with(|ch: char| matches!(ch, ' ' | '\t' | ':' | '(' | '*'))
+        }
+        None => false,
+    }
+}
+
+/// Cheap pre-filter for a t-string prefix before the line is masked: a `t`/`r` immediately followed
+/// by a quote character. Most lines fail this and are never copied.
+fn py_maybe_tstring(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    bytes
+        .windows(2)
+        .any(|w| matches!(w[0], b't' | b'r') && matches!(w[1], b'"' | b'\''))
+}
+
+/// True when the exception expression lists types with a bare comma (`except A, B:`, `except*`
+/// included): legal in Python 3.14 by PEP 758, a SyntaxError in every earlier version, which is
+/// what a Frappe 15 bench ships.
+fn py_bare_tuple(expr: &str) -> bool {
+    if expr.is_empty() || expr.starts_with('(') {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for ch in expr.chars() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Column of a t-string prefix (`t"`, `rt'`, `tr"`) in masked code — PEP 750, Python 3.14 only.
+/// The prefix has to sit on an expression boundary (`t"` after an identifier is not this shape),
+/// and the literal body is already blanked, so `"t"` and `'...t"x"...'` never match.
+fn py_tstring_at(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'"' && b != b'\'' {
+            continue;
+        }
+        let mut start = i;
+        while start > 0 && matches!(bytes[start - 1], b't' | b'r') {
+            start -= 1;
+        }
+        if start == i {
+            continue;
+        }
+        let prefix = line.get(start..i).unwrap_or("");
+        if !matches!(prefix, "t" | "rt" | "tr") {
+            continue;
+        }
+        let boundary = start == 0 || {
+            let before = bytes[start - 1];
+            !(before.is_ascii_alphanumeric() || before == b'_')
+        };
+        if boundary {
+            return Some(start);
+        }
+    }
+    None
+}
+
+fn rule_min_syntax(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+    {
+        let text = read(p);
+        if !text.contains("except") && !py_maybe_tstring(&text) {
+            continue; // neither covered shape can be in this module
+        }
+        let path = rel(&c.root, p);
+        let lines: Vec<&str> = text.lines().collect();
+        let mut state: Option<&'static str> = None;
+        for (i, line) in lines.iter().enumerate() {
+            if !py_code_line(line, &mut state) {
+                continue; // inside a triple-quoted string: prose, not code
+            }
+            if py_starts_except(line) {
+                if let Some((expr, _)) = py_except_expr(&lines, i) {
+                    if py_bare_tuple(&expr) {
+                        out.push(viol(
+                            "FRAPPE-PY-MIN-SYNTAX",
+                            &path,
+                            i + 1,
+                            line.trim(),
+                            format!(
+                                "`{path}:{}` writes `except {expr}:` — PEP 758 syntax, Python 3.14 only. A Frappe 15 bench on Python 3.12 raises SyntaxError at import, so the whole module never loads (production on 3.14 hides it).",
+                                i + 1
+                            ),
+                            "Wrap the types in parentheses: `except (A, B):` — the form every Python 3 release accepts.",
+                        ));
+                    }
+                }
+            }
+            if py_maybe_tstring(line) && py_tstring_at(&py_mask_code(line)).is_some() {
+                out.push(viol(
+                    "FRAPPE-PY-MIN-SYNTAX",
+                    &path,
+                    i + 1,
+                    line.trim(),
+                    format!(
+                        "`{path}:{}` uses a t-string (PEP 750), Python 3.14 only: a bench on Python 3.12 raises SyntaxError at import.",
+                        i + 1
+                    ),
+                    "Use an f-string plus a tag function, or a plain string, so the module imports on the bench Python.",
+                ));
+            }
+        }
+    }
+    out
+}
+
+// ── FRAPPE-PRIVILEGED-READ-IN-SAVE ────────────────────────────────────────
+// Why it exists: `miracena/functions.py:62` read `frappe.get_doc("User", user)` inside
+// `sync_function_roles`, which hooks.py binds to the save of a Cabal. The handler runs in the
+// session of whoever saved, so a Structure Steward (no `write` on User) died with PermissionError
+// on an edit the steward is allowed to make. The rule reads the hook binding and the function
+// body as text (the engine never imports the app) and stays silent on any shape it cannot read:
+// a computed DocType, a path outside the app, a hook written as a list.
+
+/// Doc events that run inside a write, so the handler inherits the permissions of whoever saved.
+/// `before_validate` is included because it runs in the same save phase as `validate`.
+const WRITE_HOOKS: &[&str] = &[
+    "validate",
+    "before_validate",
+    "before_save",
+    "after_save",
+    "on_update",
+];
+
+/// One token of the `doc_events` dict literal: only the shapes the reader needs.
+enum DictTok {
+    Str(String),
+    Open,
+    Close,
+    Colon,
+}
+
+/// Strings, braces and colons of a dict literal, comments skipped (a commented entry is not a
+/// binding).
+fn dict_tokens(s: &str) -> Vec<DictTok> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '#' => {
+                while chars.peek().map(|c| *c != '\n').unwrap_or(false) {
+                    chars.next();
+                }
+            }
+            '{' => out.push(DictTok::Open),
+            '}' => out.push(DictTok::Close),
+            ':' => out.push(DictTok::Colon),
+            '"' | '\'' => {
+                let mut buf = String::new();
+                let quote = ch;
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        if let Some(n) = chars.next() {
+                            buf.push(n);
+                        }
+                        continue;
+                    }
+                    if c == quote {
+                        break;
+                    }
+                    buf.push(c);
+                }
+                out.push(DictTok::Str(buf));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `(DocType, event, dotted path)` of every `doc_events` entry bound to a write hook. Only the
+/// dict form with a literal string path is read; a list of paths or a computed value stays
+/// unread (silent), which is the conservative direction.
+fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
+    let text = read(&c.pkg.join("hooks.py"));
+    let Ok(head) = Regex::new(r"(?m)^doc_events\s*=\s*\{") else {
+        return Vec::new();
+    };
+    let Some(m) = head.find(&text) else {
+        return Vec::new();
+    };
+    let Some((start, end)) = balanced_at(&text, m.end() - 1, b'{', b'}') else {
+        return Vec::new();
+    };
+    let toks = dict_tokens(&text[start..end]);
+    let mut out = Vec::new();
+    let mut doc_type = String::new();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < toks.len() {
+        match toks.get(i) {
+            Some(DictTok::Open) => depth += 1,
+            Some(DictTok::Close) => {
+                depth = depth.saturating_sub(1);
+                if depth <= 1 {
+                    doc_type.clear();
+                }
+            }
+            Some(DictTok::Str(key)) if depth == 1 => {
+                let colon = matches!(toks.get(i + 1), Some(DictTok::Colon));
+                let open = matches!(toks.get(i + 2), Some(DictTok::Open));
+                if colon && open {
+                    doc_type = key.clone();
+                }
+            }
+            Some(DictTok::Str(key)) if depth == 2 => {
+                let value = match (toks.get(i + 1), toks.get(i + 2)) {
+                    (Some(DictTok::Colon), Some(DictTok::Str(path))) => Some(path),
+                    _ => None,
+                };
+                if let Some(path) = value {
+                    if WRITE_HOOKS.contains(&key.as_str()) && !doc_type.is_empty() {
+                        out.push((doc_type.clone(), key.clone(), path.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The module file and function name of an app-local dotted hook path (`miracena.api.on_todo`).
+fn dotted_target(c: &Ctx, dotted: &str) -> Option<(PathBuf, String)> {
+    let parts: Vec<&str> = dotted.split('.').collect();
+    if parts.first().copied() != Some(c.app.as_str()) || parts.len() < 2 {
+        return None;
+    }
+    for i in (1..parts.len()).rev() {
+        let base = parts[..i].iter().fold(c.root.clone(), |p, s| p.join(s));
+        let file = if base.with_extension("py").is_file() {
+            base.with_extension("py")
+        } else if base.join("__init__.py").is_file() {
+            base.join("__init__.py")
+        } else {
+            continue;
+        };
+        return Some((file, parts[i].to_string()));
+    }
+    None
+}
+
+/// True when `line` is the `def` of `name` (`def name(` or `async def name(`), without a regex
+/// compile on every hook target — the audit runs this per binding.
+fn py_def_line(line: &str, name: &str) -> bool {
+    let t = line.trim_start();
+    let rest = t.strip_prefix("async ").unwrap_or(t);
+    let Some(rest) = rest.strip_prefix("def ") else {
+        return false;
+    };
+    let Some(after) = rest.strip_prefix(name) else {
+        return false;
+    };
+    after.starts_with('(') || after.starts_with([' ', '\t'])
+}
+
+/// Name of the `def` a line declares, if any.
+fn py_def_name(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    let rest = t.strip_prefix("async ").unwrap_or(t);
+    let rest = rest.strip_prefix("def ")?;
+    let end = rest
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    (end > 0 && rest[end..].trim_start().starts_with('(')).then(|| &rest[..end])
+}
+
+/// `(index of the def line, body text)` of the first `def name(...)` of a module.
+fn py_function(lines: &[&str], name: &str) -> Option<(usize, String)> {
+    let idx = lines.iter().position(|l| py_def_line(l, name))?;
+    let base = py_indent(lines[idx]);
+    let mut end = idx + 1;
+    while end < lines.len() && (lines[end].trim().is_empty() || py_indent(lines[end]) > base) {
+        end += 1;
+    }
+    Some((idx, lines[idx + 1..end.min(lines.len())].join("\n")))
+}
+
+/// Names a body opens a `with <name>(...)` on (context managers, one level deep).
+fn py_with_contexts(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let code = py_strip_comment(line);
+        let t = code.trim_start();
+        let Some(rest) = t.strip_prefix("with ") else {
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        if rest[name.len()..].trim_start().starts_with('(') {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// True when the function body establishes a system context: `ignore_permissions` (on the call
+/// or on the flags), `frappe.set_user("Administrator")`, or a `with <helper>(...)` whose body does
+/// one of those. One hop into the helper, defined in the same module.
+fn py_system_context(lines: &[&str], body: &str, depth: u8) -> bool {
+    if body.contains("ignore_permissions") {
+        return true;
+    }
+    for line in body.lines() {
+        let code = py_strip_comment(line);
+        if let Some(at) = code.find("set_user(") {
+            if code[at..].contains("Administrator") {
+                return true;
+            }
+        }
+    }
+    if depth >= 1 {
+        return false;
+    }
+    for name in py_with_contexts(body) {
+        let Some((_, helper)) = py_function(lines, &name) else {
+            continue;
+        };
+        if py_system_context(lines, &helper, depth + 1) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every `frappe.get_doc("Literal", ...)` of a body that does not pass `ignore_permissions`:
+/// `(offset, DocType)`. A computed first argument (a dict literal, a variable) is not read.
+fn py_get_doc_reads(body: &str) -> Vec<(usize, String)> {
+    let Ok(re) = Regex::new(r#"frappe\.get_doc\(\s*["']([^"']+)["']"#) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for cap in re.captures_iter(body) {
+        let (Some(whole), Some(dt)) = (cap.get(0), cap.get(1)) else {
+            continue;
+        };
+        let Some(open) = body[..whole.end()].rfind('(') else {
+            continue;
+        };
+        let Some((_, end)) = balanced_at(body, open, b'(', b')') else {
+            continue;
+        };
+        if body[open..end].contains("ignore_permissions") {
+            continue;
+        }
+        out.push((whole.start(), dt.as_str().to_string()));
+    }
+    out
+}
+
+/// The module file of a `from ... import`: app-absolute (`miracena.x`) or one leading dot (same
+/// package as `current`). Anything else is outside the app and not followed.
+fn app_module(c: &Ctx, current: &Path, module: &str) -> Option<PathBuf> {
+    let base = if let Some(rest) = module.strip_prefix('.') {
+        if rest.is_empty() || rest.starts_with('.') {
+            return None;
+        }
+        current.parent()?.join(rest.replace('.', "/"))
+    } else if module.split('.').next() == Some(c.app.as_str()) {
+        module.split('.').fold(c.root.clone(), |p, s| p.join(s))
+    } else {
+        return None;
+    };
+    if base.with_extension("py").is_file() {
+        Some(base.with_extension("py"))
+    } else if base.join("__init__.py").is_file() {
+        Some(base.join("__init__.py"))
+    } else {
+        None
+    }
+}
+
+/// Walks the functions a write hook reaches (the handler itself plus one import/same-module hop)
+/// and reports each permission-sensitive `frappe.get_doc("<DocType>", ...)`.
+struct ReadScan<'a> {
+    c: &'a Ctx,
+    out: Vec<Violation>,
+    seen: BTreeSet<(String, usize)>,
+}
+
+impl ReadScan<'_> {
+    fn run(&mut self, path: &Path, name: &str, hook: &str, hop: bool, inherited: bool) {
+        let text = read(path);
+        let lines: Vec<&str> = text.lines().collect();
+        let Some((def, body)) = py_function(&lines, name) else {
+            return;
+        };
+        // A callee runs inside the `with` block of its caller, so an open system context is
+        // inherited: a false negative here is cheaper than flagging `desired_roles` because
+        // `sync_function_roles` opened the context one frame up.
+        let system = inherited || py_system_context(&lines, &body, 0);
+        let rel_path = rel(&self.c.root, path);
+        for (offset, target) in py_get_doc_reads(&body) {
+            let line = def + 2 + body[..offset].matches('\n').count();
+            if system || !self.seen.insert((rel_path.clone(), line)) {
+                continue;
+            }
+            let snippet = lines.get(line - 1).map(|l| l.trim()).unwrap_or("");
+            self.out.push(viol(
+                "FRAPPE-PRIVILEGED-READ-IN-SAVE",
+                &rel_path,
+                line,
+                snippet,
+                format!(
+                    "`frappe.get_doc(\"{target}\", ...)` in `{name}` runs from the write hook `{hook}`, so the read and any save of that document carry the permissions of whoever saved: a user without `write` on {target} gets PermissionError on an edit they are allowed to make (GB-074)."
+                ),
+                &format!(
+                    "Read only the value you need with `frappe.db.get_value(\"{target}\", name, field)` (no permission check, no save), or open an explicit system context (`frappe.set_user(\"Administrator\")` wrapped in try/finally) before the read."
+                ),
+            ));
+        }
+        if !hop {
+            return;
+        }
+        for (callee_path, callee) in self.callees(path, &text, &body, name) {
+            self.run(&callee_path, &callee, hook, false, system);
+        }
+    }
+
+    /// Functions the body calls that the app defines: top-level defs of the same module and names
+    /// the module imports from another module of the app. One hop only.
+    fn callees(
+        &self,
+        path: &Path,
+        text: &str,
+        body: &str,
+        self_name: &str,
+    ) -> Vec<(PathBuf, String)> {
+        let mut out = Vec::new();
+        for line in text.lines() {
+            let code = py_strip_comment(line);
+            if let Some(name) = py_def_name(code) {
+                if name != self_name && body.contains(&format!("{name}(")) {
+                    out.push((path.to_path_buf(), name.to_string()));
+                }
+                continue;
+            }
+            let t = code.trim_start();
+            let Some(rest) = t.strip_prefix("from ") else {
+                continue;
+            };
+            let Some((module, names)) = rest.split_once(" import ") else {
+                continue;
+            };
+            let Some(file) = app_module(self.c, path, module.trim()) else {
+                continue;
+            };
+            for part in names.split(',') {
+                let name = part.trim().split(" as ").next().unwrap_or("").trim();
+                if !name.is_empty() && body.contains(&format!("{name}(")) {
+                    out.push((file.clone(), name.to_string()));
+                }
+            }
+        }
+        out
+    }
+}
+
+fn rule_privileged_read(c: &Ctx) -> Vec<Violation> {
+    let mut scan = ReadScan {
+        c,
+        out: Vec::new(),
+        seen: BTreeSet::new(),
+    };
+    for (doc_type, event, dotted) in write_hook_targets(c) {
+        let Some((file, name)) = dotted_target(c, &dotted) else {
+            continue;
+        };
+        scan.run(&file, &name, &format!("{doc_type}.{event}"), true, false);
+    }
+    scan.out
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -1893,6 +2486,8 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_rules_coverage,
         rule_role_fixture_parity,
         rule_silent_except,
+        rule_min_syntax,
+        rule_privileged_read,
     ] {
         all.extend(f(&c));
     }
@@ -1919,6 +2514,12 @@ const MORE_RULES_BAD: &str = "def extend(rules, make):\n\tpass\n";
 /// automations.
 const SAFETY_GOOD: &str = "import frappe\n\n\ndef sync(doc):\n\ttry:\n\t\tdoc.insert()\n\texcept Exception as exc:\n\t\tfrappe.log_error(title=\"demo sync\", message=f\"{type(exc).__name__}: {exc}\")\n\t\traise\n\n\ndef optional():\n\ttry:\n\t\timport phonenumbers\n\texcept ImportError:\n\t\tphonenumbers = None\n\treturn phonenumbers\n\n\ndef number(value):\n\ttry:\n\t\treturn int(value)\n\texcept ValueError:\n\t\treturn 0\n";
 const SAFETY_BAD: &str = "import frappe\n\n\ndef sync(doc):\n\tskipped = 0\n\ttry:\n\t\tdoc.insert()\n\texcept Exception:\n\t\tpass\n\treturn skipped\n\n\ndef number(value):\n\tskipped = 0\n\ttry:\n\t\treturn int(value)\n\texcept Exception:\n\t\tskipped += 1\n\t\treturn None\n";
+/// FRAPPE-PY-MIN-SYNTAX (PEP 758) and FRAPPE-PRIVILEGED-READ-IN-SAVE, in one module bound to the
+/// `validate` write hook of hooks.py. The good file keeps the parenthesised tuple and opens an
+/// explicit system context before reading the User; the bad file writes the 3.14-only clause and
+/// reads the User in the session of whoever saved.
+const SESSION_GOOD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tprevious = frappe.session.user\n\tfrappe.set_user(\"Administrator\")\n\ttry:\n\t\tuser = frappe.get_doc(\"User\", \"Administrator\")\n\t\tuser.add_roles(\"Demo Role\")\n\tfinally:\n\t\tfrappe.set_user(previous)\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept (TypeError, ValueError):\n\t\treturn 0\n";
+const SESSION_BAD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tuser = frappe.get_doc(\"User\", doc.user)\n\tuser.add_roles(\"Demo Role\")\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept TypeError, ValueError:\n\t\treturn 0\n";
 const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
@@ -1930,7 +2531,7 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/hooks.py",
             &format!(
-                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n]\n",
+                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\", \"validate\": \"demoapp.session.sync_members\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n]\n",
                 if bad { "missing_fn" } else { "on_todo" },
                 if bad {
                     "[\"Demo Role\", \"Phantom Role\"]"
@@ -1994,6 +2595,10 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/safety.py",
             if bad { SAFETY_BAD } else { SAFETY_GOOD },
+        ),
+        f(
+            "demoapp/session.py",
+            if bad { SESSION_BAD } else { SESSION_GOOD },
         ),
         f("demoapp/demo/doctype/widget/__init__.py", ""),
         f("demoapp/demo/doctype/widget/widget.json", WIDGET_JSON),
