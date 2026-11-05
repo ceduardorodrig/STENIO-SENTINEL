@@ -1186,6 +1186,18 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         tag: "v1;rm".into(),
         ..a.clone()
     });
+    // GB-079: the two vault scopes close the release, in this order. CI
+    // (`.github/workflows/ci.yml`) runs fmt/clippy/build/--self-test/--guardian and no `--scope`, so
+    // a PR can break the vault's governance and nothing notices until a release; this plan test is
+    // the engine's half — dropping or swapping either scope turns it red.
+    let planned: Vec<&str> = plan(&a).iter().map(|(n, _)| *n).collect();
+    let scopes_last = planned.ends_with(&["scope-vault", "scope-homelab"]);
+    // GB-078: `plan()` (what `--dry-run` announces) and `run_steps()` are two hand-kept lists, and
+    // during 4.23.0 one listed plan-parity where the other ran binary-version. The parity fixture
+    // could not see it: it compares `plan()` with the plan text `plan()` produced. The good fixture
+    // walks every step, so its Line names must equal the plan's names — same set, same order.
+    let executed: Vec<&str> = good.iter().map(|l| l.name).collect();
+    let same_sequence = executed == planned;
     vec![
         (
             "release-engine bad tag stops the sequence".to_string(),
@@ -1257,6 +1269,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                     && l.status == Status::Fail
                     && l.detail.contains("unrecognized subcommand")
             }) && !broken_run.iter().any(|l| l.name == "install"),
+        ),
+        (
+            "release-engine plan keeps the vault scopes last, in order".to_string(),
+            scopes_last,
+        ),
+        (
+            "release-engine run order matches the dry-run plan".to_string(),
+            same_sequence,
         ),
     ]
 }

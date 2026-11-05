@@ -104,6 +104,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Permission-Sensitive Read Inside A Write Hook",
         Severity::Error,
     ),
+    (
+        "FRAPPE-I18N-SOURCE-LITERALS",
+        "Translatable Source Literal Missing From Catalogue",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-OTHER-OPTION-NEEDS-TEXT",
+        "Select Other Without A Companion Field",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -235,6 +245,11 @@ struct Field {
     /// A read-only field is filled by the server (prepare function or patch), never by the
     /// user, so the validation gate cannot normalise it.
     read_only: bool,
+    /// Visible names: a companion field can point at a Select through either of them.
+    label: String,
+    description: String,
+    /// `depends_on` expression: the only structural link between two fields.
+    depends_on: String,
 }
 
 struct DocType {
@@ -332,6 +347,9 @@ fn load_doctype(root: &Path, path: &Path) -> Option<DocType> {
                     fieldtype: str_of(f, "fieldtype"),
                     options: str_of(f, "options"),
                     read_only: flag(f, "read_only"),
+                    label: str_of(f, "label"),
+                    description: str_of(f, "description"),
+                    depends_on: str_of(f, "depends_on"),
                 })
                 .collect()
         })
@@ -870,6 +888,18 @@ fn rule_tests(c: &Ctx) -> Vec<Violation> {
 }
 
 // ── .po helpers, FRAPPE-SIDEBAR-COVERAGE, FRAPPE-SELECT-CASE ───────────────
+/// Parse one catalogue into `msgid -> msgstr`; obsolete and header entries are dropped.
+fn load_catalogue(path: &Path) -> Option<BTreeMap<String, String>> {
+    let text = fs::read_to_string(path).ok()?;
+    Some(
+        i18n::parse_po(&text)
+            .into_iter()
+            .filter(|e| !e.obsolete && !e.msgid.is_empty())
+            .map(|e| (e.msgid, e.strs.first().cloned().unwrap_or_default()))
+            .collect(),
+    )
+}
+
 fn catalogue(c: &Ctx) -> Option<(String, BTreeMap<String, String>)> {
     let rel_loc = c
         .cfg
@@ -877,13 +907,7 @@ fn catalogue(c: &Ctx) -> Option<(String, BTreeMap<String, String>)> {
         .clone()
         .unwrap_or_else(|| "locale/pt_BR.po".into());
     let path = c.pkg.join(&rel_loc);
-    let text = fs::read_to_string(&path).ok()?;
-    let map = i18n::parse_po(&text)
-        .into_iter()
-        .filter(|e| !e.obsolete && !e.msgid.is_empty())
-        .map(|e| (e.msgid, e.strs.first().cloned().unwrap_or_default()))
-        .collect();
-    Some((rel(&c.root, &path), map))
+    Some((rel(&c.root, &path), load_catalogue(&path)?))
 }
 
 fn rule_sidebar(c: &Ctx) -> Vec<Violation> {
@@ -1075,7 +1099,10 @@ fn rule_select_case(c: &Ctx) -> Vec<Violation> {
 }
 
 // ── FRAPPE-DOCTYPE-LABEL-TRANSLATED ────────────────────────────────────────
-fn collect_translatable(v: &Value, doctype_file: bool, out: &mut Vec<String>) {
+/// Append the translatable strings of a JSON document to `out`. The accumulator is any
+/// `Extend<String>` so the signature takes no `&mut Vec` (RUST-IDIOMATIC-SLICES): a slice cannot
+/// grow, and an append-only out-parameter has no slice form.
+fn collect_translatable(v: &Value, doctype_file: bool, out: &mut impl Extend<String>) {
     match v {
         Value::Object(m) => {
             let select_options = (m.get("fieldtype").and_then(|x| x.as_str()) == Some("Select"))
@@ -1086,9 +1113,11 @@ fn collect_translatable(v: &Value, doctype_file: bool, out: &mut Vec<String>) {
             }
             for (k, val) in m {
                 match (k.as_str(), val) {
-                    ("label" | "chart_name", Value::String(t)) => out.push(t.trim().to_string()),
+                    ("label" | "chart_name", Value::String(t)) => {
+                        out.extend(std::iter::once(t.trim().to_string()))
+                    }
                     ("description", Value::String(t)) if doctype_file => {
-                        out.push(t.trim().to_string())
+                        out.extend(std::iter::once(t.trim().to_string()))
                     }
                     _ => collect_translatable(val, doctype_file, out),
                 }
@@ -2466,6 +2495,340 @@ fn rule_privileged_read(c: &Ctx) -> Vec<Violation> {
     scan.out
 }
 
+// ── FRAPPE-I18N-SOURCE-LITERALS (GB-082) ───────────────────────────────────
+/// Undo the escapes of a Python string literal so it compares with the unescaped `msgid`.
+fn py_unescape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('"') => out.push('"'),
+            Some('\'') => out.push('\''),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// A literal `_()` can translate: it carries words and is not a template fragment.
+fn translatable_literal(s: &str) -> bool {
+    s.chars().any(|c| c.is_alphabetic()) && !s.contains("{{")
+}
+
+/// Every string literal passed to `_(` in one Python file, as (1-based line, literal).
+///
+/// The read is textual — the engine never imports the app (ARCH-NO-PYTHON) — so it follows the
+/// one shape a gettext call has: `_` at a word boundary in *code* (never inside a string, a
+/// docstring or a comment), `(`, then a string literal, possibly on the next line because the
+/// call is wrapped. Escapes are undone the way the catalogue undoes its `msgid`; a triple-quoted
+/// literal is read whole; an implicit concatenation (`_("a" "b")`) is skipped because the joined
+/// string, not the piece, is the key. A wrapped call whose first argument is a variable is not a
+/// literal and is skipped, not guessed.
+fn translation_literals(text: &str) -> Vec<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut line_at: Vec<usize> = Vec::with_capacity(chars.len());
+    let mut ln = 1usize;
+    for ch in &chars {
+        line_at.push(ln);
+        if *ch == '\n' {
+            ln += 1;
+        }
+    }
+    let line_of_index = |k: usize| line_at[k.min(line_at.len().saturating_sub(1))];
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    // `Some((quote, triple))` while inside any string literal, so `_` in prose never matches.
+    let mut inside: Option<(char, bool)> = None;
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some((q, triple)) = inside {
+            if ch == '\\' {
+                i += 2;
+                continue;
+            }
+            let closes = ch == q
+                && (!triple || (chars.get(i + 1) == Some(&q) && chars.get(i + 2) == Some(&q)));
+            if closes {
+                i += if triple { 3 } else { 1 };
+                inside = None;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        match ch {
+            '#' => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '"' | '\'' => {
+                let triple = chars.get(i + 1) == Some(&ch) && chars.get(i + 2) == Some(&ch);
+                i += if triple { 3 } else { 1 };
+                inside = Some((ch, triple));
+                continue;
+            }
+            '_' if (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_'))
+                && chars.get(i + 1) == Some(&'(') =>
+            {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
+        // `_` followed by `(`: the argument must be a literal, or there is nothing to compare.
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let Some(&q) = chars.get(i) else { break };
+        if q != '"' && q != '\'' {
+            continue;
+        }
+        let triple = chars.get(i + 1) == Some(&q) && chars.get(i + 2) == Some(&q);
+        i += if triple { 3 } else { 1 };
+        let start = i;
+        let mut raw = String::new();
+        let mut closed = false;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\\' {
+                match chars.get(i + 1) {
+                    Some(&next) => {
+                        raw.push(ch);
+                        raw.push(next);
+                        i += 2;
+                    }
+                    None => break,
+                }
+                continue;
+            }
+            if !triple && ch == '\n' {
+                break; // an unterminated single-quoted literal: not a call we can read
+            }
+            if ch == q {
+                let closes =
+                    !triple || (chars.get(i + 1) == Some(&q) && chars.get(i + 2) == Some(&q));
+                if closes {
+                    i += if triple { 3 } else { 1 };
+                    closed = true;
+                    break;
+                }
+            }
+            raw.push(ch);
+            i += 1;
+        }
+        if !closed {
+            continue;
+        }
+        let after = i;
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i > after && (chars.get(i) == Some(&'"') || chars.get(i) == Some(&'\'')) {
+            continue; // implicit concatenation: the msgid is the joined string
+        }
+        // The literal is the first argument: `)`, `,` (format args), `.format(...)` or `%`.
+        match chars.get(i) {
+            Some(')') | Some(',') | Some('.') | Some('%') => {}
+            _ => continue,
+        }
+        out.push((line_of_index(start), py_unescape(&raw)));
+    }
+    out
+}
+
+/// The catalogue the app actually ships, unlike `catalogue()` which only looks inside the package:
+/// `locale_file` of `[frappe]` when set, else `<package>/locale/*.po`, else the bench layout
+/// `<app>/locale/*.po` one level up. `pt_BR.po` wins, then alphabetical. No `.po`, no findings.
+fn po_catalogue(c: &Ctx) -> Option<(String, BTreeMap<String, String>)> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    if let Some(f) = &c.cfg.locale_file {
+        let p = Path::new(f);
+        let inside = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            c.pkg.join(p)
+        };
+        found.push(inside);
+        found.push(c.root.join(f));
+    }
+    let mut dirs: Vec<PathBuf> = vec![c.pkg.join("locale")];
+    if let Some(parent) = c.pkg.parent() {
+        dirs.push(parent.join("locale"));
+    }
+    for d in &dirs {
+        let mut here: Vec<PathBuf> = fs::read_dir(d)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|x| x == "po").unwrap_or(false))
+                    .collect()
+            })
+            .unwrap_or_default();
+        here.sort();
+        here.sort_by_key(|p| p.file_name().and_then(|n| n.to_str()) != Some("pt_BR.po"));
+        found.append(&mut here);
+    }
+    let path = found.into_iter().find(|p| p.is_file())?;
+    Some((rel(&c.root, &path), load_catalogue(&path)?))
+}
+
+fn rule_i18n_literals(c: &Ctx) -> Vec<Violation> {
+    let Some((pr, map)) = po_catalogue(c) else {
+        return Vec::new(); // no catalogue: nothing to compare against, stay silent
+    };
+    let mut out = Vec::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+    {
+        let text = read(p);
+        // one entry per literal, at its first line, with the number of calls
+        let mut missing: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for (line, lit) in translation_literals(&text) {
+            if !translatable_literal(&lit) || map.contains_key(&lit) {
+                continue;
+            }
+            let e = missing.entry(lit).or_insert((line, 0));
+            e.1 += 1;
+        }
+        for (lit, (line, n)) in missing {
+            out.push(viol(
+                "FRAPPE-I18N-SOURCE-LITERALS",
+                &rel(&c.root, p),
+                line,
+                &lit,
+                format!(
+                    "`_(\"{lit}\")`{} has no msgid in {pr}: gettext returns the source string, so it reaches the screen in English on a translated page (GB-082).",
+                    if n > 1 { format!(" ({n} calls)") } else { String::new() }
+                ),
+                "Add the msgid and its translation to the catalogue, or stop passing the technical string through `_()`.",
+            ));
+        }
+    }
+    out
+}
+
+// ── FRAPPE-OTHER-OPTION-NEEDS-TEXT (GB-081) ────────────────────────────────
+/// Options that promise free text the Select cannot hold.
+const OTHER_OPTIONS: &[&str] = &["other", "outro"];
+/// Fieldtypes that can carry the text the `Other` option stands for.
+const OTHER_TEXT_TYPES: &[&str] = &["Data", "Text", "Long Text", "Small Text"];
+/// Closed lists where `Other` is a final category and asking for a sentence afterwards is wrong
+/// design: a relationship reads "Other", not a description of the kinship. Reference case from
+/// GB-081 triage: `Emergency Contact.relationship`. Keep this list short and fieldname-exact.
+const CLOSED_LIST_FIELDS: &[&str] = &[
+    "relationship",
+    "gender",
+    "salutation",
+    "employment_type",
+    "industry",
+    "sector",
+];
+
+/// True when the field points at `select` in `depends_on`, or its label/description names it.
+fn cites_field(g: &Field, select: &Field) -> bool {
+    let named = |hay: &str| {
+        hay.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|w| w == select.fieldname)
+    };
+    named(&g.depends_on)
+        || (!select.label.is_empty()
+            && (g
+                .label
+                .to_lowercase()
+                .contains(&select.label.to_lowercase())
+                || g.description
+                    .to_lowercase()
+                    .contains(&select.label.to_lowercase())))
+}
+
+fn rule_other_option(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for d in &c.doctypes {
+        for f in d.fields.iter().filter(|f| f.fieldtype == "Select") {
+            let opts: Vec<&str> = f
+                .options
+                .split('\n')
+                .map(str::trim)
+                .filter(|o| !o.is_empty())
+                .collect();
+            let Some(opt) = opts
+                .iter()
+                .find(|o| OTHER_OPTIONS.contains(&o.to_lowercase().as_str()))
+            else {
+                continue;
+            };
+            if CLOSED_LIST_FIELDS.contains(&f.fieldname.as_str()) {
+                continue; // documented exception: `Other` is the answer, not a placeholder
+            }
+            let companions: Vec<&str> = d
+                .fields
+                .iter()
+                .filter(|g| {
+                    g.fieldname != f.fieldname && OTHER_TEXT_TYPES.contains(&g.fieldtype.as_str())
+                })
+                .filter(|g| cites_field(g, f))
+                .map(|g| g.fieldname.as_str())
+                .collect();
+            if !companions.is_empty() {
+                continue;
+            }
+            // A short list is as likely to be a closed list as a broken promise: advisory.
+            let sev = if opts.len() <= 6 {
+                Severity::Warning
+            } else {
+                Severity::Error
+            };
+            let text_fields: Vec<&str> = d
+                .fields
+                .iter()
+                .filter(|g| OTHER_TEXT_TYPES.contains(&g.fieldtype.as_str()))
+                .map(|g| g.fieldname.as_str())
+                .collect();
+            out.push(viol_as(
+                "FRAPPE-OTHER-OPTION-NEEDS-TEXT",
+                sev,
+                &d.rel,
+                line_of(&d.text, &format!("\"{}\"", f.fieldname)),
+                &f.fieldname,
+                format!(
+                    "`{}.{}` offers `{opt}` among {} options and no text field is tied to it: whoever picks `{opt}` stores a value with no place to say what it is (GB-081). Text fields in the DocType: {}.",
+                    d.name,
+                    f.fieldname,
+                    opts.len(),
+                    if text_fields.is_empty() {
+                        "none".to_string()
+                    } else {
+                        text_fields.join(", ")
+                    }
+                ),
+                &format!(
+                    "Add a Data/Text field whose `depends_on` is `eval:doc.{}=='{opt}'` (mandatory in that branch), or drop `{opt}` from the options.",
+                    f.fieldname
+                ),
+            ));
+        }
+    }
+    out
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -2488,6 +2851,8 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_silent_except,
         rule_min_syntax,
         rule_privileged_read,
+        rule_i18n_literals,
+        rule_other_option,
     ] {
         all.extend(f(&c));
     }
@@ -2498,7 +2863,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 }
 
 // ── self-test fixtures ─────────────────────────────────────────────────────
-const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}],"permissions":[{"role":"ROLE"}]}"#;
+const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"kind","fieldtype":"Select","options":"KINDS"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}EXTRA],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
 const PART_JSON_BAD: &str = r#"{"doctype":"DocType","name":"Part","fields":[]}"#;
 const WIDGET_JSON: &str =
@@ -2520,7 +2885,11 @@ const SAFETY_BAD: &str = "import frappe\n\n\ndef sync(doc):\n\tskipped = 0\n\ttr
 /// reads the User in the session of whoever saved.
 const SESSION_GOOD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tprevious = frappe.session.user\n\tfrappe.set_user(\"Administrator\")\n\ttry:\n\t\tuser = frappe.get_doc(\"User\", \"Administrator\")\n\t\tuser.add_roles(\"Demo Role\")\n\tfinally:\n\t\tfrappe.set_user(previous)\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept (TypeError, ValueError):\n\t\treturn 0\n";
 const SESSION_BAD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tuser = frappe.get_doc(\"User\", doc.user)\n\tuser.add_roles(\"Demo Role\")\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept TypeError, ValueError:\n\t\treturn 0\n";
-const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
+const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Kind note\"\nmsgstr \"Nota do tipo\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
+/// FRAPPE-I18N-SOURCE-LITERALS: one `_()` call inline and one wrapped over three lines. The good
+/// file only uses msgids the catalogue carries; the bad file adds a literal nobody translated.
+const LABELS_GOOD: &str = "from frappe import _\n\n\ndef parts_label():\n\treturn _(\"Parts\")\n\n\ndef wrapped():\n\treturn _(\n\t\t\"Parts\"\n\t)\n";
+const LABELS_BAD: &str = "from frappe import _\n\n\ndef parts_label():\n\treturn _(\"Parts\")\n\n\ndef wrapped():\n\treturn _(\n\t\t\"Uncatalogued label\"\n\t)\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
@@ -2574,7 +2943,25 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             "demoapp/demo/doctype/thing/thing.json",
             &THING_JSON
                 .replace("ROLE", if bad { "Ghost Role" } else { "Demo Role" })
-                .replace("LBL", if bad { "Mystery label" } else { "Part" }),
+                .replace("LBL", if bad { "Mystery label" } else { "Part" })
+                // FRAPPE-OTHER-OPTION-NEEDS-TEXT: seven options ending in `Other` with no
+                // companion field; the good tree keeps a closed list of two.
+                .replace(
+                    "KINDS",
+                    if bad {
+                        "Alpha\\nBravo\\nCharlie\\nDelta\\nEcho\\nFoxtrot\\nOther"
+                    } else {
+                        "Open day\\nClosed day"
+                    }
+                )
+                .replace(
+                    "EXTRA",
+                    if bad {
+                        ""
+                    } else {
+                        ",{\"fieldname\":\"kind_note\",\"fieldtype\":\"Data\",\"label\":\"Kind note\",\"depends_on\":\"eval:doc.kind=='Other'\"}"
+                    },
+                ),
         ),
         f(
             "demoapp/fixtures/role.json",
@@ -2599,6 +2986,10 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/session.py",
             if bad { SESSION_BAD } else { SESSION_GOOD },
+        ),
+        f(
+            "demoapp/labels.py",
+            if bad { LABELS_BAD } else { LABELS_GOOD },
         ),
         f("demoapp/demo/doctype/widget/__init__.py", ""),
         f("demoapp/demo/doctype/widget/widget.json", WIDGET_JSON),
@@ -2726,5 +3117,60 @@ mod tests {
         assert!(select_case_problem("Open day", "Dia Aberto").is_some());
         assert!(select_case_problem("Open Day", "Dia Aberto").is_none());
         assert!(select_case_problem("Open day", "Dia aberto").is_none());
+    }
+
+    /// The scanner reads the shapes the real app writes: a wrapped call, an escaped quote, a
+    /// single-quoted literal — and ignores what only looks like a call (docstring, comment,
+    /// string constant, concatenation, a variable argument).
+    #[test]
+    fn translation_literals_reads_code_not_prose() {
+        let src = "from frappe import _\n\nDOC = \"_('not a call')\"\n\n\ndef one():\n\treturn _(\n\t\t\"Wrapped over lines\"\n\t)\n\n\ndef two():\n\treturn _(\"He said \\\"hi\\\"\")\n\n\ndef three():\n\treturn _('Single quoted')\n\n\ndef four():\n\treturn _(name)\n\n\ndef five():\n\treturn _(\"joined \" \"piece\")\n\n\ndef six():\n\t# _(\"commented out\")\n\treturn _(\"Real one\").format(x=1)\n\n\"\"\"A docstring quoting _(\"prose\") is not a call.\"\"\"\n";
+        let got: Vec<(usize, String)> = translation_literals(src);
+        let texts: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Wrapped over lines",
+                "He said \"hi\"",
+                "Single quoted",
+                "Real one"
+            ]
+        );
+        assert_eq!(got[0].0, 8, "the line of the literal, not of the call");
+    }
+
+    /// GB-081 reference pair: `gender_other` with a `depends_on` that names the Select satisfies
+    /// the rule; the same Select without it does not.
+    #[test]
+    fn companion_field_detection() {
+        let select = Field {
+            fieldname: "gender".into(),
+            fieldtype: "Select".into(),
+            options: "Woman\nMan\nOther".into(),
+            read_only: false,
+            label: "Gender".into(),
+            description: String::new(),
+            depends_on: String::new(),
+        };
+        let companion = Field {
+            fieldname: "gender_other".into(),
+            fieldtype: "Data".into(),
+            options: String::new(),
+            read_only: false,
+            label: "How do you describe your gender?".into(),
+            description: String::new(),
+            depends_on: "eval:doc.gender=='Other'".into(),
+        };
+        assert!(cites_field(&companion, &select));
+        let unrelated = Field {
+            fieldname: "notes".into(),
+            fieldtype: "Small Text".into(),
+            options: String::new(),
+            read_only: false,
+            label: "Notes".into(),
+            description: String::new(),
+            depends_on: String::new(),
+        };
+        assert!(!cites_field(&unrelated, &select));
     }
 }
