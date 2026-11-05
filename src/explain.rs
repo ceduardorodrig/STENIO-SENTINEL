@@ -1049,6 +1049,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the role to the `in` list of the Role fixture filter in hooks.py (or drop it from the fixture).",
     },
     RuleExplanation {
+        id: "FRAPPE-SILENT-EXCEPT",
+        name: "Exception Swallowed Without A Record",
+        severity: "ERROR",
+        tag: "frappe",
+        summary: "A `try` whose `except` neither records the failure (frappe.log_error, logger.*, log.*, traceback) nor re-raises: a broad handler (bare `except`, Exception, BaseException) is ERROR, a narrow type whose body is only pass/continue/return/empty is WARNING, and `print` is volatile output, not a record. try/finally without except, tests/ and docstrings are out of scope.",
+        rationale: "Four automations of the platform failed in silence: the `except` swallowed the exception and the user saw nothing, so a broken job looked healthy every night. The same static shape hid a dead branch: `except DuplicateToDoError` stopped firing when Frappe 15 stopped raising it, the counter counted requests that were never created, and the handler looked like it handled the case. Both bugs share one signature — a try whose except records nothing and does not re-raise — so the rule reads the source instead of trusting the handler. The expected-exception probe is a documented carve-out: DoesNotExistError, ImportError, ModuleNotFoundError and AttributeError answer a question (does the doc exist? is the package installed?) and stay silent; any other narrow type with a bare body is a WARNING; a narrow type whose body returns or assigns a decision stays silent because the decision is visible.",
+        bad_example: "except Exception:\n\tpass",
+        good_example: "except Exception as exc:\n\tfrappe.log_error(title=\"reminder failed\", message=f\"{type(exc).__name__}: {exc}\")\n\traise",
+        remediation: "Record the failure with frappe.log_error (title plus the exception type and message) or re-raise; when the exception is an expected probe, keep the narrow type and return the decision explicitly instead of `pass`.",
+    },
+    RuleExplanation {
         id: "FRAPPE-JSON-MODIFIED-BUMP",
         name: "JSON Changed Without Newer modified",
         severity: "ERROR",
@@ -1106,9 +1117,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
+    // `--explain opportunity` is the natural entry point for the command that writes the row.
+    let wanted = if rule_id.eq_ignore_ascii_case("opportunity")
+        || rule_id.eq_ignore_ascii_case("opportunity-add")
+    {
+        crate::opportunity::FORMAT_RULE_ID
+    } else {
+        rule_id
+    };
     EXPLANATIONS
         .iter()
-        .find(|e| e.id.eq_ignore_ascii_case(rule_id))
+        .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 
 pub fn format_explanation_cli(exp: &RuleExplanation) -> String {

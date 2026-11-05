@@ -542,6 +542,112 @@ pub struct GuardianReport {
     pub tamper_alerts: Vec<String>,
 }
 
+/// Collapses every whitespace run into a single space and treats line-comment markers
+/// (`//!`, `///`, `//`) as whitespace.
+///
+/// The anchors below are literal sentences pinned in this file, and a comment reflow can
+/// split one across lines: `… and has no` / `//! suppression directive.` broke the
+/// `frappe.rs` anchor for several releases and the only visible effect was a
+/// `CRITICAL TAMPER ALERT` nobody read. Reflow is not tampering; removing the sentence is.
+/// Normalising both sides keeps the substring test exact on words while ignoring layout —
+/// and because `//!` becomes a space, the reflowed sentence matches again.
+fn normalize_anchor_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pending_space = false;
+    let mut rest = text;
+    while let Some(ch) = rest.chars().next() {
+        // A line-comment marker carries no meaning for the anchor, so it is layout too.
+        let marker_len = ["//!", "///", "//"]
+            .iter()
+            .find(|marker| rest.starts_with(**marker))
+            .map(|marker| marker.len());
+        if let Some(skip) = marker_len {
+            pending_space = !out.is_empty();
+            rest = &rest[skip..];
+            continue;
+        }
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+            rest = &rest[ch.len_utf8()..];
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+/// Exact, case-sensitive presence of an anchor in already-normalised module text.
+fn anchor_present(normalized_content: &str, required: &str) -> bool {
+    normalized_content.contains(&normalize_anchor_text(required))
+}
+
+/// Verifies every mandatory anchor of every critical module under `stenio_src_dir/src`.
+///
+/// Returns `(files_checked, tamper_alerts, override_messages)`. A protected module that is
+/// missing is still a critical alert — that is one of the cases the gate exists for. An
+/// anchor removed under `STENIO_HUMAN_AUTHORIZATION` is reported, not alerted, exactly as
+/// before: the human override is a deliberate hand on the gate, not tampering.
+fn audit_critical_modules(
+    stenio_src_dir: &Path,
+    critical_modules: &[(&str, &[&str])],
+) -> (usize, Vec<String>, Vec<String>) {
+    let mut files_checked = 0;
+    let mut tamper_alerts = Vec::new();
+    let mut override_messages = Vec::new();
+
+    for &(module, required_strings) in critical_modules {
+        let p = stenio_src_dir.join("src").join(module);
+        if p.exists() {
+            files_checked += 1;
+            if let Ok(content) = fs::read_to_string(&p) {
+                // Anchors are matched on a whitespace-normalised copy of the module, so a
+                // comment reflow cannot fake a removal; the words themselves stay exact.
+                let normalized = normalize_anchor_text(&content);
+                // Check presence of all required invariant strings with Human Override support
+                let human_auth = std::env::var("STENIO_HUMAN_AUTHORIZATION").ok();
+                for required in required_strings {
+                    if !anchor_present(&normalized, required) {
+                        if let Some(ref auth) = human_auth {
+                            if auth.contains(*required) || auth == "AUTHORIZED" || auth == "ALL" {
+                                override_messages.push(format!(
+                                    "ℹ️ Modification/removal of '{}' [{}] authorized by human via STENIO_HUMAN_AUTHORIZATION.",
+                                    required, module
+                                ));
+                                continue;
+                            }
+                        }
+                        tamper_alerts.push(format!(
+                            "🚨 CRITICAL TAMPER ALERT [{}]: mandatory invariant string '{}' was removed or altered without STENIO_HUMAN_AUTHORIZATION!",
+                            module, required
+                        ));
+                    }
+                }
+
+                // Anti-Tampering check: explicit global bypass
+                let bypass_count = content.matches("// stenio-ignore-all").count();
+                if bypass_count > 0 {
+                    tamper_alerts.push(format!(
+                        "🚨 SECURITY ALERT [{}]: {} global bypass occurrence(s) detected!",
+                        module, bypass_count
+                    ));
+                }
+            }
+        } else {
+            tamper_alerts.push(format!(
+                "🚨 CRITICAL ALERT: core module '{}' was deleted from Stenio source tree!",
+                module
+            ));
+        }
+    }
+
+    (files_checked, tamper_alerts, override_messages)
+}
+
 /// Guardian audits the cryptographic integrity of the Stenio binary and source code.
 /// If an AI agent or malicious script attempts to tamper with governance rules,
 /// weaken regexes, or disable checks, Guardian immediately flags the tampering.
@@ -732,47 +838,11 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         ),
     ];
 
-    for (module, required_strings) in critical_modules {
-        let p = stenio_src_dir.join("src").join(module);
-        if p.exists() {
-            files_checked += 1;
-            if let Ok(content) = fs::read_to_string(&p) {
-                // Check presence of all required invariant strings with Human Override support
-                let human_auth = std::env::var("STENIO_HUMAN_AUTHORIZATION").ok();
-                for required in *required_strings {
-                    if !content.contains(required) {
-                        if let Some(ref auth) = human_auth {
-                            if auth.contains(required) || auth == "AUTHORIZED" || auth == "ALL" {
-                                messages.push(format!(
-                                    "ℹ️ Modification/removal of '{}' [{}] authorized by human via STENIO_HUMAN_AUTHORIZATION.",
-                                    required, module
-                                ));
-                                continue;
-                            }
-                        }
-                        tamper_alerts.push(format!(
-                            "🚨 CRITICAL TAMPER ALERT [{}]: mandatory invariant string '{}' was removed or altered without STENIO_HUMAN_AUTHORIZATION!",
-                            module, required
-                        ));
-                    }
-                }
-
-                // Anti-Tampering check: explicit global bypass
-                let bypass_count = content.matches("// stenio-ignore-all").count();
-                if bypass_count > 0 {
-                    tamper_alerts.push(format!(
-                        "🚨 SECURITY ALERT [{}]: {} global bypass occurrence(s) detected!",
-                        module, bypass_count
-                    ));
-                }
-            }
-        } else {
-            tamper_alerts.push(format!(
-                "🚨 CRITICAL ALERT: core module '{}' was deleted from Stenio source tree!",
-                module
-            ));
-        }
-    }
+    let (module_files_checked, module_alerts, module_overrides) =
+        audit_critical_modules(stenio_src_dir, critical_modules);
+    files_checked += module_files_checked;
+    tamper_alerts.extend(module_alerts);
+    messages.extend(module_overrides);
 
     let is_intact = tamper_alerts.is_empty();
     if is_intact {
@@ -948,5 +1018,133 @@ mod tests {
         let found = result.unwrap_or_default();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].rule_id, "SEC-SECRETS-HISTORY");
+    }
+
+    // ── Anchor anti-tampering ────────────────────────────────────────────────
+    //
+    // The anchors are literal sentences, so a comment reflow used to look exactly like a
+    // removal: `… and has no` / `//! suppression directive.` raised
+    // `CRITICAL TAMPER ALERT [frappe.rs]` for several releases, unread, because the check
+    // only ran by hand. These fixtures pin both directions: layout changes pass, losing
+    // the sentence (or a word in it) still fails.
+
+    /// The anchored sentence the fixtures protect.
+    const ANCHOR: &str = "no suppression directive";
+
+    /// Synthetic stand-in for the real `frappe.rs` row of `critical_modules`.
+    const FIXTURE_MODULES: &[(&str, &[&str])] = &[("frappe.rs", &[ANCHOR])];
+
+    /// Writes `body` as `src/frappe.rs` under a throwaway project root (or no file at all).
+    fn anchor_root(tag: &str, body: Option<&str>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "stenio-guardian-anchors-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(dir.join("src"));
+        if let Some(body) = body {
+            let _ = fs::write(dir.join("src").join("frappe.rs"), body);
+        }
+        dir
+    }
+
+    /// `(files_checked, tamper_alerts)` for the fixture table; the temp tree is removed.
+    fn anchor_audit(tag: &str, body: Option<&str>) -> (usize, Vec<String>) {
+        let dir = anchor_root(tag, body);
+        let (checked, alerts, _) = audit_critical_modules(&dir, FIXTURE_MODULES);
+        let _ = fs::remove_dir_all(&dir);
+        (checked, alerts)
+    }
+
+    /// (a) Anchor on a single line — the shape the pin was written in.
+    #[test]
+    fn anchor_on_one_line_passes() {
+        let (checked, alerts) = anchor_audit(
+            "one-line",
+            Some("//! Every rule here is static and has no suppression directive. Done.\n"),
+        );
+        assert_eq!(checked, 1);
+        assert!(alerts.is_empty(), "{alerts:?}");
+    }
+
+    /// (b) Today's regression: reflow splits the sentence, including a `//!` inside it.
+    #[test]
+    fn anchor_reflowed_across_lines_passes() {
+        let (_, split_before_noun) = anchor_audit(
+            "reflow-a",
+            Some(
+                "//! Every rule here is static (no site, no bench) and has no\n\
+                 //! suppression directive. The app is described by the `[frappe]` table.\n",
+            ),
+        );
+        assert!(split_before_noun.is_empty(), "{split_before_noun:?}");
+
+        // Worse case: the comment marker lands *inside* the phrase.
+        let (_, marker_mid_phrase) = anchor_audit(
+            "reflow-b",
+            Some("//! Every rule here is static and has no suppression\n//! directive. Done.\n"),
+        );
+        assert!(marker_mid_phrase.is_empty(), "{marker_mid_phrase:?}");
+    }
+
+    /// (c) The sentence actually removed — the case the gate exists for.
+    #[test]
+    fn anchor_removed_fails() {
+        let (_, alerts) = anchor_audit(
+            "removed",
+            Some("//! Every rule here is static and documented elsewhere.\n"),
+        );
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        assert!(
+            alerts[0].contains("CRITICAL TAMPER ALERT [frappe.rs]"),
+            "{alerts:?}"
+        );
+        assert!(alerts[0].contains(ANCHOR), "{alerts:?}");
+    }
+
+    /// (d) One word changed (and the all-caps version) still fails: no fuzzy matching.
+    #[test]
+    fn anchor_with_altered_word_fails() {
+        let (_, altered) = anchor_audit(
+            "altered",
+            Some("//! Every rule here is static and has no suppression policy.\n"),
+        );
+        assert_eq!(altered.len(), 1, "{altered:?}");
+        assert!(
+            altered[0].contains("CRITICAL TAMPER ALERT [frappe.rs]"),
+            "{altered:?}"
+        );
+
+        let (_, recased) = anchor_audit(
+            "recased",
+            Some("//! Every rule here is static and has NO SUPPRESSION DIRECTIVE.\n"),
+        );
+        assert_eq!(recased.len(), 1, "{recased:?}");
+    }
+
+    /// (e) A protected module that is gone is still the loudest alert.
+    #[test]
+    fn missing_protected_module_still_fails() {
+        let (checked, alerts) = anchor_audit("missing", None);
+        assert_eq!(checked, 0);
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        assert!(
+            alerts[0].contains("core module 'frappe.rs' was deleted"),
+            "{alerts:?}"
+        );
+    }
+
+    /// The real tree, audited by the same path `--guardian` uses, must stay clean. This is
+    /// what makes the anchor gate run on every `cargo test` instead of by hand.
+    #[test]
+    fn real_tree_passes_anchor_audit() {
+        let report = audit_stenio_integrity(Path::new(env!("CARGO_MANIFEST_DIR")));
+        assert!(
+            report.tamper_alerts.is_empty(),
+            "{:?}",
+            report.tamper_alerts
+        );
+        assert!(report.source_files_checked > 0);
+        assert!(report.is_intact);
     }
 }

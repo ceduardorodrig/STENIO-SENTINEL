@@ -89,6 +89,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Role Fixture Filter Drops A Role",
         Severity::Error,
     ),
+    (
+        "FRAPPE-SILENT-EXCEPT",
+        "Exception Swallowed Without A Record",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -1632,6 +1637,242 @@ fn rule_role_fixture_parity(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-SILENT-EXCEPT ───────────────────────────────────────────────────
+/// Handlers whose silence is an expected-exception probe, not a swallowed failure: the handler
+/// exists to answer a question (does the doc exist? is the optional package installed?) and the
+/// body carries the answer. Their trivial body is deliberate, so the rule stays silent.
+const TOLERATED_EXCEPTS: &[&str] = &[
+    "DoesNotExistError",
+    "ImportError",
+    "ModuleNotFoundError",
+    "AttributeError",
+];
+
+/// A statement that leaves no decision behind: the handler neither records nor answers.
+/// `return <value>` is a decision (`except X: return False` in an idempotency guard), so only the
+/// bare forms count here.
+fn py_swallow_stmt(s: &str) -> bool {
+    matches!(
+        s,
+        "pass" | "continue" | "break" | "..." | "return" | "return None"
+    )
+}
+
+/// Visual indentation of a source line (tabs count as one, as everywhere else in this module).
+fn py_indent(l: &str) -> usize {
+    l.len() - l.trim_start().len()
+}
+
+/// False for a line inside a triple-quoted string: a docstring quoting `except: pass` is prose,
+/// not a handler. Line numbering is preserved by keeping one entry per source line.
+fn py_code_line(line: &str, state: &mut Option<&'static str>) -> bool {
+    match *state {
+        Some(q) => {
+            if line.contains(q) {
+                *state = None;
+            }
+            false
+        }
+        None => {
+            if line.matches("\"\"\"").count() % 2 == 1 {
+                *state = Some("\"\"\"");
+            } else if line.matches("'''").count() % 2 == 1 {
+                *state = Some("'''");
+            }
+            true
+        }
+    }
+}
+
+/// `line` without its trailing comment (quotes respected, so a `#` in a message survives).
+fn py_strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    for (i, ch) in line.char_indices() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => {}
+            None => match ch {
+                '"' | '\'' => quote = Some(ch),
+                '#' => return &line[..i],
+                _ => {}
+            },
+        }
+    }
+    line
+}
+
+/// Byte index of the clause colon: the first `:` outside brackets and strings. A one-line body
+/// (`except Exception: pass`) ends the header on its own line instead of eating the next statement
+/// as if it were a continuation.
+fn py_clause_colon(l: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for (i, ch) in l.char_indices() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ':' if depth <= 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `except` clause opening at `start`: its exception expression (empty for a bare `except`),
+/// the index of its last header line and any body written on the same line.
+fn py_except_header(lines: &[&str], start: usize) -> Option<(String, usize, String)> {
+    let mut header = String::new();
+    let mut j = start;
+    loop {
+        let line = py_strip_comment(lines[j]);
+        let closed = py_clause_colon(line).is_some();
+        header.push_str(line.trim());
+        header.push(' ');
+        if closed {
+            break;
+        }
+        j += 1;
+        if j >= lines.len() {
+            return None;
+        }
+    }
+    let h = header.trim();
+    let colon = py_clause_colon(h)?;
+    let inline = h[colon + 1..].trim().to_string();
+    let head = h[..colon].trim();
+    let typ = head.strip_prefix("except").unwrap_or(head).trim();
+    let typ = typ
+        .trim_start_matches('*')
+        .split(" as ")
+        .next()
+        .unwrap_or(typ)
+        .trim()
+        .to_string();
+    Some((typ, j, inline))
+}
+
+/// True when the statement records the failure: a log, a re-raise or a thrown message. `print`
+/// is volatile output, not a record, so it does not count.
+fn py_registers(stmt: &str, log_re: &Regex) -> bool {
+    let s = stmt.trim_start();
+    if s == "raise" || s.starts_with("raise ") || s.starts_with("raise(") {
+        return true;
+    }
+    log_re.is_match(s)
+}
+
+/// A `try` whose `except` neither records the failure nor re-raises: the automation dies and the
+/// caller sees a healthy result. Static over the app's `.py` files, no site, no bench.
+fn rule_silent_except(c: &Ctx) -> Vec<Violation> {
+    let Ok(log_re) = Regex::new(
+        r"\b(?:frappe\.(?:log_error|logger|throw)|log_error|logger\.|logging\.|log\.|traceback)",
+    ) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in c.files.iter().filter(|p| {
+        p.extension().map(|e| e == "py").unwrap_or(false)
+            && !rel(&c.pkg, p).split('/').any(|s| s == "tests")
+            && !p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("test_") || n.ends_with("_test.py"))
+                .unwrap_or(true)
+    }) {
+        let text = read(p);
+        let lines: Vec<&str> = text.lines().collect();
+        let mut state: Option<&'static str> = None;
+        let code: Vec<bool> = lines.iter().map(|l| py_code_line(l, &mut state)).collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let t = py_strip_comment(lines[i]).trim();
+            let is_except = code[i]
+                && (t == "except"
+                    || t.starts_with("except ")
+                    || t.starts_with("except:")
+                    || t.starts_with("except(")
+                    || t.starts_with("except*"));
+            if !is_except {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            let Some((typ, last, inline)) = py_except_header(&lines, i) else {
+                i += 1;
+                continue;
+            };
+            let base = py_indent(lines[i]);
+            let mut end = last + 1;
+            while end < lines.len()
+                && (lines[end].trim().is_empty() || py_indent(lines[end]) > base)
+            {
+                end += 1;
+            }
+            let mut stmts: Vec<String> = Vec::new();
+            if !inline.is_empty() {
+                stmts.push(inline);
+            }
+            for l in &lines[last + 1..end] {
+                let s = py_strip_comment(l).trim();
+                if !s.is_empty() {
+                    stmts.push(s.to_string());
+                }
+            }
+            // Resume inside the body (not after it), so a `try` nested in the handler is scanned
+            // too: an outer handler that logs can still hide a silent inner one.
+            i = last + 1;
+            if stmts.iter().any(|s| py_registers(s, &log_re)) {
+                continue;
+            }
+            let swallow = stmts.is_empty() || stmts.iter().all(|s| py_swallow_stmt(s));
+            let broad = typ.is_empty()
+                || typ
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .any(|w| matches!(w, "Exception" | "BaseException" | "StandardError"));
+            let tolerated = TOLERATED_EXCEPTS.iter().any(|t| typ.contains(t));
+            let shown = if typ.is_empty() {
+                "except:".to_string()
+            } else {
+                format!("except {typ}:")
+            };
+            let line = start + 1;
+            if broad {
+                out.push(viol_as(
+                    "FRAPPE-SILENT-EXCEPT",
+                    Severity::Error,
+                    &rel(&c.root, p),
+                    line,
+                    lines[start].trim(),
+                    format!(
+                        "`{shown}` records nothing and does not re-raise: a failing automation looks like a healthy one (a broad handler also hides the real exception type)."
+                    ),
+                    "Record the failure with frappe.log_error(title=..., message=f\"{type(exc).__name__}: {exc}\") or re-raise; `print` is not a record.",
+                ));
+            } else if !tolerated && swallow {
+                out.push(viol_as(
+                    "FRAPPE-SILENT-EXCEPT",
+                    Severity::Warning,
+                    &rel(&c.root, p),
+                    line,
+                    lines[line - 1].trim(),
+                    format!(
+                        "`{shown}` has an empty `pass`/`return` body: the narrow type suggests an expected exception, but nothing in the handler says why it is ignored."
+                    ),
+                    "Return the decision explicitly (a value, not a bare `return`) or record it with frappe.log_error; keep the narrow type.",
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -1651,6 +1892,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_whitelist,
         rule_rules_coverage,
         rule_role_fixture_parity,
+        rule_silent_except,
     ] {
         all.extend(f(&c));
     }
@@ -1672,6 +1914,11 @@ const VALIDATORS_BAD: &str = "import frappe\n\n\ndef money(value):\n\treturn val
 /// A second declaration file joining the same gate (`rules["Widget"] = make()`).
 const MORE_RULES_GOOD: &str = "def extend(rules, make):\n\trules[\"Widget\"] = make()\n";
 const MORE_RULES_BAD: &str = "def extend(rules, make):\n\tpass\n";
+/// FRAPPE-SILENT-EXCEPT: the good file records, re-raises, or answers with a decision; the bad
+/// file swallows a broad exception with `pass` and with a counter, the shape that hid four broken
+/// automations.
+const SAFETY_GOOD: &str = "import frappe\n\n\ndef sync(doc):\n\ttry:\n\t\tdoc.insert()\n\texcept Exception as exc:\n\t\tfrappe.log_error(title=\"demo sync\", message=f\"{type(exc).__name__}: {exc}\")\n\t\traise\n\n\ndef optional():\n\ttry:\n\t\timport phonenumbers\n\texcept ImportError:\n\t\tphonenumbers = None\n\treturn phonenumbers\n\n\ndef number(value):\n\ttry:\n\t\treturn int(value)\n\texcept ValueError:\n\t\treturn 0\n";
+const SAFETY_BAD: &str = "import frappe\n\n\ndef sync(doc):\n\tskipped = 0\n\ttry:\n\t\tdoc.insert()\n\texcept Exception:\n\t\tpass\n\treturn skipped\n\n\ndef number(value):\n\tskipped = 0\n\ttry:\n\t\treturn int(value)\n\texcept Exception:\n\t\tskipped += 1\n\t\treturn None\n";
 const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
@@ -1743,6 +1990,10 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/more_rules.py",
             if bad { MORE_RULES_BAD } else { MORE_RULES_GOOD },
+        ),
+        f(
+            "demoapp/safety.py",
+            if bad { SAFETY_BAD } else { SAFETY_GOOD },
         ),
         f("demoapp/demo/doctype/widget/__init__.py", ""),
         f("demoapp/demo/doctype/widget/widget.json", WIDGET_JSON),

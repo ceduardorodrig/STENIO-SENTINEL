@@ -75,7 +75,8 @@ use vault::audit_vault;
     name = "stenio",
     author = "Sumænimá Platform",
     version = env!("CARGO_PKG_VERSION"),
-    about = "StenioSentinel — Universal Governance & Homelab Engine in Rust"
+    about = "StenioSentinel — Universal Governance & Homelab Engine in Rust",
+    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  backlog           Alias of --backlog (stenio backlog --next-id GB)\n  preflight         Alias of --pre-release --static-only"
 )]
 struct Args {
     #[arg(
@@ -1840,9 +1841,16 @@ fn main() -> Result<()> {
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
         Some("release-engine") => std::process::exit(release_engine::run_cli(&argv[1..])),
-        Some("opportunity") if argv.get(2).map(String::as_str) == Some("add") => {
+        Some("opportunity") => {
+            // `stenio opportunity add ...` and `stenio opportunity --help` share one parser;
+            // anything else falls through to the same usage error.
+            let tail = if argv.get(2).map(String::as_str) == Some("add") {
+                &argv[3..]
+            } else {
+                &argv[2..]
+            };
             let mut rest = vec!["stenio opportunity add".to_string()];
-            rest.extend_from_slice(&argv[3..]);
+            rest.extend_from_slice(tail);
             std::process::exit(opportunity::run_cli(&rest))
         }
         _ => {}

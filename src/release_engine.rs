@@ -318,6 +318,165 @@ fn check_build(r: &dyn Runner, a: &RelArgs) -> Line {
     }
 }
 
+/// `cargo metadata --locked --offline --no-deps`: parses `Cargo.toml` without the network.
+/// `--no-deps` stays because resolving the full graph offline downloads every target's crates
+/// (a macOS-only `fsevent-sys` is absent from this machine's cache), and the version parity below
+/// is what actually matters here.
+fn lockfile_argv() -> Vec<String> {
+    [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-deps",
+        "--format-version",
+        "1",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// The `name`/`version` pairs pinned by `Cargo.lock`, read straight from its `[[package]]` blocks.
+fn lockfile_versions(lock: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut current = String::new();
+    for line in lock.lines() {
+        let l = line.trim();
+        if l == "[[package]]" {
+            current.clear();
+        } else if current.is_empty()
+            && let Some(v) = l.strip_prefix("name = \"")
+            && let Some(v) = v.strip_suffix('"')
+        {
+            current = v.to_string();
+        } else if !current.is_empty()
+            && let Some(v) = l.strip_prefix("version = \"")
+            && let Some(v) = v.strip_suffix('"')
+        {
+            out.insert(std::mem::take(&mut current), v.to_string());
+        }
+    }
+    out
+}
+
+/// `cargo build --locked` refuses to build when `Cargo.lock` is behind `Cargo.toml` — but it
+/// refuses *after* leaving the previous `target/release/stenio` untouched, so a failed build
+/// looks like a successful one to every step downstream. Bumping `version` in `Cargo.toml` and
+/// running `cargo build --release --locked` exits non-zero while `target/release/stenio` still
+/// answers the old version (observed on 4.19.1 → 4.20.0). This proves the lockfile is in sync
+/// before anything is built and a FAIL stops the sequence.
+///
+/// The exit code alone is not enough: `--no-deps` skips resolution, so `cargo metadata --locked`
+/// exits 0 on a 0.1.0 manifest / 0.2.0 lockfile while `cargo build --locked` exits 101 (measured
+/// on a scratch crate). The JSON carries the manifest truth and `Cargo.lock` the pinned truth,
+/// so both are compared here, offline and without building.
+fn check_lockfile(r: &dyn Runner, a: &RelArgs) -> Line {
+    let meta = match r.run(Some(&a.repo), &lockfile_argv(), Duration::from_secs(120)) {
+        Ok(o) if out_ok(&o) => o.stdout,
+        Ok(o) => {
+            return fail(
+                "lockfile",
+                format!(
+                    "cargo metadata --locked exited {}: Cargo.lock is stale; run `cargo update --workspace` (or any command without --locked), commit Cargo.lock and recreate the tag",
+                    o.code
+                ),
+            );
+        }
+        Err(e) => return fail("lockfile", e),
+    };
+    let parsed: Value = match serde_json::from_str(&meta) {
+        Ok(v) => v,
+        Err(e) => return fail("lockfile", format!("cannot parse cargo metadata: {e}")),
+    };
+    let lock_path = a.repo.join("Cargo.lock");
+    let lock = match std::fs::read_to_string(&lock_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return fail(
+                "lockfile",
+                format!("cannot read {}: {e}", lock_path.display()),
+            );
+        }
+    };
+    let pinned = lockfile_versions(&lock);
+    let mut drift = Vec::new();
+    let mut members = 0usize;
+    for pkg in parsed
+        .get("packages")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let name = pkg.get("name").and_then(Value::as_str).unwrap_or_default();
+        let ver = pkg
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        members += 1;
+        match pinned.get(name) {
+            Some(p) if p == ver => {}
+            Some(p) => drift.push(format!("{name} {ver} in Cargo.toml, {p} in Cargo.lock")),
+            None => drift.push(format!("{name} {ver} is not in Cargo.lock")),
+        }
+    }
+    if members == 0 {
+        return fail(
+            "lockfile",
+            format!("cargo metadata lists no package in {}", a.repo.display()),
+        );
+    }
+    if drift.is_empty() {
+        pass(
+            "lockfile",
+            format!("Cargo.lock pins the {members} workspace version(s) of Cargo.toml"),
+        )
+    } else {
+        fail(
+            "lockfile",
+            format!(
+                "Cargo.lock is stale ({}): run `cargo update --workspace` (or any command without --locked), commit Cargo.lock and recreate the tag",
+                drift.join(", ")
+            ),
+        )
+    }
+}
+
+/// The version a string stands for, or "nothing" when it is empty.
+fn shown(v: &str) -> &str {
+    if v.is_empty() { "nothing" } else { v }
+}
+
+/// The artifact must declare the version the tag names. `check_install` compares the *installed*
+/// binary, which is exactly the one that hides a stale build: after a refused `cargo build
+/// --locked` the installed 4.19.1 still matches an old install record while the tag says 4.20.0.
+/// Reading `target/release/stenio --version` right after the build and stopping before install
+/// keeps a refused build from being published under a newer tag.
+fn check_binary_version(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
+    let bin = a.repo.join("target/release/stenio");
+    if !bin.is_file() {
+        return fail(
+            "binary-version",
+            format!("{} missing: the build produced no binary", bin.display()),
+        );
+    }
+    let argv = vec![bin.display().to_string(), "--version".to_string()];
+    match r.run(Some(&a.repo), &argv, Duration::from_secs(30)) {
+        Ok(o) if out_ok(&o) && version_of(&o) == version => {
+            pass("binary-version", format!("built binary declares {version}"))
+        }
+        Ok(o) if out_ok(&o) => fail(
+            "binary-version",
+            format!(
+                "the build declares '{}' but {} is {version}: stale target/release (the build failed earlier); nothing installed",
+                shown(&version_of(&o)),
+                a.tag
+            ),
+        ),
+        Ok(o) => fail("binary-version", format!("--version exited {}", o.code)),
+        Err(e) => fail("binary-version", e),
+    }
+}
+
 /// The artifact being released must pass its own tamper check. The anchors in `guardian.rs` are
 /// the only thing that tells a reflowed comment from a removed invariant, and this step exists
 /// because that gate used to run only by hand — which is to say it never ran. A comment that
@@ -402,11 +561,7 @@ fn check_install(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
             "install",
             format!(
                 "installed binary reports '{}' instead of {version}",
-                if now.is_empty() {
-                    "nothing"
-                } else {
-                    now.as_str()
-                }
+                shown(&now)
             ),
         )
     }
@@ -522,7 +677,8 @@ fn check_scope(r: &dyn Runner, a: &RelArgs, scope: &str, vault: &Path) -> Line {
     }
 }
 
-/// The whole sequence. Stops at the first failing prerequisite (tag, build, install).
+/// The whole sequence. Stops at the first failing prerequisite (tag), at a stale lockfile (before
+/// the build) and at a build that declares another version (before the install).
 fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     let version = a.tag.trim_start_matches('v').to_string();
     let mut out = Vec::new();
@@ -538,7 +694,19 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     };
     out.push(check_origin(r, a, &commit));
     out.push(check_ci(r, a, &commit));
+    let lock = check_lockfile(r, a);
+    let lock_ok = lock.status == Status::Pass;
+    out.push(lock);
+    if !lock_ok {
+        return out;
+    }
     out.push(check_build(r, a));
+    let declared = check_binary_version(r, a, &version);
+    let declared_ok = declared.status == Status::Pass;
+    out.push(declared);
+    if !declared_ok {
+        return out;
+    }
     out.push(check_integrity(r, a));
     let old = install_dir(a)
         .map(|d| installed_version(r, &d.join("stenio")))
@@ -582,7 +750,9 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("tag-local", format!("git -C {} rev-parse --verify -q {}^{{commit}}", a.repo.display(), a.tag)),
         ("tag-origin", format!("git -C {} ls-remote --tags origin refs/tags/{}", a.repo.display(), a.tag)),
         ("ci", "gh run list --commit <tag sha> --json workflowName,status,conclusion".to_string()),
+        ("lockfile", format!("cargo metadata --locked --offline --no-deps --format-version 1 (in {})", a.repo.display())),
         ("build", format!("cargo build --release --locked (in {})", a.repo.display())),
+        ("binary-version", format!("{}/target/release/stenio --version == {version}", a.repo.display())),
         ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
         ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
@@ -668,6 +838,11 @@ const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// One `[[package]]` block of a `Cargo.lock`, enough for [`lockfile_versions`].
+fn package_entry(name: &str, version: &str) -> String {
+    format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n")
+}
+
 /// A throwaway repo/install tree, so the install step copies real files it owns.
 fn fixture_tree(old: &str, new: &str) -> (RelArgs, PathBuf) {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -676,11 +851,9 @@ fn fixture_tree(old: &str, new: &str) -> (RelArgs, PathBuf) {
     let install = root.join("install");
     let _ = std::fs::create_dir_all(repo.join("target/release"));
     let _ = std::fs::create_dir_all(&install);
-    let _ = std::fs::write(repo.join("target/release/stenio"), new);
-    let _ = std::fs::write(install.join("stenio"), old);
     let a = RelArgs {
         tag: "v4.18.0".to_string(),
-        repo,
+        repo: repo.clone(),
         host: "kuaray".into(),
         container: "miracena-stenio".into(),
         compose_dir: "/srv/data/miracena".into(),
@@ -688,10 +861,18 @@ fn fixture_tree(old: &str, new: &str) -> (RelArgs, PathBuf) {
         image_repo: DEFAULT_IMAGE_REPO.into(),
         wait_secs: 0,
         build_timeout_secs: 1,
-        install_dir: Some(install),
+        install_dir: Some(install.clone()),
         skip_ci: true,
         dry_run: false,
     };
+    let _ = std::fs::write(repo.join("target/release/stenio"), new);
+    let _ = std::fs::write(install.join("stenio"), old);
+    // The lockfile the metadata step is compared against: it pins the tag version, and the cases
+    // that need it stale rewrite it.
+    let _ = std::fs::write(
+        repo.join("Cargo.lock"),
+        package_entry("stenio", a.tag.trim_start_matches('v')),
+    );
     (a, root)
 }
 
@@ -701,6 +882,7 @@ fn scripted(
 ) -> std::collections::BTreeMap<String, (i32, String)> {
     let repo = a.repo.display().to_string();
     let tag = a.tag.clone();
+    let version = a.tag.trim_start_matches('v');
     let bin = a
         .install_dir
         .as_ref()
@@ -744,6 +926,12 @@ fn scripted(
     m.insert(
         key(&["cargo", "build", "--release", "--locked"].map(String::from)),
         ok(""),
+    );
+    m.insert(
+        key(&lockfile_argv()),
+        ok(&format!(
+            "{{\"packages\":[{{\"name\":\"stenio\",\"version\":\"{version}\",\"manifest_path\":\"{repo}/Cargo.toml\"}}]}}"
+        )),
     );
     m.insert(
         key(&[&format!("{repo}/target/release/stenio"), "--guardian"].map(String::from)),
@@ -798,6 +986,30 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let (a3, tree3) = fixture_tree("4.17.0", "4.18.0");
     let missing = run_steps(&Fake(std::collections::BTreeMap::new()), &a3);
     let _ = std::fs::remove_dir_all(&tree3);
+    // A refused `cargo build --locked` leaves the previous binary in target/release: the tag says
+    // 4.18.0 while the file still declares 4.19.0. That is a FAIL before anything is installed.
+    let (a4, tree4) = fixture_tree("4.17.0", "4.19.0");
+    let stale = run_steps(&Fake(scripted(&a4, "4.18.0")), &a4);
+    let untouched = a4.install_dir.as_ref().is_some_and(|d| {
+        std::fs::read_to_string(d.join("stenio")).is_ok_and(|s| s.trim() == "4.17.0")
+            && !d.join("stenio.prev-4.17.0").is_file()
+    });
+    let _ = std::fs::remove_dir_all(&tree4);
+    // A stale Cargo.lock stops the sequence before the build is even attempted: both the easier
+    // path (metadata refuses) and the one that actually bit us (metadata --no-deps exits 0 while
+    // the lock pins another version).
+    let (a5, tree5) = fixture_tree("4.17.0", "4.18.0");
+    let mut stale_lock = scripted(&a5, "4.18.0");
+    stale_lock.insert(key(&lockfile_argv()), (101, String::new()));
+    let lockfail = run_steps(&Fake(stale_lock), &a5);
+    let _ = std::fs::remove_dir_all(&tree5);
+    let (a6, tree6) = fixture_tree("4.17.0", "4.18.0");
+    let _ = std::fs::write(
+        a6.repo.join("Cargo.lock"),
+        package_entry("stenio", "4.19.0"),
+    );
+    let driftlock = run_steps(&Fake(scripted(&a6, "4.18.0")), &a6);
+    let _ = std::fs::remove_dir_all(&tree6);
     let unsafe_tag = !valid(&RelArgs {
         tag: "v1;rm".into(),
         ..a.clone()
@@ -809,7 +1021,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 13,
+            plan(&a).len() == 15,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -823,7 +1035,32 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 13,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 15,
+        ),
+        (
+            "release-engine fails when the built binary declares another version".to_string(),
+            stale
+                .iter()
+                .any(|l| l.name == "binary-version" && l.status == Status::Fail)
+                && !stale.iter().any(|l| l.name == "install")
+                && untouched,
+        ),
+        (
+            "release-engine stops before the build on a stale lockfile".to_string(),
+            lockfail
+                .last()
+                .is_some_and(|l| l.name == "lockfile" && l.status == Status::Fail)
+                && !lockfail.iter().any(|l| l.name == "build"),
+        ),
+        (
+            "release-engine compares the lock version when cargo metadata accepts it".to_string(),
+            driftlock
+                .last()
+                .is_some_and(|l| l.name == "lockfile" && l.status == Status::Fail)
+                && driftlock
+                    .iter()
+                    .any(|l| l.detail.contains("4.19.0") && l.detail.contains("4.18.0"))
+                && !driftlock.iter().any(|l| l.name == "build"),
         ),
         ("release-engine keeps a rollback copy".to_string(), rollback),
     ]
