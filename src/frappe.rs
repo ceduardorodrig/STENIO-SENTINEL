@@ -114,6 +114,26 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Select Other Without A Companion Field",
         Severity::Error,
     ),
+    (
+        "VIZ-PANEL-SCHEMA",
+        "Dashboard Panel Type Against The Field It Measures",
+        Severity::Error,
+    ),
+    (
+        "NO-KANBAN-BOARD-FIXTURE",
+        "Desk-Owned Document Declared As A Fixture",
+        Severity::Error,
+    ),
+    (
+        "DOCTYPE-CALENDAR-GANTT-NEEDS-DATES",
+        "Calendar/Gantt View Without Its Dates",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-KANBAN-BOARD-DERIVED",
+        "Kanban Board Not Derived From The App",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -2829,6 +2849,472 @@ fn rule_other_option(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── VIZ-PANEL-SCHEMA (GB-086) ───────────────────────────────────────────────
+/// Selects whose option ORDER is the process itself. Listed by name instead of inferred: the
+/// engine cannot tell a funnel from a list of flavours without reading meaning into the option
+/// text, and a guess would fire on `Gender` while missing a renamed stage. Each entry carries the
+/// reason it belongs here, so a new ordinal can be added with one line of justification and not by
+/// widening a heuristic.
+const ORDINAL_SELECTS: &[(&str, &str, &str)] = &[
+    (
+        "Deal",
+        "stage",
+        "Lead -> Proposal -> Negotiation -> Won/Lost: a deal only moves down the list, so the option index is the funnel",
+    ),
+    (
+        "Invoice",
+        "status",
+        "Pending -> Paid -> Overdue -> Cancelled: the list is the invoice lifecycle, and the position says what still needs chasing",
+    ),
+    (
+        "OKR",
+        "status",
+        "On Track -> At Risk -> Behind -> Done: the list is the confidence ladder a steward reads at a glance",
+    ),
+];
+
+/// Line of the JSON object key that carries `value`. The documents here are written one key per
+/// line (the Desk export shape), so the line of the key is the line to point a reader at.
+fn key_line(text: &str, keys: &[&str], value: &str) -> usize {
+    let quoted = format!("\"{value}\"");
+    text.lines()
+        .position(|l| keys.iter().any(|k| l.contains(&format!("\"{k}\""))) && l.contains(&quoted))
+        .map(|i| i + 1)
+        .unwrap_or(1)
+}
+
+fn app_doctype<'a>(c: &'a Ctx, name: &str) -> Option<&'a DocType> {
+    c.doctypes.iter().find(|d| d.name == name)
+}
+
+fn app_field<'a>(c: &'a Ctx, doctype: &str, field: &str) -> Option<&'a Field> {
+    app_doctype(c, doctype)?
+        .fields
+        .iter()
+        .find(|f| f.fieldname == field)
+}
+
+/// Every document of `doctype` the app ships as a JSON array, with the file it came from. Frappe
+/// exports these files as an array of documents (the Desk export), which is the shape read here.
+fn desk_documents(c: &Ctx, doctype: &str) -> Vec<(String, String, Value)> {
+    let mut out = Vec::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
+    {
+        let text = read(p);
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let path = rel(&c.root, p);
+        for it in items.iter().filter(|i| str_of(i, "doctype") == doctype) {
+            out.push((path.clone(), text.clone(), it.clone()));
+        }
+    }
+    out
+}
+
+/// GB-086: a dashboard panel has to match what it measures. A Donut/Pie claims part-to-whole, so
+/// it is the wrong panel for a Select whose option order is the process (a circle has no first
+/// slice — the reader cannot see where a row stands) and for a money measure without a total.
+/// Frappe stores the renderer in `type` and the data source in `chart_type`; the field named in
+/// the report ("chart_type Donut/Pie") is the renderer, so `type` is read first and `chart_type`
+/// is only a fallback for a malformed export.
+fn rule_viz_panel(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for (path, text, chart) in desk_documents(c, "Dashboard Chart") {
+        let render = match str_of(&chart, "type") {
+            t if !t.is_empty() => t,
+            _ => str_of(&chart, "chart_type"),
+        };
+        if !matches!(render.as_str(), "Donut" | "Pie") {
+            continue;
+        }
+        let doc = str_of(&chart, "document_type");
+        if doc.is_empty() {
+            continue; // Element/Report charts measure nothing this rule can resolve
+        }
+        let name = match str_of(&chart, "chart_name") {
+            n if !n.is_empty() => n,
+            _ => str_of(&chart, "name"),
+        };
+        let grouped = match str_of(&chart, "group_by_based_on") {
+            g if !g.is_empty() => g,
+            _ => str_of(&chart, "based_on"),
+        };
+        let measure = str_of(&chart, "value_based_on");
+        let line = key_line(&text, &["chart_name", "name"], &name);
+        let snippet = text
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or("")
+            .trim();
+
+        if let Some((_, _, why)) = ORDINAL_SELECTS
+            .iter()
+            .find(|(d, f, _)| *d == doc && *f == grouped)
+        {
+            if let Some(field) = app_field(c, &doc, &grouped).filter(|f| f.fieldtype == "Select") {
+                let opts: Vec<&str> = field
+                    .options
+                    .split('\n')
+                    .map(str::trim)
+                    .filter(|o| !o.is_empty())
+                    .collect();
+                out.push(viol(
+                    "VIZ-PANEL-SCHEMA",
+                    &path,
+                    line,
+                    snippet,
+                    format!(
+                        "chart `{name}` draws `{doc}.{grouped}` as a {render}, but that Select's option order is the process itself ({}). {why}. A {render} has no first and no last slice, so the reader cannot see where a row stands in the process (GB-086).",
+                        opts.join(" -> ")
+                    ),
+                    &format!(
+                        "Draw it as a Bar ordered by the Select order of `{doc}.{grouped}`, or split the process into a board/report instead of a circle."
+                    ),
+                ));
+                continue;
+            }
+        }
+
+        let money = app_field(c, &doc, &measure)
+            .map(|f| f.fieldtype == "Currency")
+            .unwrap_or(false);
+        if money {
+            out.push(viol(
+                "VIZ-PANEL-SCHEMA",
+                &path,
+                line,
+                snippet,
+                format!(
+                    "chart `{name}` is a {render} whose measure is `{doc}.{measure}` (Currency): a part-to-whole circle of money needs a total the data does not carry, so two invoices of opposite meaning become two comparable slices (GB-086)."
+                ),
+                &format!(
+                    "Draw it as a Bar with SUM over `{doc}.{measure}`; keep `{}` for a count of rows, where the slices really do add up to the whole.",
+                    if grouped.is_empty() { "the grouped field" } else { grouped.as_str() }
+                ),
+            ));
+        }
+    }
+    out
+}
+
+// ── NO-KANBAN-BOARD-FIXTURE (GB-087) ────────────────────────────────────────
+/// Documents people arrange in the Desk. A fixture of one of these is a delete+insert of the live
+/// row on every `bench migrate`, which is the opposite of what the Desk is for.
+const DESK_OWNED_FIXTURES: &[&str] = &[
+    "Kanban Board",
+    "Dashboard",
+    "Dashboard Chart",
+    "Number Card",
+    "Workspace",
+];
+
+/// Byte ranges of every `fixtures = [...]` / `fixtures += [...]` block of hooks.py, brackets
+/// included: an app may extend the list in a second assignment.
+fn fixtures_blocks(text: &str) -> Vec<(usize, usize)> {
+    let Ok(head) = Regex::new(r"(?m)^fixtures\s*\+?=\s*\[") else {
+        return Vec::new();
+    };
+    head.find_iter(text)
+        .filter_map(|m| balanced_at(text, m.end() - 1, b'[', b']'))
+        .collect()
+}
+
+/// GB-087: a fixture is imported with `force=True`, which deletes and reinserts the live document
+/// (`frappe/modules/import_file.py`, `delete_old_doc`), bypassing the Kanban Board guard. Whatever
+/// a steward arranged — columns, order, cards in a column — is gone after migrate, silently.
+/// `desk_sync` exists in the app for exactly this reason: it inserts what is missing and keeps
+/// what is there.
+fn rule_kanban_fixture(c: &Ctx) -> Vec<Violation> {
+    let hooks = c.pkg.join("hooks.py");
+    let text = read(&hooks);
+    let blocks = fixtures_blocks(&text);
+    if blocks.is_empty() {
+        return Vec::new();
+    }
+    let Ok(dt_re) = Regex::new(r#"(?m)["']dt["']\s*:\s*["']([^"']+)["']"#) else {
+        return Vec::new();
+    };
+    let hr = rel(&c.root, &hooks);
+    let mut out = Vec::new();
+    for (bs, be) in blocks {
+        let block = text.get(bs..be).unwrap_or("");
+        for m in dt_re.captures_iter(block) {
+            let Some(dt) = m.get(1) else { continue };
+            let dt_name = dt.as_str();
+            if !DESK_OWNED_FIXTURES.contains(&dt_name) {
+                continue;
+            }
+            let at = bs + dt.start();
+            let line = text
+                .get(..at)
+                .map(|p| p.matches('\n').count() + 1)
+                .unwrap_or(1);
+            out.push(viol(
+                "NO-KANBAN-BOARD-FIXTURE",
+                &hr,
+                line,
+                text.lines().nth(line.saturating_sub(1)).unwrap_or("").trim(),
+                format!(
+                    "`fixtures` imports `{dt_name}` at {hr}:{line}; Frappe's fixture importer runs with force=True and delete+inserts the live document, so the arrangement a steward made in the Desk is replaced by the file after every `bench migrate` (GB-087)."
+                ),
+                &format!(
+                    "Ship `{dt_name}` from the app's `desk/` directory and install it create-only (insert when missing, keep what the site has), or as a standard module document with is_standard=Yes (force=0). Keep `fixtures` for reference data such as Role."
+                ),
+            ));
+        }
+    }
+    out
+}
+
+// ── DOCTYPE-CALENDAR-GANTT-NEEDS-DATES (GB-088) ─────────────────────────────
+/// Date fields whose name says which end of the span they hold. The names are the vocabulary the
+/// apps actually use; a DocType that names its span something else is a false negative, which is
+/// cheaper than refusing a file that works.
+const START_DATES: &[&str] = &[
+    "start_date",
+    "from_date",
+    "start",
+    "start_on",
+    "begins_on",
+    "planned_start_date",
+    "expected_start_date",
+];
+const END_DATES: &[&str] = &[
+    "end_date",
+    "to_date",
+    "end",
+    "end_on",
+    "due_date",
+    "finish_date",
+    "completion_date",
+    "planned_end_date",
+    "expected_end_date",
+];
+
+fn date_role(fieldname: &str) -> Option<&'static str> {
+    let starts = START_DATES.contains(&fieldname)
+        || fieldname.starts_with("start_")
+        || fieldname.ends_with("_start")
+        || fieldname.ends_with("_from");
+    if starts {
+        return Some("start");
+    }
+    let ends = END_DATES.contains(&fieldname)
+        || fieldname.starts_with("end_")
+        || fieldname.ends_with("_end")
+        || fieldname.ends_with("_to");
+    ends.then_some("end")
+}
+
+/// The calendar controller the app ships for a DocType: `<stem>_calendar.js` in `public/js/`, or a
+/// shared `*_calendar.js` that names the DocType.
+fn calendar_js(c: &Ctx, stem: &str, doctype: &str) -> bool {
+    let dir = c.pkg.join("public").join("js");
+    if dir.join(format!("{stem}_calendar.js")).is_file() {
+        return true;
+    }
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return false;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with("_calendar.js"))
+        .any(|e| read(&e.path()).contains(doctype))
+}
+
+/// GB-088: `is_calendar_and_gantt` is a checkbox that ships a view. Without a start or an end
+/// date, Gantt draws a zero-duration bar and Calendar raises when the view opens — and neither
+/// shows up at migrate, so the defect waits for the user who clicks the tab (Frappe
+/// `gantt_view.js`, `calendar.py`). The controller half is the app's convention: every
+/// calendar-enabled DocType carries its `*_calendar.js`, so the view exists next to the code that
+/// keeps it readable.
+fn rule_calendar_gantt(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for d in &c.doctypes {
+        let Ok(v) = serde_json::from_str::<Value>(&d.text) else {
+            continue;
+        };
+        if !flag(&v, "is_calendar_and_gantt") {
+            continue;
+        }
+        let roles: Vec<&str> = d
+            .fields
+            .iter()
+            .filter(|f| matches!(f.fieldtype.as_str(), "Date" | "Datetime"))
+            .filter_map(|f| date_role(&f.fieldname))
+            .collect();
+        let mut missing = Vec::new();
+        if !roles.contains(&"start") {
+            missing.push(
+                "no start date field (a Date/Datetime named start_date, start_*, *_start or from_date)"
+                    .to_string(),
+            );
+        }
+        if !roles.contains(&"end") {
+            missing.push(
+                "no end date field (a Date/Datetime named end_date, due_date, *_end or *_to)"
+                    .to_string(),
+            );
+        }
+        let stem = Path::new(&d.rel)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if !calendar_js(c, stem, &d.name) {
+            missing.push(format!("no `public/js/{stem}_calendar.js` controller"));
+        }
+        if missing.is_empty() {
+            continue;
+        }
+        out.push(viol(
+            "DOCTYPE-CALENDAR-GANTT-NEEDS-DATES",
+            &d.rel,
+            line_of(&d.text, "is_calendar_and_gantt"),
+            "is_calendar_and_gantt",
+            format!(
+                "DocType `{}` enables Calendar and Gantt but {}: Gantt degrades to a zero-duration bar with no start/end, Calendar raises when the view opens, and neither failure appears at migrate — only the user who clicks the view finds it (GB-088).",
+                d.name,
+                missing.join("; ")
+            ),
+            "Add the missing Date/Datetime fields (or drop the flag), and ship the calendar controller next to the other public/js files.",
+        ));
+    }
+    out
+}
+
+// ── FRAPPE-KANBAN-BOARD-DERIVED ─────────────────────────────────────────────
+/// True when a module of the app (never a test) names the shipped file: that is what makes the
+/// document reach a site — a create-only sync reads it, a hook imports it, a patch loads it.
+fn installed_by_app(c: &Ctx, file: &str) -> bool {
+    let name = Path::new(file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return false;
+    }
+    let tests = c.pkg.join("tests");
+    c.files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+        .filter(|p| p.parent() != Some(tests.as_path()))
+        .any(|p| read(p).contains(name))
+}
+
+/// A board is derived when the app's own code produces it and proves it: the reference field
+/// resolves, something installs the file, and — when the app carries a generator — a test
+/// exercises it. The engine is static (no site, no bench), so "every Formed Squad and every Guild
+/// has a board" cannot be read from the tree; what CAN be read is whether the thing that produces
+/// those boards exists, is wired, and is proven. A tree with no generator and no board keeps the
+/// rule silent: there is nothing to derive.
+fn rule_kanban_derived(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for (path, text, board) in desk_documents(c, "Kanban Board") {
+        if rel_to_fixtures(&path) {
+            continue; // a fixtured board is GB-087's finding, not a second one here
+        }
+        let name = match str_of(&board, "kanban_board_name") {
+            n if !n.is_empty() => n,
+            _ => str_of(&board, "name"),
+        };
+        let reference = str_of(&board, "reference_doctype");
+        let field = str_of(&board, "field_name");
+        let line = key_line(&text, &["kanban_board_name", "name"], &name);
+        let snippet = text
+            .lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or("")
+            .trim();
+        let mut broken = Vec::new();
+        if reference.is_empty() || field.is_empty() {
+            broken.push("declares no reference_doctype or no field_name".to_string());
+        } else if let Some(d) = app_doctype(c, &reference) {
+            match d.fields.iter().find(|f| f.fieldname == field) {
+                None => broken.push(format!(
+                    "columns are grouped by `{field}`, which the app's `{reference}` DocType does not have"
+                )),
+                Some(f) if f.fieldtype != "Select" => broken.push(format!(
+                    "columns are grouped by `{reference}.{field}`, a {} field: a board needs a Select",
+                    f.fieldtype
+                )),
+                _ => {}
+            }
+        }
+        if broken.is_empty() && !installed_by_app(c, &path) {
+            broken.push(format!(
+                "no module of the app names `{path}`, so nothing installs the board: it exists in git and never reaches a site"
+            ));
+        }
+        if !broken.is_empty() {
+            out.push(viol(
+                "FRAPPE-KANBAN-BOARD-DERIVED",
+                &path,
+                line,
+                snippet,
+                format!(
+                    "board `{name}` is not derived from the app: {}. A board that the code does not produce and install is a board nobody can rely on.",
+                    broken.join("; ")
+                ),
+                "Fix the reference doctype/field, and install the file from the create-only sync (desk_sync) instead of shipping it by hand.",
+            ));
+        }
+    }
+
+    let generator = c.pkg.join("boards.py");
+    if generator.is_file() {
+        // The proof has to be a call, not a mention: `dashboards` and `offboards` are words in
+        // other tests, and a docstring that says "boards" exercises nothing. The generator's own
+        // top-level functions are what a test calls, so they are read from its source.
+        let symbols = generator_symbols(&read(&generator));
+        let tests = c.pkg.join("tests");
+        let proven = symbols.iter().any(|sym| {
+            let Ok(call) = Regex::new(&format!(r"\b{}\s*\(", regex::escape(sym))) else {
+                return false;
+            };
+            c.files
+                .iter()
+                .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+                .filter(|p| p.parent() == Some(tests.as_path()))
+                .any(|p| call.is_match(&read(p)))
+        });
+        if !symbols.is_empty() && !proven {
+            out.push(viol(
+                "FRAPPE-KANBAN-BOARD-DERIVED",
+                &rel(&c.root, &generator),
+                1,
+                "boards.py",
+                "`boards.py` derives boards for the app (a board per Formed Squad and per Guild), but no test of the app exercises it: the derivation is code nobody checks, and the first missing board is found by a steward opening the Desk.".to_string(),
+                "Add a test under the app's tests/ that builds a Squad (status Formed) and a Guild and asserts each gets its board, and register it in the test list.",
+            ));
+        }
+    }
+    out
+}
+
+/// Top-level functions a generator module defines — the entry points a test has to call to prove
+/// the boards exist.
+fn generator_symbols(text: &str) -> Vec<String> {
+    let Ok(re) = Regex::new(r"(?m)^def\s+([A-Za-z_]\w*)\s*\(") else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = re
+        .captures_iter(text)
+        .filter_map(|m| m.get(1).map(|s| s.as_str().to_string()))
+        .filter(|s| !s.starts_with('_'))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn rel_to_fixtures(path: &str) -> bool {
+    path.split('/').any(|seg| seg == "fixtures")
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -2853,6 +3339,10 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_privileged_read,
         rule_i18n_literals,
         rule_other_option,
+        rule_viz_panel,
+        rule_kanban_fixture,
+        rule_calendar_gantt,
+        rule_kanban_derived,
     ] {
         all.extend(f(&c));
     }
@@ -2890,6 +3380,44 @@ const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coi
 /// file only uses msgids the catalogue carries; the bad file adds a literal nobody translated.
 const LABELS_GOOD: &str = "from frappe import _\n\n\ndef parts_label():\n\treturn _(\"Parts\")\n\n\ndef wrapped():\n\treturn _(\n\t\t\"Parts\"\n\t)\n";
 const LABELS_BAD: &str = "from frappe import _\n\n\ndef parts_label():\n\treturn _(\"Parts\")\n\n\ndef wrapped():\n\treturn _(\n\t\t\"Uncatalogued label\"\n\t)\n";
+/// VIZ-PANEL-SCHEMA needs a DocType with an ordinal Select and a money field to measure.
+const DEAL_JSON: &str = r#"{"doctype":"DocType","name":"Deal","fields":[{"fieldname":"stage","fieldtype":"Select","label":"Stage","options":"Lead\nProposal\nNegotiation\nWon\nLost"},{"fieldname":"value","fieldtype":"Currency","label":"Value"}],"permissions":[{"role":"Demo Role"}]}"#;
+/// Two panels, one per half of the rule: a Donut over the funnel, a Pie over the money.
+const CHART_BAD: &str = r#"[
+ {
+  "doctype": "Dashboard Chart",
+  "name": "Deals by Stage",
+  "chart_name": "Deals by Stage",
+  "chart_type": "Group By",
+  "document_type": "Deal",
+  "group_by_type": "Count",
+  "group_by_based_on": "stage",
+  "type": "Donut"
+ },
+ {
+  "doctype": "Dashboard Chart",
+  "name": "Money by Stage",
+  "chart_name": "Money by Stage",
+  "chart_type": "Sum",
+  "document_type": "Deal",
+  "based_on": "stage",
+  "value_based_on": "value",
+  "type": "Pie"
+ }
+]"#;
+/// DOCTYPE-CALENDAR-GANTT-NEEDS-DATES: the flag on, a start date, no end date, no controller.
+const ROADMAP_JSON: &str = r#"{
+ "doctype": "DocType",
+ "name": "Roadmap",
+ "is_calendar_and_gantt": 1,
+ "fields": [
+  {"fieldname": "start_date", "fieldtype": "Date"},
+  {"fieldname": "summary", "fieldtype": "Data"}
+ ],
+ "permissions": [{"role": "Demo Role"}]
+}"#;
+/// FRAPPE-KANBAN-BOARD-DERIVED: a generator no test of the app exercises.
+const BOARDS_PY: &str = "import json\n\n\ndef boards():\n\treturn json.dumps([\"Tasks\"])\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
@@ -2900,12 +3428,19 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/hooks.py",
             &format!(
-                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\", \"validate\": \"demoapp.session.sync_members\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n]\n",
+                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\", \"validate\": \"demoapp.session.sync_members\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n{}]\n",
                 if bad { "missing_fn" } else { "on_todo" },
                 if bad {
                     "[\"Demo Role\", \"Phantom Role\"]"
                 } else {
                     "[\"Demo Role\"]"
+                },
+                // NO-KANBAN-BOARD-FIXTURE: the good tree fixtures reference data only; the bad
+                // tree also fixtures the board a steward arranges in the Desk.
+                if bad {
+                    "\t{\"dt\": \"Kanban Board\", \"filters\": [[\"name\", \"in\", [\"Tasks\"]]]},\n"
+                } else {
+                    ""
                 }
             ),
         ),
@@ -3048,6 +3583,23 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             "demoapp/demo/doctype/nohead/nohead.py",
             "class Nohead:\n    pass\n",
         ));
+        // VIZ-PANEL-SCHEMA: a Donut over the ordinal `Deal.stage` and a Pie over `Deal.value`.
+        v.push(f("demoapp/desk/dashboard_chart.json", CHART_BAD));
+        v.push(f("demoapp/demo/doctype/deal/__init__.py", ""));
+        v.push(f("demoapp/demo/doctype/deal/deal.json", DEAL_JSON));
+        v.push(f(
+            "demoapp/demo/doctype/deal/deal.py",
+            "class Deal:\n    pass\n",
+        ));
+        // DOCTYPE-CALENDAR-GANTT-NEEDS-DATES: the flag with a start date, no end, no controller.
+        v.push(f("demoapp/demo/doctype/roadmap/__init__.py", ""));
+        v.push(f("demoapp/demo/doctype/roadmap/roadmap.json", ROADMAP_JSON));
+        v.push(f(
+            "demoapp/demo/doctype/roadmap/roadmap.py",
+            "class Roadmap:\n    pass\n",
+        ));
+        // FRAPPE-KANBAN-BOARD-DERIVED: a generator the app's tests never exercise.
+        v.push(f("demoapp/boards.py", BOARDS_PY));
     }
     v
 }
@@ -3172,5 +3724,262 @@ mod tests {
             depends_on: String::new(),
         };
         assert!(!cites_field(&unrelated, &select));
+    }
+
+    // ── mutation proofs for the four Desk/view rules ───────────────────────
+    // Each test builds a temporary app, audits it, and then changes ONE thing. The run is the
+    // proof the rule discriminates: the injected line turns it red, the line it replaced leaves
+    // it green. Nothing here touches the real tree.
+
+    const DEAL_JSON_T: &str = r#"{"doctype":"DocType","name":"Deal","fields":[{"fieldname":"stage","fieldtype":"Select","label":"Stage","options":"Lead\nProposal\nNegotiation\nWon\nLost"},{"fieldname":"value","fieldtype":"Currency","label":"Value"},{"fieldname":"owner","fieldtype":"Link","options":"User","label":"Owner"}],"permissions":[{"role":"System Manager"}]}"#;
+
+    /// A minimal app: a package with hooks.py and nothing a rule other than the one under test
+    /// would complain about.
+    fn app_tree(extra: Vec<(&str, String)>) -> Vec<(String, String)> {
+        let mut v = vec![
+            (
+                "app/__init__.py".to_string(),
+                "__version__ = \"0.1.0\"\n".to_string(),
+            ),
+            (
+                "app/hooks.py".to_string(),
+                "app_name = \"app\"\n".to_string(),
+            ),
+        ];
+        v.extend(extra.into_iter().map(|(p, t)| (p.to_string(), t)));
+        v
+    }
+
+    /// Audit one temporary tree and return only the violations of `rule`; the tree is removed.
+    fn audit_rule(tag: &str, files: &[(String, String)], rule: &str) -> Vec<Violation> {
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            ..FrappeConfig::default()
+        };
+        let Some(root) = write_fixture(tag, files) else {
+            return Vec::new();
+        };
+        let got = audit(&root, &cfg).unwrap_or_default();
+        let _ = fs::remove_dir_all(&root);
+        got.into_iter().filter(|v| v.rule_id == rule).collect()
+    }
+
+    /// An app with `Deal` and one dashboard panel over it: `render` is `type`, `grouped` is
+    /// `group_by_based_on`, `measure` is `value_based_on` (empty means the panel counts rows).
+    fn deal_app(render: &str, grouped: &str, measure: &str) -> Vec<(String, String)> {
+        let chart_type = if measure.is_empty() {
+            "Group By"
+        } else {
+            "Sum"
+        };
+        let chart = format!(
+            "[\n {{\n  \"doctype\": \"Dashboard Chart\",\n  \"name\": \"Deals by Stage\",\n  \"chart_name\": \"Deals by Stage\",\n  \"chart_type\": \"{chart_type}\",\n  \"document_type\": \"Deal\",\n  \"group_by_based_on\": \"{grouped}\",\n  \"value_based_on\": \"{measure}\",\n  \"type\": \"{render}\"\n }}\n]"
+        );
+        app_tree(vec![
+            ("app/demo/doctype/deal/deal.json", DEAL_JSON_T.to_string()),
+            (
+                "app/demo/doctype/deal/deal.py",
+                "class Deal:\n\tpass\n".to_string(),
+            ),
+            ("app/desk/dashboard_chart.json", chart),
+        ])
+    }
+
+    /// MUTATION: line 10 of the chart (`"type": "Donut"`) becomes `"Bar"`. Red names the chart,
+    /// the field and the reason; green is the same tree with the panel the rule asks for.
+    #[test]
+    fn viz_panel_schema_turns_red_on_the_donut_and_green_on_the_bar() {
+        let red = audit_rule(
+            "viz-donut",
+            &deal_app("Donut", "stage", ""),
+            "VIZ-PANEL-SCHEMA",
+        );
+        assert_eq!(red.len(), 1, "{red:?}");
+        assert_eq!(red[0].file_path, "app/desk/dashboard_chart.json");
+        assert_eq!(red[0].line_number, 4);
+        assert_eq!(red[0].severity, Severity::Error);
+        assert!(
+            red[0].message.contains("Deals by Stage"),
+            "{}",
+            red[0].message
+        );
+        assert!(red[0].message.contains("Deal.stage"), "{}", red[0].message);
+        assert!(red[0].message.contains("GB-086"));
+
+        assert!(
+            audit_rule("viz-bar", &deal_app("Bar", "stage", ""), "VIZ-PANEL-SCHEMA").is_empty()
+        );
+    }
+
+    /// The other half of GB-086: the measure is money. A Pie over `Deal.value` grouped by a field
+    /// that is not an ordinal (`Deal.owner`) is red; the same measure as a Bar is green.
+    #[test]
+    fn viz_panel_schema_reads_the_money_measure() {
+        let red = audit_rule(
+            "viz-money",
+            &deal_app("Pie", "owner", "value"),
+            "VIZ-PANEL-SCHEMA",
+        );
+        assert_eq!(red.len(), 1, "{red:?}");
+        assert!(red[0].message.contains("Deal.value"), "{}", red[0].message);
+
+        assert!(
+            audit_rule(
+                "viz-sum-bar",
+                &deal_app("Bar", "owner", "value"),
+                "VIZ-PANEL-SCHEMA"
+            )
+            .is_empty()
+        );
+    }
+
+    const HOOKS_GREEN: &str = "app_name = \"app\"\nfixtures = [\n\t{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", [\"System Manager\"]]]},\n]\n";
+    const HOOKS_RED: &str = "app_name = \"app\"\nfixtures = [\n\t{\"dt\": \"Role\"},\n\t{\"dt\": \"Kanban Board\", \"filters\": [[\"name\", \"in\", [\"Tasks\"]]]},\n]\n";
+
+    /// MUTATION: one line added to hooks.py (line 4) declares the board as a fixture. The run is
+    /// red at that exact line; the file without it is green.
+    #[test]
+    fn board_fixture_is_refused_at_its_line() {
+        let green = app_tree(vec![("app/hooks.py", HOOKS_GREEN.to_string())]);
+        assert!(audit_rule("fx-green", &green, "NO-KANBAN-BOARD-FIXTURE").is_empty());
+
+        let red = app_tree(vec![("app/hooks.py", HOOKS_RED.to_string())]);
+        let got = audit_rule("fx-red", &red, "NO-KANBAN-BOARD-FIXTURE");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "app/hooks.py");
+        assert_eq!(got[0].line_number, 4);
+        assert!(
+            got[0].message.contains("Kanban Board"),
+            "{}",
+            got[0].message
+        );
+    }
+
+    const ROADMAP_T: &str = "{\n \"doctype\": \"DocType\",\n \"name\": \"Roadmap\",\n \"is_calendar_and_gantt\": 1,\n \"fields\": [\n  {\"fieldname\": \"start_date\", \"fieldtype\": \"Date\"},\n  {\"fieldname\": \"end_date\", \"fieldtype\": \"Date\"}\n ],\n \"permissions\": [{\"role\": \"System Manager\"}]\n}";
+
+    fn roadmap_app(json: &str, controller: bool) -> Vec<(String, String)> {
+        let mut v = app_tree(vec![
+            ("app/demo/doctype/roadmap/roadmap.json", json.to_string()),
+            (
+                "app/demo/doctype/roadmap/roadmap.py",
+                "class Roadmap:\n\tpass\n".to_string(),
+            ),
+        ]);
+        if controller {
+            v.push((
+                "app/public/js/roadmap_calendar.js".to_string(),
+                "frappe.ui.form.on(\"Roadmap\", {});\n".to_string(),
+            ));
+        }
+        v
+    }
+
+    /// MUTATION 1: `end_date` renamed to `closed_date`, a Date whose name does not say it is the
+    /// end — the flag now has a span with one side. MUTATION 2: the `_calendar.js` removed.
+    #[test]
+    fn calendar_and_gantt_needs_both_dates_and_its_controller() {
+        assert!(
+            audit_rule(
+                "cal-green",
+                &roadmap_app(ROADMAP_T, true),
+                "DOCTYPE-CALENDAR-GANTT-NEEDS-DATES"
+            )
+            .is_empty()
+        );
+
+        let renamed = ROADMAP_T.replace("end_date", "closed_date");
+        let got = audit_rule(
+            "cal-nodate",
+            &roadmap_app(&renamed, true),
+            "DOCTYPE-CALENDAR-GANTT-NEEDS-DATES",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].line_number, 4);
+        assert!(got[0].message.contains("Roadmap"), "{}", got[0].message);
+        assert!(
+            got[0].message.contains("no end date field"),
+            "{}",
+            got[0].message
+        );
+
+        let got = audit_rule(
+            "cal-nojs",
+            &roadmap_app(ROADMAP_T, false),
+            "DOCTYPE-CALENDAR-GANTT-NEEDS-DATES",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].message.contains("roadmap_calendar.js"),
+            "{}",
+            got[0].message
+        );
+    }
+
+    const BOARD_T: &str = "[\n {\n  \"doctype\": \"Kanban Board\",\n  \"name\": \"Tasks\",\n  \"kanban_board_name\": \"Tasks\",\n  \"reference_doctype\": \"Task\",\n  \"field_name\": \"status\"\n }\n]";
+    const SYNC_T: &str = "import json\n\nFILES = (\"number_card.json\", \"kanban_board.json\")\n\n\ndef documents(path):\n\treturn json.loads(path.read_text())\n";
+
+    /// MUTATION: `kanban_board.json` dropped from the sync tuple. The file stays in git and
+    /// nothing installs it — the board exists in the repository and never on a site.
+    #[test]
+    fn board_must_be_installed_by_the_app() {
+        let green = app_tree(vec![
+            ("app/desk/kanban_board.json", BOARD_T.to_string()),
+            ("app/desk_sync.py", SYNC_T.to_string()),
+        ]);
+        assert!(audit_rule("board-green", &green, "FRAPPE-KANBAN-BOARD-DERIVED").is_empty());
+
+        let dropped = app_tree(vec![
+            ("app/desk/kanban_board.json", BOARD_T.to_string()),
+            (
+                "app/desk_sync.py",
+                SYNC_T.replace("\"kanban_board.json\"", "\"dashboard.json\""),
+            ),
+        ]);
+        let got = audit_rule("board-git-only", &dropped, "FRAPPE-KANBAN-BOARD-DERIVED");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "app/desk/kanban_board.json");
+        assert!(
+            got[0].message.contains("nothing installs the board"),
+            "{}",
+            got[0].message
+        );
+    }
+
+    /// MUTATION: the test that exercises `boards.py` deleted, and then replaced by a test that
+    /// only MENTIONS boards (`dashboards` is not a call). A generator nobody calls is a rule
+    /// nobody proves; with the call in place the same tree is green.
+    #[test]
+    fn board_generator_without_a_test_is_refused() {
+        let module = "import json\n\n\ndef boards():\n\treturn {\"name\": \"Tasks\"}\n";
+        let green = app_tree(vec![
+            ("app/boards.py", module.to_string()),
+            (
+                "app/tests/kanban_boards.py",
+                "from app import boards\n\n\ndef run():\n\tdoc = boards.boards()\n\tassert doc[\"name\"] == \"Tasks\"\n".to_string(),
+            ),
+        ]);
+        assert!(audit_rule("gen-green", &green, "FRAPPE-KANBAN-BOARD-DERIVED").is_empty());
+
+        let red = app_tree(vec![("app/boards.py", module.to_string())]);
+        let got = audit_rule("gen-red", &red, "FRAPPE-KANBAN-BOARD-DERIVED");
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "app/boards.py");
+        assert!(
+            got[0].message.contains("no test of the app"),
+            "{}",
+            got[0].message
+        );
+
+        // The real app taught this one: two of its tests said "boards" only inside "dashboards"
+        // and "offboards", which proves nothing. A mention is not a call.
+        let mention = app_tree(vec![
+            ("app/boards.py", module.to_string()),
+            (
+                "app/tests/desk.py",
+                "def run():\n\t# dashboards and offboards, no board call\n\tpass\n".to_string(),
+            ),
+        ]);
+        let got = audit_rule("gen-mention", &mention, "FRAPPE-KANBAN-BOARD-DERIVED");
+        assert_eq!(got.len(), 1, "a mention is not a call: {got:?}");
     }
 }
