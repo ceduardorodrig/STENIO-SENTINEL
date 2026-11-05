@@ -318,6 +318,24 @@ fn check_build(r: &dyn Runner, a: &RelArgs) -> Line {
     }
 }
 
+/// The artifact being released must pass its own tamper check. The anchors in `guardian.rs` are
+/// the only thing that tells a reflowed comment from a removed invariant, and this step exists
+/// because that gate used to run only by hand — which is to say it never ran. A comment that
+/// reflowed across two lines broke `frappe.rs` "no suppression directive" for several releases
+/// and nothing noticed until a release was about to ship.
+fn check_integrity(r: &dyn Runner, a: &RelArgs) -> Line {
+    let bin = a.repo.join("target/release/stenio");
+    let argv = vec![bin.display().to_string(), "--guardian".to_string()];
+    match r.run(Some(&a.repo), &argv, Duration::from_secs(120)) {
+        Ok(o) if out_ok(&o) => pass("integrity", "guardian: core modules and anchors intact"),
+        Ok(o) => fail(
+            "integrity",
+            format!("guardian exited {}: {}", o.code, one_line(&o)),
+        ),
+        Err(e) => fail("integrity", e),
+    }
+}
+
 fn install_dir(a: &RelArgs) -> Result<PathBuf, String> {
     match &a.install_dir {
         Some(p) => Ok(p.clone()),
@@ -521,6 +539,7 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     out.push(check_origin(r, a, &commit));
     out.push(check_ci(r, a, &commit));
     out.push(check_build(r, a));
+    out.push(check_integrity(r, a));
     let old = install_dir(a)
         .map(|d| installed_version(r, &d.join("stenio")))
         .unwrap_or_default();
@@ -564,6 +583,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("tag-origin", format!("git -C {} ls-remote --tags origin refs/tags/{}", a.repo.display(), a.tag)),
         ("ci", "gh run list --commit <tag sha> --json workflowName,status,conclusion".to_string()),
         ("build", format!("cargo build --release --locked (in {})", a.repo.display())),
+        ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
         ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
         ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
@@ -726,6 +746,10 @@ fn scripted(
         ok(""),
     );
     m.insert(
+        key(&[&format!("{repo}/target/release/stenio"), "--guardian"].map(String::from)),
+        ok("Guardian: 15 Stenio core modules audited with Zero Tampering."),
+    );
+    m.insert(
         ssh("docker tag $(docker inspect -f '{{.Image}}' miracena-stenio) stenio-sentinel:prev-4.17.0"),
         ok(""),
     );
@@ -785,7 +809,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 12,
+            plan(&a).len() == 13,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -799,7 +823,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 12,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 13,
         ),
         ("release-engine keeps a rollback copy".to_string(), rollback),
     ]

@@ -166,8 +166,8 @@ The canonical method is [`../backlog-method.md`](../backlog-method.md). `src/bac
 | Queue | Location | Prefix | Traced via `pending:` |
 |---|---|---|---|
 | Homelab | `mnemocine/backlog.md` | `HB-` | yes (bidirectional) |
-| SUMÆNIMÁ Hub | `<hub>/docs/backlog.md` (needs `app/`) | `SB-` | no |
-| Miracena engagement | `clients/miracena/backlog.md` | `MB-` | no |
+| sumaenima | `<hub>/docs/backlog.md` (needs `app/`) | `SB-` | no |
+| Miracena | `clients/miracena/backlog.md` | `MB-` | no |
 
 - `audit_backlog()` audits the **linked** queues (homelab); `audit_product_queues()` audits the rest and is called from `audit_documentation()`, so it runs in the `hub`, `homelab` and `vault` scopes without duplicating messages.
 - Product queues are checked for structure, lifecycle, state, recurrence and `Ref` resolution (`HOMELAB-BACKLOG-MALFORMED`, `-LIFECYCLE`, `-STATE`, `DOC-BACKLOG-RECURRENCE`, `DOC-BACKLOG-DRIFT`); the reverse document walk is skipped.

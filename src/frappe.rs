@@ -3,8 +3,8 @@
 //! WHY IT EXISTS: releases rc68 to rc73 of the Miracena platform lost hours to bugs a program
 //! finds offline in seconds (child DocTypes without a controller module, Link fields whose
 //! target has no title field, tests or patches not registered, hook paths that do not exist,
-//! roles nobody defines). Every rule here is static (no site, no bench) and has no
-//! suppression directive. The app is described by the `[frappe]` table of `steniocheck.toml`
+//! roles nobody defines). Every rule here is static (no site, no bench) and has
+//! no suppression directive. The app is described by the `[frappe]` table of `steniocheck.toml`
 //! (`crate::config::FrappeConfig`); no project name lives in the engine.
 //!
 //! References: Frappe docs, "DocType" (controller `<name>.py` next to `<name>.json`), "Hooks"
@@ -77,6 +77,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-AUTONAME-COLLISION",
         "Duplicate Guard Defeated By Autoname",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-RULES-COVERAGE",
+        "DocType Outside The Validation Gate",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-ROLE-FIXTURE-PARITY",
+        "Role Fixture Filter Drops A Role",
         Severity::Error,
     ),
 ];
@@ -207,6 +217,9 @@ struct Field {
     fieldname: String,
     fieldtype: String,
     options: String,
+    /// A read-only field is filled by the server (prepare function or patch), never by the
+    /// user, so the validation gate cannot normalise it.
+    read_only: bool,
 }
 
 struct DocType {
@@ -303,6 +316,7 @@ fn load_doctype(root: &Path, path: &Path) -> Option<DocType> {
                     fieldname: str_of(f, "fieldname"),
                     fieldtype: str_of(f, "fieldtype"),
                     options: str_of(f, "options"),
+                    read_only: flag(f, "read_only"),
                 })
                 .collect()
         })
@@ -1148,19 +1162,8 @@ fn rule_roles(c: &Ctx) -> Vec<Violation> {
         .map(|s| s.to_string())
         .chain(c.cfg.role_allowlist.iter().flatten().cloned())
         .collect();
-    for p in c.files.iter().filter(|p| {
-        p.extension().map(|e| e == "json").unwrap_or(false)
-            && p.parent()
-                .and_then(|d| d.file_name())
-                .and_then(|n| n.to_str())
-                == Some("fixtures")
-    }) {
-        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&read(p)) {
-            for it in items.iter().filter(|i| str_of(i, "doctype") == "Role") {
-                defined.insert(str_of(it, "role_name"));
-                defined.insert(str_of(it, "name"));
-            }
-        }
+    for (name, _, _) in fixture_roles(c) {
+        defined.insert(name);
     }
     let patch_text: String = c
         .files
@@ -1249,6 +1252,386 @@ fn rule_whitelist(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── Python declaration reading (textual, ARCH-NO-PYTHON) ───────────────────
+// The gate's declarations are Python data, so they are read as text: the engine never imports
+// or executes the app. Only the shape it needs is extracted (the `RULES` dict and the calls
+// that add entries to it), and anything it cannot read leaves the rule silent instead of
+// guessing.
+
+/// Byte range `[start, end)` of the `open`/`close` pair opening at `start`.
+fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.get(start).copied() != Some(open) {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (i, &c) in bytes.iter().enumerate().skip(start) {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some((start, i + 1));
+            }
+        }
+    }
+    None
+}
+
+/// Splits at top-level commas, ignoring separators inside brackets or quoted strings.
+fn split_top(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut start) = (0i32, 0u8, 0usize);
+    for (i, &c) in s.as_bytes().iter().enumerate() {
+        match quote {
+            0 if c == b'"' || c == b'\'' => quote = c,
+            q if c == q => quote = 0,
+            0 => match c {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                b',' if depth == 0 => {
+                    out.push(&s[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out.retain(|p| !p.trim().is_empty());
+    out
+}
+
+/// One DocType declaration of the validation gate (`_rule(...)` / `make(...)`).
+struct GateEntry {
+    /// `normalise` fieldname -> expression applied to it.
+    normalise: Vec<(String, String)>,
+    /// `raw` fieldnames: left out of the automatic `clean_text` pass.
+    raw: Vec<String>,
+    /// Module that declares the entry, relative to the app root.
+    path: String,
+    line: usize,
+}
+
+fn unquote(s: &str) -> &str {
+    s.trim().trim_matches(|c| c == '"' || c == '\'')
+}
+
+/// Reads one `_rule(...)` call into its declared normalisers and raw fields.
+fn gate_entry(text: &str, call_at: usize, path: &str, line: usize) -> Option<GateEntry> {
+    let (start, end) = balanced_at(text, call_at, b'(', b')')?;
+    let mut entry = GateEntry {
+        normalise: Vec::new(),
+        raw: Vec::new(),
+        path: path.to_string(),
+        line,
+    };
+    for arg in split_top(&text[start + 1..end - 1]) {
+        let Some((key, value)) = arg.split_once('=') else {
+            continue; // positional argument (`*args`, `**parts`): no declaration to read
+        };
+        let value = value.trim();
+        let brackets = match value.as_bytes().first() {
+            Some(b'(') => (b'(', b')'),
+            Some(b'{') => (b'{', b'}'),
+            _ => continue, // a bare name or literal: no declaration to read
+        };
+        let Some((bs, be)) = balanced_at(value, 0, brackets.0, brackets.1) else {
+            continue;
+        };
+        let body = &value[bs + 1..be - 1];
+        match key.trim() {
+            "normalise" if brackets.0 == b'{' => {
+                for item in split_top(body) {
+                    if let Some((field, expr)) = item.split_once(':') {
+                        entry
+                            .normalise
+                            .push((unquote(field).to_string(), expr.trim().to_string()));
+                    }
+                }
+            }
+            "raw" if brackets.0 == b'(' => {
+                for item in split_top(body) {
+                    let name = unquote(item);
+                    if !name.is_empty() {
+                        entry.raw.push(name.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(entry)
+}
+
+/// Every DocType the app's validation gate declares: the entries of its `RULES` dict plus the
+/// entries other modules add to it (`rules["Name"] = make(...)`, which is how a second
+/// declaration file joins the same gate).
+fn gate_entries(c: &Ctx) -> BTreeMap<String, GateEntry> {
+    let dict = match Regex::new(r#"(?m)^RULES\s*(?::[^=\n]+)?=\s*\{"#) {
+        Ok(r) => r,
+        Err(_) => return BTreeMap::new(),
+    };
+    let member = Regex::new(r#"(?m)^[ \t]*["']([^"']+)["']\s*:\s*(?:_rule|make)\s*\("#);
+    let assign = Regex::new(r#"(?m)rules\[["']([^"']+)["']\]\s*=\s*(?:_rule|make)\s*\("#);
+    let (Ok(member), Ok(assign)) = (member, assign) else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+    {
+        let text = read(p);
+        let path = rel(&c.root, p);
+        // `RULES = { ... }`: only the entries inside the dict belong to the gate.
+        if let Some(m) = dict.find(&text) {
+            let body = balanced_at(&text, m.end() - 1, b'{', b'}').unwrap_or((m.end(), text.len()));
+            let block = &text[body.0..body.1];
+            for m in member.captures_iter(block) {
+                let Some(whole) = m.get(0) else { continue };
+                let line = text[..body.0 + whole.start()].lines().count();
+                let call = text[..body.0 + whole.end()].rfind('(').unwrap_or(0);
+                if let Some(entry) = gate_entry(&text, call, &path, line) {
+                    out.insert(m[1].to_string(), entry);
+                }
+            }
+        }
+        // Entries another module of the package adds to the same dict.
+        for m in assign.captures_iter(&text) {
+            let Some(whole) = m.get(0) else { continue };
+            let line = text[..whole.start()].lines().count();
+            if let Some(entry) = gate_entry(&text, whole.end() - 1, &path, line) {
+                out.insert(m[1].to_string(), entry);
+            }
+        }
+    }
+    out
+}
+
+/// A violation whose severity is not the one pinned in `RULES` (a sub-case of the same rule).
+fn viol_as(
+    id: &str,
+    sev: Severity,
+    path: &str,
+    line: usize,
+    snip: &str,
+    msg: String,
+    hint: &str,
+) -> Violation {
+    let mut v = viol(id, path, line, snip, msg, hint);
+    v.severity = sev;
+    v
+}
+
+/// True when the expression applies the money normaliser (`money`, not a look-alike name).
+fn is_money(expr: &str) -> bool {
+    expr.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|w| w == "money")
+}
+
+// ── FRAPPE-RULES-COVERAGE ──────────────────────────────────────────────────
+/// The gate is `doc_events["*"]["validate"]` calling one `validate(doc)` that returns at once
+/// for a DocType without an entry in `RULES`. A DocType outside it never passes through
+/// `clean_text` or a normaliser, and nothing says so: thirteen parent DocTypes of the Miracena
+/// app sat outside the gate and only a test against a real site noticed.
+fn rule_rules_coverage(c: &Ctx) -> Vec<Violation> {
+    let entries = gate_entries(c);
+    if entries.is_empty() {
+        return Vec::new(); // no gate to compare against (another app layout): stay silent
+    }
+    let mut out = Vec::new();
+    for d in c.doctypes.iter().filter(|d| !d.is_child) {
+        let Some(entry) = entries.get(&d.name) else {
+            out.push(viol(
+                "FRAPPE-RULES-COVERAGE",
+                &d.rel,
+                1,
+                &d.name,
+                format!(
+                    "DocType `{}` has no entry in the validation gate: `validate()` returns early for it, so no field goes through clean_text or a normaliser.",
+                    d.name
+                ),
+                "Declare it in RULES (validators.py or the module that extends it): normalise/prepare/checks, even empty.",
+            ));
+            continue;
+        };
+        let money: Vec<&str> = entry
+            .normalise
+            .iter()
+            .filter(|(_, expr)| is_money(expr))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        for f in d
+            .fields
+            .iter()
+            .filter(|f| f.fieldtype == "Currency" && !f.read_only)
+        {
+            if !money.contains(&f.fieldname.as_str()) {
+                out.push(viol(
+                    "FRAPPE-RULES-COVERAGE",
+                    &d.rel,
+                    line_of(&d.text, &format!("\"{}\"", f.fieldname)),
+                    &f.fieldname,
+                    format!(
+                        "`{}.{}` is a Currency field but the entry of `{}` in {} declares no money normaliser for it: the raw value reaches storage.",
+                        d.name, f.fieldname, d.name, entry.path
+                    ),
+                    "Add `\"<field>\": money` to the normalise of that entry, or mark the field read-only if the server fills it.",
+                ));
+            }
+        }
+        let fields: BTreeSet<&str> = d.fields.iter().map(|f| f.fieldname.as_str()).collect();
+        for (name, _) in &entry.normalise {
+            if !fields.contains(name.as_str()) {
+                out.push(viol_as(
+                    "FRAPPE-RULES-COVERAGE",
+                    Severity::Warning,
+                    &entry.path,
+                    entry.line,
+                    name,
+                    format!(
+                        "{} declares a normaliser for `{}`, which is not a field of the `{}` DocType JSON: the declaration does nothing.",
+                        entry.path, name, d.name
+                    ),
+                    "Rename it to the real fieldname or remove it.",
+                ));
+            }
+        }
+        for name in &entry.raw {
+            if !fields.contains(name.as_str()) {
+                out.push(viol_as(
+                    "FRAPPE-RULES-COVERAGE",
+                    Severity::Warning,
+                    &entry.path,
+                    entry.line,
+                    name,
+                    format!(
+                        "{} lists `{}` as raw, but it is not a field of the `{}` DocType JSON: the exemption protects nothing.",
+                        entry.path, name, d.name
+                    ),
+                    "Rename it to the real fieldname or remove it.",
+                ));
+            }
+        }
+    }
+    out
+}
+
+// ── FRAPPE-ROLE-FIXTURE-PARITY ─────────────────────────────────────────────
+/// Every Role a fixture of the app defines: (role name, fixture path, line).
+fn fixture_roles(c: &Ctx) -> Vec<(String, String, usize)> {
+    let mut out = Vec::new();
+    for p in c.files.iter().filter(|p| {
+        p.extension().map(|e| e == "json").unwrap_or(false)
+            && p.parent()
+                .and_then(|d| d.file_name())
+                .and_then(|n| n.to_str())
+                == Some("fixtures")
+    }) {
+        let text = read(p);
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let path = rel(&c.root, p);
+        for it in items.iter().filter(|i| str_of(i, "doctype") == "Role") {
+            let name = match str_of(it, "role_name") {
+                n if !n.is_empty() => n,
+                _ => str_of(it, "name"),
+            };
+            if name.is_empty() {
+                continue;
+            }
+            let line = line_of(&text, &format!("\"{name}\""));
+            out.push((name, path.clone(), line));
+        }
+    }
+    out
+}
+
+/// The names the Role fixture filter of `hooks.py` selects, and the line of the `in` clause.
+/// `None` when hooks.py has no Role fixture with a readable `["name", "in", [...]]` filter:
+/// a filter the engine cannot read must not be guessed at.
+fn role_fixture_filter(text: &str) -> Option<(Vec<String>, usize)> {
+    let head = Regex::new(r"(?m)^fixtures\s*=\s*\[").ok()?;
+    let at = head.find(text)?;
+    let (bs, be) = balanced_at(text, at.end() - 1, b'[', b']')?;
+    let block = text.get(bs + 1..be - 1)?;
+    let dt = Regex::new(r#"["'](?:dt|doctype)["']\s*:\s*["']Role["']"#).ok()?;
+    let role = dt.find(block)?;
+    let rest = block.get(role.end()..)?;
+    let (fs, fe) = balanced_at(rest, rest.find('[')?, b'[', b']')?;
+    let filters = rest.get(fs + 1..fe - 1)?;
+    let op = Regex::new(r#"["']in["']"#).ok()?;
+    let in_at = op.find(filters)?;
+    let after = filters.get(in_at.end()..)?;
+    let (ls, le) = balanced_at(after, after.find('[')?, b'[', b']')?;
+    let names: Vec<String> = split_top(after.get(ls + 1..le - 1)?)
+        .iter()
+        .map(|s| unquote(s).to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let line = text[..bs + 1 + role.end() + fs + 1 + in_at.start()]
+        .lines()
+        .count();
+    Some((names, line))
+}
+
+/// `bench migrate` creates a Role only when the Role fixture filter of `hooks.py` selects it.
+/// A role present in `fixtures/role.json` but missing from that filter never exists on the
+/// site, and every permission naming it points at nothing — the role is deployed and inert,
+/// which already cost a release tag.
+fn rule_role_fixture_parity(c: &Ctx) -> Vec<Violation> {
+    let hooks = c.pkg.join("hooks.py");
+    let text = read(&hooks);
+    let Some((filter, line)) = role_fixture_filter(&text) else {
+        return Vec::new();
+    };
+    let hr = rel(&c.root, &hooks);
+    let roles = fixture_roles(c);
+    if roles.is_empty() {
+        return Vec::new(); // no Role fixture: nothing to keep in parity
+    }
+    let listed: BTreeSet<&str> = filter.iter().map(String::as_str).collect();
+    let present: BTreeSet<&str> = roles.iter().map(|(n, _, _)| n.as_str()).collect();
+    let mut out = Vec::new();
+    for (name, path, at) in &roles {
+        if !listed.contains(name.as_str()) {
+            out.push(viol(
+                "FRAPPE-ROLE-FIXTURE-PARITY",
+                path,
+                *at,
+                name,
+                format!(
+                    "Role `{name}` is in {path} but the Role fixture filter in {hr} does not select it: bench migrate never creates it, so every permission naming `{name}` hangs on a role that does not exist."
+                ),
+                "Add the role to the `[\"name\", \"in\", [...]]` list of the Role filter in hooks.py, or drop it from the fixture.",
+            ));
+        }
+    }
+    for name in &filter {
+        if !present.contains(name.as_str()) {
+            out.push(viol_as(
+                "FRAPPE-ROLE-FIXTURE-PARITY",
+                Severity::Warning,
+                &hr,
+                line,
+                name,
+                format!(
+                    "The Role fixture filter in {hr} selects `{name}`, but no Role fixture of the app defines it: migrate creates nothing."
+                ),
+                "Add the role to fixtures/role.json or remove it from the filter.",
+            ));
+        }
+    }
+    out
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -1266,6 +1649,8 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_select_case,
         rule_labels,
         rule_whitelist,
+        rule_rules_coverage,
+        rule_role_fixture_parity,
     ] {
         all.extend(f(&c));
     }
@@ -1276,10 +1661,18 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 }
 
 // ── self-test fixtures ─────────────────────────────────────────────────────
-const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"}],"permissions":[{"role":"ROLE"}]}"#;
+const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
 const PART_JSON_BAD: &str = r#"{"doctype":"DocType","name":"Part","fields":[]}"#;
-const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n";
+const WIDGET_JSON: &str =
+    r#"{"doctype":"DocType","name":"Widget","fields":[],"permissions":[{"role":"Demo Role"}]}"#;
+/// The validation gate: `Thing` stores `price` as Currency, so the entry must normalise it.
+const VALIDATORS_GOOD: &str = "import frappe\n\n\ndef money(value):\n\treturn value\n\n\ndef _rule(**parts):\n\treturn {\"normalise\": {}, \"prepare\": (), \"checks\": (), \"raw\": ()} | parts\n\n\nRULES = {\n\t\"Part\": _rule(),\n\t\"Thing\": _rule(normalise={\"price\": money}, raw=(\"code\",)),\n}\n";
+const VALIDATORS_BAD: &str = "import frappe\n\n\ndef money(value):\n\treturn value\n\n\ndef _rule(**parts):\n\treturn {\"normalise\": {}, \"prepare\": (), \"checks\": (), \"raw\": ()} | parts\n\n\nRULES = {\n\t\"Part\": _rule(),\n\t\"Thing\": _rule(normalise={\"ghost_field\": money}, raw=(\"code\",)),\n}\n";
+/// A second declaration file joining the same gate (`rules["Widget"] = make()`).
+const MORE_RULES_GOOD: &str = "def extend(rules, make):\n\trules[\"Widget\"] = make()\n";
+const MORE_RULES_BAD: &str = "def extend(rules, make):\n\tpass\n";
+const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
@@ -1290,8 +1683,13 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/hooks.py",
             &format!(
-                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\"}}}}  # \"demoapp.api.commented\"\n",
-                if bad { "missing_fn" } else { "on_todo" }
+                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n]\n",
+                if bad { "missing_fn" } else { "on_todo" },
+                if bad {
+                    "[\"Demo Role\", \"Phantom Role\"]"
+                } else {
+                    "[\"Demo Role\"]"
+                }
             ),
         ),
         f(
@@ -1332,7 +1730,25 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         ),
         f(
             "demoapp/fixtures/role.json",
-            "[{\"doctype\":\"Role\",\"role_name\":\"Demo Role\"}]",
+            if bad {
+                "[{\"doctype\":\"Role\",\"role_name\":\"Demo Role\"},{\"doctype\":\"Role\",\"role_name\":\"Extra Role\"}]"
+            } else {
+                "[{\"doctype\":\"Role\",\"role_name\":\"Demo Role\"}]"
+            },
+        ),
+        f(
+            "demoapp/validators.py",
+            if bad { VALIDATORS_BAD } else { VALIDATORS_GOOD },
+        ),
+        f(
+            "demoapp/more_rules.py",
+            if bad { MORE_RULES_BAD } else { MORE_RULES_GOOD },
+        ),
+        f("demoapp/demo/doctype/widget/__init__.py", ""),
+        f("demoapp/demo/doctype/widget/widget.json", WIDGET_JSON),
+        f(
+            "demoapp/demo/doctype/widget/widget.py",
+            "class Widget:\n    pass\n",
         ),
         f(
             "demoapp/locale/pt_BR.po",
@@ -1345,7 +1761,7 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/demo/sidebar/demo/demo.json",
             &format!(
-                "{{\"doctype\":\"Sidebar\",\"items\":[{{\"label\":\"Things\",\"link_type\":\"DocType\",\"link_to\":\"Thing\"}}{}]}}",
+                "{{\"doctype\":\"Sidebar\",\"items\":[{{\"label\":\"Things\",\"link_type\":\"DocType\",\"link_to\":\"Thing\"}}{},{{\"label\":\"Widget\",\"link_type\":\"DocType\",\"link_to\":\"Widget\"}}]}}",
                 if bad {
                     ",{\"label\":\"Widgets\",\"link_type\":\"Page\",\"link_to\":\"w\"}"
                 } else {

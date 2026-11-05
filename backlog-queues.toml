@@ -25,7 +25,7 @@ linked = true
 self_if_named = true
 
 [[queue]]
-name = "hub"
+name = "sumaenima"
 prefix = "SB-"
 dir = "docs"
 requires = "app"

@@ -1379,6 +1379,20 @@ mod tests {
                 .iter()
                 .all(|q| q.prefix.ends_with('-') && !q.dir.is_empty())
         );
+        // Canonical names are lowercase (owner decision 2026-11-05): the label is what
+        // `stenio --backlog` prints and what `backlog-method.md` lists, so a capitalized
+        // variant would fork the vocabulary between report and documentation.
+        assert!(
+            queues.iter().all(|q| !q.name.is_empty()
+                && q.name
+                    .chars()
+                    .all(|c| c.is_lowercase() || c.is_ascii_digit() || c == '-')),
+            "queue names must be lowercase: {:?}",
+            queues
+                .iter()
+                .map(|q| q.name.as_str())
+                .collect::<Vec<&str>>()
+        );
         // Bidirectional tracing is a property of the queues whose documents carry `pending:`
         // frontmatter — the homelab (HB-) and the governance one (GB-). The product (SB-) and
         // client (MB-) queues are path-scoped, so linking them would demand `pending:` in files
