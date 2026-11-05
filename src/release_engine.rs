@@ -65,6 +65,8 @@ pub enum Status {
     Pass,
     Fail,
     Skip,
+    /// Not a failure: the built binary plans *fewer* steps than the engine running the release.
+    Warn,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,14 @@ fn fail(name: &'static str, detail: impl Into<String>) -> Line {
 fn skip(name: &'static str, detail: impl Into<String>) -> Line {
     Line {
         status: Status::Skip,
+        name,
+        detail: detail.into(),
+    }
+}
+
+fn warn(name: &'static str, detail: impl Into<String>) -> Line {
+    Line {
+        status: Status::Warn,
         name,
         detail: detail.into(),
     }
@@ -316,6 +326,111 @@ fn check_build(r: &dyn Runner, a: &RelArgs) -> Line {
         Ok(o) => fail("build", format!("cargo exited {}", o.code)),
         Err(e) => fail("build", e),
     }
+}
+
+/// The argv of the freshly built binary's own plan, the one [`check_plan_parity`] reads.
+fn dry_run_argv(a: &RelArgs) -> Vec<String> {
+    vec![
+        a.repo.join("target/release/stenio").display().to_string(),
+        "release-engine".to_string(),
+        "--tag".to_string(),
+        a.tag.clone(),
+        "--dry-run".to_string(),
+    ]
+}
+
+/// The step names the `--dry-run` output announces (`PLAN <name> <command>`). Only the names are
+/// compared: the commands carry absolute paths and versions that legitimately differ between the
+/// two binaries and would turn every release into noise.
+fn plan_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.trim().strip_prefix("PLAN "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
+/// One line, so a FAIL row never breaks the one-row-per-step output.
+fn flat(s: &str) -> String {
+    let parts: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if parts.is_empty() {
+        "<no output>".to_string()
+    } else {
+        parts.join(" | ")
+    }
+}
+
+/// The release that introduces a gate must be verified by that same gate. The engine executing a
+/// release is always the one installed *before* it, so the checks a tag adds are only enforced from
+/// the next tag on: the facts are that `integrity` never ran on the very 4.20.0 that introduced it,
+/// and `lockfile`/`binary-version` only gated from 4.22.0 on. Each release was approved by a weaker
+/// standard than the one it shipped.
+///
+/// The freshly built binary knows its own sequence, so it is asked for `--dry-run` and the step
+/// names are compared with the plan of the engine doing the work: a name the built binary plans and
+/// this engine does not know means the tag would be approved without that gate → FAIL. A name only
+/// this engine knows means the built binary dropped a step → WARN, the sequence still runs.
+fn check_plan_parity(r: &dyn Runner, a: &RelArgs) -> Line {
+    let bin = a.repo.join("target/release/stenio");
+    if !bin.is_file() {
+        return fail(
+            "plan-parity",
+            format!("{} missing: the build produced no binary", bin.display()),
+        );
+    }
+    let o = match r.run(Some(&a.repo), &dry_run_argv(a), Duration::from_secs(120)) {
+        Ok(o) => o,
+        Err(e) => return fail("plan-parity", format!("cannot run the built binary: {e}")),
+    };
+    if !out_ok(&o) {
+        return fail(
+            "plan-parity",
+            format!("--dry-run exited {}: {}", o.code, flat(&o.stdout)),
+        );
+    }
+    let fresh = plan_names(&o.stdout);
+    if fresh.is_empty() {
+        return fail(
+            "plan-parity",
+            format!("--dry-run printed no PLAN line: {}", flat(&o.stdout)),
+        );
+    }
+    let current_plan = plan(a);
+    let fresh_set: std::collections::BTreeSet<&str> = fresh.iter().map(String::as_str).collect();
+    let current_set: std::collections::BTreeSet<&str> =
+        current_plan.iter().map(|(n, _)| *n).collect();
+    let added: Vec<&str> = fresh_set.difference(&current_set).copied().collect();
+    if !added.is_empty() {
+        // Advisory on purpose: this is the release that introduces the step, and the engine
+        // running the sequence is the previous one, so it cannot apply what it does not know.
+        // Failing here would make adding a gate impossible — every future step would be blocked
+        // by its own absence. The price of the advisory is one release graded by the older
+        // standard; the price of failing is no new gates at all.
+        return warn(
+            "plan-parity",
+            format!(
+                "{} introduces step(s) this engine does not run: {} — graded by the previous standard, enforced from the next release",
+                a.tag,
+                added.join(", ")
+            ),
+        );
+    }
+    let dropped: Vec<&str> = current_set.difference(&fresh_set).copied().collect();
+    if !dropped.is_empty() {
+        // The dangerous direction: a release that removes a gate silently raises the standard
+        // of proof it accepts. Losing protection is a FAIL.
+        return fail(
+            "plan-parity",
+            format!(
+                "the built binary no longer plans step(s) this engine runs: {} — the release would drop a gate the current engine still applies",
+                dropped.join(", ")
+            ),
+        );
+    }
+    pass(
+        "plan-parity",
+        format!("{} step(s) match the built binary's plan", fresh.len()),
+    )
 }
 
 /// `cargo metadata --locked --offline --no-deps`: parses `Cargo.toml` without the network.
@@ -678,7 +793,8 @@ fn check_scope(r: &dyn Runner, a: &RelArgs, scope: &str, vault: &Path) -> Line {
 }
 
 /// The whole sequence. Stops at the first failing prerequisite (tag), at a stale lockfile (before
-/// the build) and at a build that declares another version (before the install).
+/// the build), at a build that declares another version (before the install) and at a plan the
+/// running engine does not know (before the install).
 fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     let version = a.tag.trim_start_matches('v').to_string();
     let mut out = Vec::new();
@@ -705,6 +821,15 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     let declared_ok = declared.status == Status::Pass;
     out.push(declared);
     if !declared_ok {
+        return out;
+    }
+    // After `binary-version` on purpose: the parity check trusts what the built binary prints, so
+    // a stale `target/release/stenio` (a refused build) would answer with the *previous* plan and
+    // pass vacuously. Only a binary that declares the tag version is worth asking.
+    let parity = check_plan_parity(r, a);
+    let parity_ok = parity.status != Status::Fail;
+    out.push(parity);
+    if !parity_ok {
         return out;
     }
     out.push(check_integrity(r, a));
@@ -753,6 +878,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("lockfile", format!("cargo metadata --locked --offline --no-deps --format-version 1 (in {})", a.repo.display())),
         ("build", format!("cargo build --release --locked (in {})", a.repo.display())),
         ("binary-version", format!("{}/target/release/stenio --version == {version}", a.repo.display())),
+        ("plan-parity", format!("{}/target/release/stenio release-engine --tag {} --dry-run (step names vs this engine)", a.repo.display(), a.tag)),
         ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
         ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
@@ -763,6 +889,15 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("scope-vault", "~/.cargo/bin/stenio --scope vault".to_string()),
         ("scope-homelab", "~/.cargo/bin/stenio --scope homelab".to_string()),
     ]
+}
+
+/// The `--dry-run` text a plan prints: one `PLAN <name> <command>` per step.
+fn plan_text(steps: &[(&str, String)]) -> String {
+    steps
+        .iter()
+        .map(|(n, c)| format!("PLAN {n:<16} {c}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn run_cli(argv: &[String]) -> i32 {
@@ -796,6 +931,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
             Status::Pass => "PASS",
             Status::Fail => "FAIL",
             Status::Skip => "SKIP",
+            Status::Warn => "WARN",
         };
         println!("{tag} {:<16} {}", l.name, l.detail);
     }
@@ -927,6 +1063,9 @@ fn scripted(
         key(&["cargo", "build", "--release", "--locked"].map(String::from)),
         ok(""),
     );
+    // The freshly built binary announces the same plan this engine has, so `plan-parity` passes.
+    // The mutation cases below rewrite exactly this entry to drive the FAIL and WARN paths.
+    m.insert(key(&dry_run_argv(a)), ok(&plan_text(&plan(a))));
     m.insert(
         key(&lockfile_argv()),
         ok(&format!(
@@ -1010,6 +1149,39 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     );
     let driftlock = run_steps(&Fake(scripted(&a6, "4.18.0")), &a6);
     let _ = std::fs::remove_dir_all(&tree6);
+    // The whole point of GB-073: a release that adds a gate used to be approved by the engine that
+    // lacked it. Here the built binary plans one step this engine does not know, so the sequence
+    // must FAIL by name and stop before installing.
+    let (a7, tree7) = fixture_tree("4.17.0", "4.18.0");
+    let mut ahead_steps = plan(&a7);
+    ahead_steps.push((
+        "new-gate",
+        "target/release/stenio --gate --strict".to_string(),
+    ));
+    let mut ahead = scripted(&a7, "4.18.0");
+    ahead.insert(key(&dry_run_argv(&a7)), (0, plan_text(&ahead_steps)));
+    let ahead_run = run_steps(&Fake(ahead), &a7);
+    let _ = std::fs::remove_dir_all(&tree7);
+    // The other direction is not a failure: the built binary dropped a step this engine knows.
+    let (a8, tree8) = fixture_tree("4.17.0", "4.18.0");
+    let mut behind_steps = plan(&a8);
+    behind_steps.retain(|(n, _)| *n != "integrity");
+    let mut behind = scripted(&a8, "4.18.0");
+    behind.insert(key(&dry_run_argv(&a8)), (0, plan_text(&behind_steps)));
+    let behind_run = run_steps(&Fake(behind), &a8);
+    let _ = std::fs::remove_dir_all(&tree8);
+    // A binary whose `--dry-run` fails cannot prove parity: FAIL with the raw output, never PASS.
+    let (a9, tree9) = fixture_tree("4.17.0", "4.18.0");
+    let mut broken = scripted(&a9, "4.18.0");
+    broken.insert(
+        key(&dry_run_argv(&a9)),
+        (
+            2,
+            "error: unrecognized subcommand 'release-engine'".to_string(),
+        ),
+    );
+    let broken_run = run_steps(&Fake(broken), &a9);
+    let _ = std::fs::remove_dir_all(&tree9);
     let unsafe_tag = !valid(&RelArgs {
         tag: "v1;rm".into(),
         ..a.clone()
@@ -1021,7 +1193,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 15,
+            plan(&a).len() == 16,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -1035,7 +1207,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 15,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 16,
         ),
         (
             "release-engine fails when the built binary declares another version".to_string(),
@@ -1063,6 +1235,29 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 && !driftlock.iter().any(|l| l.name == "build"),
         ),
         ("release-engine keeps a rollback copy".to_string(), rollback),
+        (
+            "release-engine warns when the built binary plans a step this engine lacks".to_string(),
+            ahead_run.iter().any(|l| {
+                l.name == "plan-parity" && l.status == Status::Warn && l.detail.contains("new-gate")
+            }) && ahead_run
+                .iter()
+                .any(|l| l.name == "install" && l.status == Status::Pass),
+        ),
+        (
+            "release-engine fails when the built binary drops a step".to_string(),
+            behind_run
+                .iter()
+                .any(|l| l.name == "plan-parity" && l.status == Status::Fail)
+                && !behind_run.iter().any(|l| l.name == "install"),
+        ),
+        (
+            "release-engine fails when the built binary cannot print its plan".to_string(),
+            broken_run.iter().any(|l| {
+                l.name == "plan-parity"
+                    && l.status == Status::Fail
+                    && l.detail.contains("unrecognized subcommand")
+            }) && !broken_run.iter().any(|l| l.name == "install"),
+        ),
     ]
 }
 

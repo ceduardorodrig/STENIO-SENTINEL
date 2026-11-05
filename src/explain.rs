@@ -279,6 +279,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Make both sides point at each other: fix the `Ref` to an existing document, add the matching `pending: [ID]` to that document's frontmatter, and open any ID a document declares in mnemocine/backlog.md.",
     },
     RuleExplanation {
+        id: "DOC-BACKLOG-QUEUE-PARITY",
+        name: "Queue Registry / Method Doc Parity",
+        severity: "ERROR",
+        tag: "doc",
+        summary: "The `## 2. Queues` table of `governance/backlog-method.md` must agree, queue by queue, with the embedded registry (`backlog-queues.toml`): same set of queues, same prefix, the table label must be the registry `name`, and the `Location` cell must resolve to the registry `dir`. Inert — silent, never a guess — when the document or that table is absent or shaped differently.",
+        rationale: "The registry is the machine source (`stenio --backlog` prints its names), the table is what a person reads. Renaming one side by hand is invisible: on 2026-11-05 the table said 'SUMÆNIMÁ Hub' and 'Miracena engagement' while the TOML said `hub` and `miracena`, and only a manual `rg` found it. A human reading aid that forks the vocabulary the engine prints is worse than no aid, so the two sources are reconciled by machine instead of by discipline.",
+        bad_example: "| SUMÆNIMÁ Hub | `SB-` | `<hub>/docs/backlog.md` | no | English |\n| Miracena engagement | `MB-` | `clients/miracena/backlog.md` | no | English |\n# ...while backlog-queues.toml still declares name = \"hub\" / name = \"miracena\",\n# and the table no longer lists the GB- queue at all.",
+        good_example: "| homelab | `HB-` | `mnemocine/backlog.md` | yes | English (public repo, **no client names**) |\n| sumaenima | `SB-` | `<hub>/docs/backlog.md` | no | English |\n| miracena | `MB-` | `clients/miracena/backlog.md` | no | English |\n| governance | `GB-` | `governance/backlog.md` | no | English |",
+        remediation: "Fix the table, not the registry: use the `name` the TOML declares (lowercase), its exact `prefix`, and a `Location` that resolves to its `dir` (`<dir>/backlog.md`, with `<hub>/` for the out-of-vault Hub root). Add the row of a queue the table lost; register and rebuild the engine for a queue the table has and the registry does not.",
+    },
+    RuleExplanation {
         id: "HOMELAB-BACKLOG-MALFORMED",
         name: "Malformed Backlog Item",
         severity: "WARN",

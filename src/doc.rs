@@ -566,6 +566,13 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
     violations.extend(product_queues.violations);
     messages.extend(product_queues.messages);
 
+    // ── Queue registry × `backlog-method.md` §2 table (DOC-BACKLOG-QUEUE-PARITY, GB-066) ──
+    // The human table and `backlog-queues.toml` drifted apart by hand once (the table said
+    // "SUMÆNIMÁ Hub" and "Miracena engagement" while the registry said `hub` and `miracena`),
+    // and only a manual `rg` caught it. Reconciles both sources by machine; inert when the
+    // document or its table is absent (hub and product repositories carry neither).
+    violations.extend(crate::backlog::audit_queue_doc(repo_root));
+
     DocAuditResult {
         total_docs,
         broken_links,

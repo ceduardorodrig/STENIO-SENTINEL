@@ -26,6 +26,9 @@
 //!   * `DOC-BACKLOG-RECURRENCE`     — a `Recurrence` link and its `Recurred-by` twin do not
 //!     agree: a recurring item must point at an *archived* item, and that archived item must
 //!     point back at the open one.
+//!   * `DOC-BACKLOG-QUEUE-PARITY`   — the `## 2. Queues` table of `governance/backlog-method.md`
+//!     and the embedded registry disagree (queue, prefix, label or directory). Silent when the
+//!     document or its table is absent: the rule reconciles two sources, it never invents one.
 //!
 //! Severity is adaptive: a drift on a 🔴 (critical) item is an **Error** and blocks the gate;
 //! every other finding stays a **Warning** (visible, never silenced). Columns are resolved
@@ -968,9 +971,311 @@ pub fn fix_drift(repo_root: &Path) -> (usize, Vec<String>) {
     (changed, manual)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// Queue registry × method-document parity (`DOC-BACKLOG-QUEUE-PARITY`, GB-066)
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// The method document carrying the human-readable queue table. The registry is the machine
+/// source; the table is what a person reads, and the two were renamed apart by hand once.
+const QUEUE_DOC_REL: &str = "governance/backlog-method.md";
+
+/// Rule id of the parity check between the embedded registry and that table.
+pub const QUEUE_DOC_RULE_ID: &str = "DOC-BACKLOG-QUEUE-PARITY";
+
+/// One row of the `## 2. Queues` table, already normalised for comparison.
+struct DocQueueRow {
+    label: String,
+    prefix: String,
+    dir: String,
+    line: usize,
+    raw: String,
+}
+
+/// Strips the Markdown decoration a documentation table legitimately carries: backticks around a
+/// value, bold markers, and a link whose visible text is the value (`[x](y)` becomes `x`).
+fn clean_cell(cell: &str) -> String {
+    let mut value = cell.trim().to_string();
+    let link = match (value.find('['), value.find("](")) {
+        (Some(open), Some(close)) if open < close => Some((open, close)),
+        _ => None,
+    };
+    if let Some((open, close)) = link {
+        let tail = value[close + 2..].to_string();
+        if let Some(end) = tail.find(')') {
+            value = format!("{}{}", &value[open + 1..close], &tail[end + 1..]);
+        }
+    }
+    value.replace('`', "").replace("**", "").trim().to_string()
+}
+
+/// Directory the table's `Location` cell points at. The table names the queue's *index file*
+/// (`mnemocine/backlog.md`) and hides the out-of-vault Hub root behind the `<hub>/` placeholder,
+/// while the registry stores the directory only (`dir`). Tolerated and normalised away: the
+/// placeholders of `clean_cell`, a leading `./`, a leading `<hub>/`, a trailing `/backlog.md`
+/// and trailing slashes. `requires` has no counterpart in the table (the registry uses it to
+/// recognise a repository root), so it is deliberately not compared.
+fn doc_location_dir(location: &str) -> String {
+    // The trailing slash may close the directory (`mnemocine/`) or the file (`…/backlog.md/`),
+    // so it is removed before the index file is peeled off and again after it.
+    let mut path = clean_cell(location).trim_end_matches('/').to_string();
+    if let Some(rest) = path.strip_prefix("./") {
+        path = rest.to_string();
+    }
+    if path.to_ascii_lowercase().starts_with("<hub>/") {
+        path = path["<hub>/".len()..].to_string();
+    }
+    if let Some(head) = path.strip_suffix("backlog.md") {
+        path = head.to_string();
+    }
+    path.trim_end_matches('/').to_string()
+}
+
+/// Reads the `## 2. Queues` table: the header must be `| Queue | Prefix | Location | ...`, the
+/// separator row is skipped and columns are taken by position inside that fixed header. Anything
+/// that does not look like that table yields `None` — the rule is inert instead of guessing, so a
+/// reshaped document can never manufacture drift. Returns the header line plus the rows.
+fn parse_queue_doc(content: &str) -> Option<(usize, Vec<DocQueueRow>)> {
+    let lines: Vec<&str> = content.lines().collect();
+    let header = lines.iter().position(|line| {
+        let cells: Vec<String> = split_row(line)
+            .iter()
+            .map(|cell| clean_cell(cell).to_ascii_lowercase())
+            .collect();
+        cells.len() >= 3
+            && cells.first().map(|c| c == "queue").unwrap_or(false)
+            && cells.get(1).map(|c| c == "prefix").unwrap_or(false)
+            && cells.iter().skip(2).any(|c| c.starts_with("location"))
+    })?;
+
+    let mut rows = Vec::new();
+    for (offset, line) in lines.iter().enumerate().skip(header + 1) {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            break;
+        }
+        let cells: Vec<String> = split_row(trimmed)
+            .iter()
+            .map(|cell| clean_cell(cell))
+            .collect();
+        if cells
+            .iter()
+            .all(|c| c.is_empty() || c.chars().all(|ch| ch == '-' || ch == ':'))
+        {
+            continue;
+        }
+        if cells.len() < 3 {
+            continue;
+        }
+        rows.push(DocQueueRow {
+            label: cells[0].clone(),
+            prefix: cells[1].trim().to_ascii_uppercase(),
+            dir: doc_location_dir(&cells[2]),
+            line: offset + 1,
+            raw: trimmed.to_string(),
+        });
+    }
+    if rows.is_empty() {
+        None
+    } else {
+        Some((header + 1, rows))
+    }
+}
+
+fn queue_doc_violation(
+    line: usize,
+    snippet: &str,
+    message: String,
+    suggestion: String,
+) -> Violation {
+    Violation {
+        rule_id: QUEUE_DOC_RULE_ID.to_string(),
+        rule_name: "Backlog Queue Registry / Method Doc Parity".to_string(),
+        severity: Severity::Error,
+        file_path: QUEUE_DOC_REL.to_string(),
+        line_number: line,
+        snippet: snippet.to_string(),
+        message,
+        suggestion: Some(suggestion),
+    }
+}
+
+/// Reconciles the embedded registry with the `## 2. Queues` table of `backlog-method.md`, queue by
+/// queue. A queue of either side that the other does not declare, a prefix that disagrees, a label
+/// that is not the registry `name`, and a location that is not the registry `dir` are all Errors:
+/// the table is the human reading aid, so it must not fork the vocabulary the engine prints.
+/// Silent (no violation, no guess) when the document or its table is absent — product repositories
+/// carry neither, and a reshaped table must not invent drift.
+pub fn audit_queue_doc(repo_root: &Path) -> Vec<Violation> {
+    let Ok(content) = fs::read_to_string(repo_root.join(QUEUE_DOC_REL)) else {
+        return Vec::new();
+    };
+    let Some((header_line, rows)) = parse_queue_doc(&content) else {
+        return Vec::new();
+    };
+
+    let mut violations = Vec::new();
+    let mut claimed = vec![false; rows.len()];
+
+    for q in registry() {
+        let wanted = q.prefix.trim().to_ascii_uppercase();
+        let by_prefix = rows
+            .iter()
+            .enumerate()
+            .position(|(i, r)| !claimed[i] && r.prefix == wanted);
+        // A row whose label is the registry name but whose prefix drifted is still that queue:
+        // matching by label first would hide the prefix, so the prefix wins and the label is the
+        // fallback that turns "missing + extra" into one honest finding.
+        let found = by_prefix.or_else(|| {
+            rows.iter()
+                .enumerate()
+                .position(|(i, r)| !claimed[i] && r.label.eq_ignore_ascii_case(&q.name))
+        });
+        let Some(idx) = found else {
+            violations.push(queue_doc_violation(
+                header_line,
+                "",
+                format!(
+                    "queue '{}' ({}) is declared in backlog-queues.toml but missing from the queue table of backlog-method.md",
+                    q.name, q.prefix
+                ),
+                format!(
+                    "Add a row `| {} | `{}` | `<dir>/backlog.md` | ...` with the registry values (dir `{}`).",
+                    q.name, q.prefix, q.dir
+                ),
+            ));
+            continue;
+        };
+        claimed[idx] = true;
+        let row = &rows[idx];
+
+        if by_prefix.is_none() {
+            violations.push(queue_doc_violation(
+                row.line,
+                &row.raw,
+                format!(
+                    "prefix differs: the table says '{}' for '{}' while backlog-queues.toml declares '{}'",
+                    row.prefix, q.name, q.prefix
+                ),
+                format!("Use `{}` in the table, exactly as the registry declares it.", q.prefix),
+            ));
+        }
+        if !row.label.eq_ignore_ascii_case(&q.name) {
+            violations.push(queue_doc_violation(
+                row.line,
+                &row.raw,
+                format!(
+                    "label differs: the table says '{}' while the registry name is '{}'",
+                    row.label, q.name
+                ),
+                format!(
+                    "Rename the table cell to '{}' (the label `stenio --backlog` prints).",
+                    q.name
+                ),
+            ));
+        }
+        if row.dir != q.dir.trim_end_matches('/') {
+            violations.push(queue_doc_violation(
+                row.line,
+                &row.raw,
+                format!(
+                    "location differs: the table points at '{}' while the registry dir is '{}'",
+                    row.dir, q.dir
+                ),
+                format!(
+                    "Point the Location cell at '{}/backlog.md'.",
+                    q.dir.trim_end_matches('/')
+                ),
+            ));
+        }
+    }
+
+    for (i, row) in rows.iter().enumerate() {
+        if claimed[i] {
+            continue;
+        }
+        violations.push(queue_doc_violation(
+            row.line,
+            &row.raw,
+            format!(
+                "the queue table lists '{}' ({}) but backlog-queues.toml does not declare it",
+                row.label, row.prefix
+            ),
+            "Register the queue in backlog-queues.toml and rebuild the engine, or remove the row."
+                .to_string(),
+        ));
+    }
+
+    violations
+}
+
+/// A §2 row in the shape `backlog-method.md` renders: backticks around the values, the index file
+/// as `Location`, and `<hub>/` for the out-of-vault Hub root.
+fn queue_doc_row(label: &str, q: &Queue) -> String {
+    let location = if q.requires.is_some() {
+        format!("<hub>/{}/backlog.md", q.dir)
+    } else {
+        format!("{}/backlog.md", q.dir)
+    };
+    format!("| {label} | `{}` | `{location}` | no | English |", q.prefix)
+}
+
+/// Builds the self-test fixture: the `## 2. Queues` table generated from the embedded registry, so
+/// the clean case is in parity by construction and only the requested mutation (`rename` one
+/// queue's label, `drop` a prefix, `extra` row) introduces drift. The caller removes the directory.
+fn queue_doc_fixture(
+    tag: &str,
+    rename: Option<(&str, &str)>,
+    drop: Option<&str>,
+    extra: bool,
+) -> Option<PathBuf> {
+    let mut rows = Vec::new();
+    for q in registry() {
+        if drop == Some(q.prefix.as_str()) {
+            continue;
+        }
+        let label = match rename {
+            Some((prefix, new_label)) if prefix == q.prefix => new_label.to_string(),
+            _ => q.name.clone(),
+        };
+        rows.push(queue_doc_row(&label, &q));
+    }
+    if extra {
+        rows.push("| phantom | `ZZ-` | `phantom/backlog.md` | no | English |".to_string());
+    }
+    let doc = format!(
+        "# Backlog Method (canonical)\n\n## 2. Queues\n\n| Queue | Prefix | Location | Traced to docs (`linked`) | Language |\n|---|---|---|---|---|\n{}\n\nPersonal work belongs to the homelab queue (`HB-`).\n",
+        rows.join("\n")
+    );
+    let root = std::env::temp_dir().join(format!("stenio-queuedoc-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let dir = root.join("governance");
+    fs::create_dir_all(&dir).ok()?;
+    fs::write(dir.join("backlog-method.md"), doc).ok()?;
+    Some(root)
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let doc = "---\ntags: [a]\npending: [HB-001]\nkind: x\n---\n# Body\npending: [HB-999]\n";
     let bare = "---\ntags: [a]\n---\nbody\n";
+    // Parity fixtures: the clean table is generated from the registry (parity by construction)
+    // and the drifted one renames a single queue label, the exact shape GB-066 was born from.
+    let clean = queue_doc_fixture("self-good", None, None, false);
+    let drifted = queue_doc_fixture("self-bad", Some(("SB-", "hub")), None, false);
+    let parity_silent = clean
+        .as_deref()
+        .map(|root| audit_queue_doc(root).is_empty())
+        .unwrap_or(false);
+    let parity_fires = drifted
+        .as_deref()
+        .map(|root| {
+            audit_queue_doc(root)
+                .iter()
+                .any(|v| v.rule_id == QUEUE_DOC_RULE_ID && v.message.contains("label differs"))
+        })
+        .unwrap_or(false);
+    for root in [&clean, &drifted].into_iter().flatten() {
+        let _ = fs::remove_dir_all(root);
+    }
     vec![
         (
             "backlog next-id spans the archive".to_string(),
@@ -986,6 +1291,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 && add_pending(bare, "HB-002").as_deref()
                     == Some("---\ntags: [a]\npending: [HB-002]\n---\nbody\n")
                 && add_pending("no frontmatter", "HB-002").is_none(),
+        ),
+        (
+            "backlog queue doc parity is silent when the table matches".to_string(),
+            parity_silent,
+        ),
+        (
+            "backlog queue doc parity fires on a drifted label".to_string(),
+            parity_fires,
         ),
     ]
 }
@@ -1457,5 +1770,131 @@ mod tests {
             "unexpected: {}",
             report.violations.len()
         );
+    }
+
+    fn write_method_doc(tag: &str, body: Option<&str>) -> Option<PathBuf> {
+        let root =
+            std::env::temp_dir().join(format!("stenio-queuedoc-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).ok()?;
+        if let Some(text) = body {
+            let dir = root.join("governance");
+            fs::create_dir_all(&dir).ok()?;
+            fs::write(dir.join("backlog-method.md"), text).ok()?;
+        }
+        Some(root)
+    }
+
+    /// Tolerance contract: a label may be capitalised or bold, a value may be wrapped in backticks
+    /// or a link, the Hub root may hide behind `<hub>/`, the cell may name the index file and carry
+    /// a trailing slash. None of it is drift, so the rule must stay silent.
+    #[test]
+    fn queue_doc_parity_tolerates_markdown_and_placeholders() {
+        let rows: Vec<String> = registry()
+            .iter()
+            .map(|q| {
+                let location = if q.requires.is_some() {
+                    format!("<hub>/{}/backlog.md", q.dir)
+                } else {
+                    format!("{}/backlog.md/", q.dir)
+                };
+                let mut chars = q.name.chars();
+                let label = match chars.next() {
+                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                    None => String::new(),
+                };
+                format!(
+                    "| **{label}** | `{}` | [`{location}`]({location}) | no | English |",
+                    q.prefix
+                )
+            })
+            .collect();
+        let doc = format!(
+            "## 2. Queues\n\n| Queue | Prefix | Location | Language |\n|---|---|---|---|\n{}\n",
+            rows.join("\n")
+        );
+        let root = write_method_doc("tolerant", Some(&doc));
+        let found = root.as_deref().map(audit_queue_doc).unwrap_or_default();
+        for root in root.into_iter() {
+            let _ = fs::remove_dir_all(root);
+        }
+        assert!(
+            found.is_empty(),
+            "tolerated markdown reported as drift: {:?}",
+            found.iter().map(|v| v.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The four accusations GB-066 asks for: a drifted label, a drifted prefix, a queue the table
+    /// lost and a row the registry never declared. Each one is an Error on the document line.
+    #[test]
+    fn queue_doc_parity_reports_every_kind_of_drift() {
+        let renamed = queue_doc_fixture("drift-label", Some(("SB-", "hub")), None, false);
+        let missing = queue_doc_fixture("drift-missing", None, Some("GB-"), false);
+        let extra = queue_doc_fixture("drift-extra", None, None, true);
+        let prefixed = queue_doc_fixture("drift-prefix", None, None, false);
+        let prefixed_text = prefixed.as_ref().and_then(|root| {
+            let path = root.join(QUEUE_DOC_REL);
+            fs::read_to_string(path)
+                .ok()
+                .map(|text| text.replace("`MB-`", "`MC-`"))
+                .and_then(|text| fs::write(root.join(QUEUE_DOC_REL), text).ok())
+        });
+        assert!(prefixed_text.is_some(), "prefix fixture not written");
+
+        let collect =
+            |root: &Option<PathBuf>| root.as_deref().map(audit_queue_doc).unwrap_or_default();
+        let (label_v, missing_v, extra_v, prefix_v) = (
+            collect(&renamed),
+            collect(&missing),
+            collect(&extra),
+            collect(&prefixed),
+        );
+        for root in [&renamed, &missing, &extra, &prefixed]
+            .into_iter()
+            .flatten()
+        {
+            let _ = fs::remove_dir_all(root);
+        }
+
+        assert_eq!(label_v.len(), 1, "{:?}", label_v);
+        assert!(label_v[0].message.contains("label differs"));
+        assert_eq!(label_v[0].rule_id, QUEUE_DOC_RULE_ID);
+        assert!(label_v[0].line_number > 1 && label_v[0].file_path == QUEUE_DOC_REL);
+
+        assert_eq!(missing_v.len(), 1, "{:?}", missing_v);
+        assert!(
+            missing_v[0]
+                .message
+                .contains("missing from the queue table")
+        );
+
+        assert_eq!(extra_v.len(), 1, "{:?}", extra_v);
+        assert!(extra_v[0].message.contains("does not declare it"));
+
+        assert_eq!(prefix_v.len(), 1, "{:?}", prefix_v);
+        assert!(prefix_v[0].message.contains("prefix differs"));
+    }
+
+    /// No document, no table, or a table with another header: nothing to reconcile, so the rule is
+    /// silent instead of reporting the whole registry as missing.
+    #[test]
+    fn queue_doc_parity_is_inert_without_the_table() {
+        let absent = write_method_doc("absent", None);
+        let reshaped = write_method_doc(
+            "reshaped",
+            Some(
+                "# Method\n\n## 2. Queues\n\n| Fila | Prefixo | Local |\n|---|---|---|\n| homelab | `HB-` | `mnemocine` |\n",
+            ),
+        );
+        let headerless = write_method_doc("headerless", Some("# Method\n\nNo table here.\n"));
+        for root in [&absent, &reshaped, &headerless].into_iter().flatten() {
+            assert!(
+                audit_queue_doc(root).is_empty(),
+                "inert case produced drift at {}",
+                root.display()
+            );
+            let _ = fs::remove_dir_all(root);
+        }
     }
 }
