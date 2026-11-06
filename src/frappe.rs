@@ -134,6 +134,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Kanban Board Not Derived From The App",
         Severity::Error,
     ),
+    (
+        "FRAPPE-TEST-PARITY",
+        "Declared Pure Test Missing From The Release Battery",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+        "Currency Threshold Decided Without An Empty Branch",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -3295,6 +3305,622 @@ fn rule_kanban_derived(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-TEST-PARITY ─────────────────────────────────────────────────────
+// Why it exists: the pure-test battery exists twice — the section of the repository AGENTS.md
+// that declares which modules run "without a site", and the `names`/`cmds` arrays of the release
+// script. They drifted, and a release tagged a tree whose declared tests were not the ones that
+// ran (rc107, tag burned). `names` and `cmds` are PARALLEL arrays: a shifted slot changes which
+// command a log label refers to and the gate lies without failing. Both directions are compared
+// by machine (agent-global-rules.md §12.4); a missing side leaves the rule inert and says so.
+
+/// One quoted command of a bash array, with the source line it occupies.
+struct QuotedCmd {
+    text: String,
+    line: usize,
+}
+
+/// Words of a bash word array (`names=(a b c)`), which may wrap over several lines; a `#` opens
+/// a comment. Returns the words and the line the array opens on.
+fn shell_words(text: &str, key: &str) -> Option<(Vec<String>, usize)> {
+    let head = format!("{key}=(");
+    let mut words: Vec<String> = Vec::new();
+    let mut open: Option<usize> = None;
+    for (i, line) in text.lines().enumerate() {
+        let code = line.split('#').next().unwrap_or("");
+        let start = match open {
+            None => match code.find(&head) {
+                Some(p) => {
+                    open = Some(i + 1);
+                    p + head.len()
+                }
+                None => continue,
+            },
+            Some(_) => 0,
+        };
+        let body = &code[start..];
+        let end = body.find(')').unwrap_or(body.len());
+        words.extend(body[..end].split_whitespace().map(str::to_string));
+        if body.contains(')') {
+            return Some((words, open?));
+        }
+    }
+    None
+}
+
+/// Entries of a bash array written one quoted command per line (`cmds=( "..." ... )`), with the
+/// line each entry occupies. Comments, blank lines and the closing parenthesis are skipped.
+fn shell_quoted(text: &str, key: &str) -> Option<(Vec<QuotedCmd>, usize)> {
+    let head = format!("{key}=(");
+    let mut out: Vec<QuotedCmd> = Vec::new();
+    let mut open: Option<usize> = None;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if open.is_none() {
+            if t.starts_with(&head) {
+                open = Some(i + 1);
+            }
+            continue;
+        }
+        if t.starts_with(')') {
+            break;
+        }
+        let Some(quote) = t.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            continue;
+        };
+        let inner = &t[1..];
+        let end = inner.rfind(quote).unwrap_or(inner.len());
+        out.push(QuotedCmd {
+            text: inner[..end].to_string(),
+            line: i + 1,
+        });
+    }
+    open.map(|l| (out, l))
+}
+
+/// The release battery as the two parallel arrays it is written with.
+struct Battery {
+    rel: String,
+    names: Vec<String>,
+    names_line: usize,
+    cmds: Vec<QuotedCmd>,
+}
+
+fn read_battery(root: &Path, path: &Path) -> Option<Battery> {
+    let text = read(path);
+    let (names, names_line) = shell_words(&text, "names")?;
+    let (cmds, _) = shell_quoted(&text, "cmds")?;
+    Some(Battery {
+        rel: rel(root, path),
+        names,
+        names_line,
+        cmds,
+    })
+}
+
+/// The app root and up to `n` ancestors, nearest first. The filesystem root is never included:
+/// it is not a repository neighbourhood, and walking it would be both slow and meaningless.
+fn ancestors(root: &Path, n: usize) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    let mut cur = root;
+    for _ in 0..n {
+        match cur.parent() {
+            Some(p) => {
+                if p.file_name().is_none() {
+                    break;
+                }
+                out.push(p.to_path_buf());
+                cur = p;
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// Bounded search for a file named `name` under `base`, at most `depth` directory levels down,
+/// whose content satisfies `accept`. Hidden and heavy directories are skipped (the same list the
+/// package walk uses) and the visit count is capped, so an unknown layout costs "not found"
+/// instead of a stalled audit.
+fn find_in(
+    base: &Path,
+    name: &str,
+    depth: usize,
+    accept: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    const MAX_DIRS: usize = 4000;
+    let mut queue: Vec<(PathBuf, usize)> = vec![(base.to_path_buf(), 0)];
+    let mut seen = 0usize;
+    while let Some((dir, level)) = queue.pop() {
+        seen += 1;
+        if seen > MAX_DIRS {
+            return None;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            let name_owned = entry.file_name();
+            let Some(file_name) = name_owned.to_str() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if level < depth && !file_name.starts_with('.') && !SKIP_DIRS.contains(&file_name) {
+                    queue.push((path, level + 1));
+                }
+            } else if kind.is_file() && file_name == name && accept(&path) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// The battery script: `STENIO_FRAPPE_BATTERY`, `[frappe] battery_file`, the two documented repo
+/// positions, then a bounded search from the app root and its ancestors.
+fn parity_battery(c: &Ctx) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let configured = std::env::var("STENIO_FRAPPE_BATTERY")
+        .ok()
+        .into_iter()
+        .chain(c.cfg.battery_file.clone());
+    for f in configured {
+        let p = Path::new(&f);
+        candidates.push(if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            c.root.join(p)
+        });
+    }
+    candidates.push(c.root.join("scripts/release-checks.sh"));
+    candidates.push(c.root.join("compose/frappe/scripts/release-checks.sh"));
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    let accept = |p: &Path| read(p).contains("names=(");
+    ancestors(&c.root, 1)
+        .into_iter()
+        .find_map(|a| find_in(&a, "release-checks.sh", 4, &accept))
+}
+
+/// The document that declares the tests: `STENIO_FRAPPE_TEST_LIST`, `[frappe] test_list_file`,
+/// `<root>/AGENTS.md`, then a bounded search for the nearest AGENTS.md whose text says which
+/// tests run "without a site".
+fn parity_doc(c: &Ctx) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let configured = std::env::var("STENIO_FRAPPE_TEST_LIST")
+        .ok()
+        .into_iter()
+        .chain(c.cfg.test_list_file.clone());
+    for f in configured {
+        let p = Path::new(&f);
+        candidates.push(if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            c.root.join(p)
+        });
+    }
+    candidates.push(c.root.join("AGENTS.md"));
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    let accept = |p: &Path| {
+        let text = read(p).to_lowercase();
+        text.contains("without a site") && text.contains('`')
+    };
+    ancestors(&c.root, 1)
+        .into_iter()
+        .find_map(|a| find_in(&a, "AGENTS.md", 4, &accept))
+}
+
+/// A bare lowercase identifier with at least one underscore — the shape a test module has
+/// (`w1_structure`, `charts_pure`, `i18n_coverage`). Prose, paths and flags never match.
+fn module_shaped(token: &str) -> bool {
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    let mut underscore = false;
+    for ch in chars {
+        if ch == '_' {
+            underscore = true;
+            continue;
+        }
+        if !(ch.is_ascii_lowercase() || ch.is_ascii_digit()) {
+            return false;
+        }
+    }
+    underscore
+}
+
+/// The modules the section of `text` opened by `anchor` declares as running "without a site",
+/// with the line each is declared on. A backticked token counts when it is module-shaped or when
+/// `tests/<token>.py` exists, so prose (`migrate`, `docker`) is never read as a test. `None` when
+/// the section or the declaration sentence is missing: the rule then refuses to compare instead
+/// of passing over an unreadable list.
+fn pure_declaration(text: &str, anchor: &str, tests: &Path) -> Option<Vec<(String, usize)>> {
+    let body = section(text, anchor)?;
+    let top = line_of(text, anchor);
+    let backtick = Regex::new(r"`([^`]+)`").ok()?;
+    let mut out: Vec<(String, usize)> = Vec::new();
+    let mut clause = false;
+    for (i, line) in body.lines().enumerate() {
+        for part in line.split(';') {
+            if !part.to_lowercase().contains("without a site") {
+                continue;
+            }
+            clause = true;
+            for cap in backtick.captures_iter(part) {
+                let Some(token) = cap.get(1).map(|m| m.as_str()) else {
+                    continue;
+                };
+                if module_shaped(token) || tests.join(format!("{token}.py")).is_file() {
+                    out.push((token.to_string(), top + i));
+                }
+            }
+        }
+    }
+    if !clause {
+        return None;
+    }
+    out.sort();
+    out.dedup();
+    Some(out)
+}
+
+fn rule_test_parity(c: &Ctx) -> Vec<Violation> {
+    let root_label = c.root.display().to_string();
+    let hint_cfg = "Declare `[frappe] test_list_file`/`test_list_anchor` and `battery_file` (or STENIO_FRAPPE_TEST_LIST / STENIO_FRAPPE_BATTERY).";
+    let Some(doc) = parity_doc(c) else {
+        return vec![viol_as(
+            "FRAPPE-TEST-PARITY",
+            Severity::Warning,
+            "AGENTS.md",
+            1,
+            "AGENTS.md",
+            format!(
+                "No test-list document was found from {root_label}: the parity between the declared pure tests and the release battery is unverified for this tree (isolated repo or partial checkout)."
+            ),
+            hint_cfg,
+        )];
+    };
+    let doc_rel = rel(&c.root, &doc);
+    let anchor = c
+        .cfg
+        .test_list_anchor
+        .clone()
+        .unwrap_or_else(|| "## 2.".to_string());
+    let Some(declared) = pure_declaration(&read(&doc), &anchor, &c.pkg.join("tests")) else {
+        return vec![viol(
+            "FRAPPE-TEST-PARITY",
+            &doc_rel,
+            1,
+            &anchor,
+            format!(
+                "`{doc_rel}` has no section `{anchor}`, or that section no longer declares which tests run `without a site`: the list the battery is compared against cannot be read, so the parity would pass on nothing."
+            ),
+            "Keep the release section and the sentence that names the pure tests (or point `test_list_anchor` at the heading that holds them).",
+        )];
+    };
+    let Some(battery) = parity_battery(c).and_then(|p| read_battery(&c.root, &p)) else {
+        return vec![viol_as(
+            "FRAPPE-TEST-PARITY",
+            Severity::Warning,
+            "release-checks.sh",
+            1,
+            "release-checks.sh",
+            format!(
+                "No release battery with `names=(`/`cmds=(` was found from {root_label} (app root, its two documented positions and a bounded search of its ancestors): the declared pure tests are unverified for this tree (isolated repo or partial checkout)."
+            ),
+            hint_cfg,
+        )];
+    };
+    let mut out = Vec::new();
+    if battery.names.len() != battery.cmds.len() {
+        out.push(viol(
+            "FRAPPE-TEST-PARITY",
+            &battery.rel,
+            battery.names_line,
+            "names=(",
+            format!(
+                "`{}` declares {} label(s) in `names` and {} command(s) in `cmds`: the arrays are parallel, so a slot no longer names its own command and every log line of the battery reports the wrong test.",
+                battery.rel,
+                battery.names.len(),
+                battery.cmds.len()
+            ),
+            "Restore the one-to-one order: each label needs its command at the same index.",
+        ));
+    }
+    let Ok(module_re) = Regex::new(r"tests/([A-Za-z0-9_]+)\.py") else {
+        return out;
+    };
+    let tests = c.pkg.join("tests");
+    let mut ran: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, label) in battery.names.iter().enumerate() {
+        let Some(cmd) = battery.cmds.get(i) else {
+            continue;
+        };
+        let Some(module) = module_re
+            .captures(&cmd.text)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string())
+        else {
+            continue; // a lint or a secret scan is not a test module: nothing to pair
+        };
+        if !module.starts_with(label.as_str()) {
+            out.push(viol(
+                "FRAPPE-TEST-PARITY",
+                &battery.rel,
+                cmd.line,
+                label,
+                format!(
+                    "Slot {i} of `{}` is labelled `{label}` but its command runs `{module}`: `names` and `cmds` have drifted out of alignment.",
+                    battery.rel
+                ),
+                &format!("Put the label and the command of `{module}` in the same slot."),
+            ));
+        }
+        if !tests.join(format!("{module}.py")).is_file() {
+            out.push(viol(
+                "FRAPPE-TEST-PARITY",
+                &battery.rel,
+                cmd.line,
+                &module,
+                format!(
+                    "The release battery `{}` runs `{module}` but `tests/{module}.py` is not in the app: that slot fails at release time (or is skipped by a guard), so the module named after it never runs.",
+                    battery.rel
+                ),
+                &format!(
+                    "Add `tests/{module}.py` or remove the stale slot from both arrays of `{}`.",
+                    battery.rel
+                ),
+            ));
+        }
+        ran.entry(module).or_insert(cmd.line);
+    }
+    let mut listed: BTreeMap<String, usize> = BTreeMap::new();
+    for (module, line) in declared {
+        listed.entry(module).or_insert(line);
+    }
+    for (module, line) in &listed {
+        if !ran.contains_key(module) {
+            out.push(viol(
+                "FRAPPE-TEST-PARITY",
+                &doc_rel,
+                *line,
+                module,
+                format!(
+                    "`{module}` is declared as a pure test in `{doc_rel}`:{line} (section `{anchor}`) but the release battery `{}` never runs it: the declaration promises coverage the gate does not deliver.",
+                    battery.rel
+                ),
+                &format!(
+                    "Add `{module}` to both arrays of `{}` (same slot), or stop declaring it as a pure test.",
+                    battery.rel
+                ),
+            ));
+        }
+    }
+    for (module, line) in &ran {
+        if !listed.contains_key(module) {
+            out.push(viol(
+                "FRAPPE-TEST-PARITY",
+                &battery.rel,
+                *line,
+                module,
+                format!(
+                    "The release battery `{}`:{line} runs `{module}` but no pure-test declaration in `{doc_rel}` (section `{anchor}`) names it: the document and the gate describe different sets, so one of them is stale.",
+                    battery.rel
+                ),
+                &format!("Declare `{module}` in the pure list of `{doc_rel}`, or drop it from the battery."),
+            ));
+        }
+    }
+    out
+}
+
+// ── FRAPPE-CURRENCY-THRESHOLD-UNSET ────────────────────────────────────────
+// Why it exists (GB-123, GB-133): a Decision without an amount was approved with zero votes.
+// Frappe stores an unfilled Currency as 0.0, so `(amount or 0) >= STRATEGIC_AMOUNT` answers
+// "not strategic" for a value nobody filled — three of three Decisions carried amount 0 and the
+// two-vote quorum of a Strategic decision never ran. The rule resolves the name against the
+// Currency fields of the app's DocType JSONs, so a threshold over an Int or a local parameter
+// (`value` in a rating function) is never accused.
+
+/// A monetary operand of a comparison: the field, whether the code coerced emptiness away
+/// (`or 0`, `flt()`, `float()`) and whether it was read as an attribute (`doc.amount`).
+struct MoneyOperand {
+    field: String,
+    coerced: bool,
+    attribute: bool,
+}
+
+/// The operand grammar shared by both sides of a threshold comparison.
+const MONEY_OPERAND: &str = r"(?:(?:flt|float)\(\s*[^()]*\)|\(\s*[A-Za-z_][\w.]*\s+or\s+0(?:\.0)?\s*\)|[A-Za-z_][\w.]*\s+or\s+0(?:\.0)?|[A-Za-z_][\w.]*)";
+
+/// Reads one comparison side as a Currency field: `X`, `(X or 0)`, `flt(X)`, `flt(X or 0)`,
+/// `doc.X`, `self.X`.
+fn money_operand(expr: &str, currency: &BTreeSet<String>) -> Option<MoneyOperand> {
+    let mut e = expr.trim();
+    let mut coerced = false;
+    for wrapper in ["flt", "float"] {
+        if let Some(rest) = e.strip_prefix(wrapper) {
+            let rest = rest.trim_start();
+            if let Some(inner) = rest.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
+                e = inner.trim();
+                coerced = true;
+                break;
+            }
+        }
+    }
+    if e.starts_with('(')
+        && e.ends_with(')')
+        && balanced_at(e, 0, b'(', b')')
+            .map(|(open, close)| open == 0 && close == e.len())
+            .unwrap_or(false)
+    {
+        e = e[1..e.len() - 1].trim();
+    }
+    let low = e.to_lowercase();
+    if let Some(at) = low.rfind(" or ") {
+        let tail = low[at + 4..].trim();
+        if tail == "0" || tail == "0.0" {
+            e = e[..at].trim();
+            coerced = true;
+        }
+    }
+    let attribute = e.contains('.');
+    let field = e.rsplit('.').next().unwrap_or(e).to_string();
+    let mut chars = field.chars();
+    let first_ok = chars
+        .next()
+        .map(|c| c.is_ascii_alphabetic() || c == '_')
+        .unwrap_or(false);
+    if !first_ok || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let known = currency.contains(&field);
+    known.then_some(MoneyOperand {
+        field,
+        coerced,
+        attribute,
+    })
+}
+
+/// True when the function around `upto` already answered the empty case of `field` (a `None` /
+/// empty test or a bare falsiness test). A per-line heuristic: a guard inside a sibling branch is
+/// not proven, which costs a false negative, never a false accusation.
+fn py_guards_field(lines: &[&str], upto: usize, field: &str) -> bool {
+    let pattern = format!(
+        r"(?:\b{0}\s+is\s+(?:not\s+)?None\b|\bnot\s+{0}\b|\b{0}\s+in\s+\([^)]*None|\b{0}\s*(?:==|!=)\s*None)",
+        regex::escape(field)
+    );
+    let Ok(guard) = Regex::new(&pattern) else {
+        return false;
+    };
+    let mut i = upto as isize;
+    let mut seen = 0usize;
+    while i >= 0 && seen < 40 {
+        let line = lines[i as usize];
+        if guard.is_match(line) {
+            return true;
+        }
+        if line.starts_with("def ") || line.starts_with("class ") {
+            break;
+        }
+        i -= 1;
+        seen += 1;
+    }
+    false
+}
+
+fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
+    let currency: BTreeSet<String> = c
+        .doctypes
+        .iter()
+        .flat_map(|d| d.fields.iter())
+        .filter(|f| f.fieldtype == "Currency")
+        .map(|f| f.fieldname.clone())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if currency.is_empty() {
+        return Vec::new();
+    }
+    let pattern = format!(
+        r"(?P<lhs>{MONEY_OPERAND})\s*(?P<op>>=|<=|>|<)\s*(?P<rhs>{MONEY_OPERAND}|\d[\d_]*(?:\.\d+)?)"
+    );
+    let Ok(compare) = Regex::new(&pattern) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in c
+        .files
+        .iter()
+        .filter(|p| p.extension().map(|e| e == "py").unwrap_or(false))
+    {
+        let text = read(p);
+        if !text.contains(['<', '>']) {
+            continue;
+        }
+        let path = rel(&c.root, p);
+        let lines: Vec<&str> = text.lines().collect();
+        let mut state: Option<&'static str> = None;
+        for (i, raw) in lines.iter().enumerate() {
+            if !py_code_line(raw, &mut state) {
+                continue; // inside a docstring: prose, not a decision
+            }
+            let line = py_strip_comment(raw);
+            if !line.contains(['<', '>']) {
+                continue;
+            }
+            for cap in compare.captures_iter(line) {
+                let (Some(lhs), Some(op), Some(rhs)) =
+                    (cap.name("lhs"), cap.name("op"), cap.name("rhs"))
+                else {
+                    continue;
+                };
+                let money = match (
+                    money_operand(lhs.as_str(), &currency),
+                    money_operand(rhs.as_str(), &currency),
+                ) {
+                    (Some(left), _) => left,
+                    (None, Some(right)) => right,
+                    (None, None) => continue,
+                };
+                // A bare name can be a local parameter (`value` in a rating check); only the
+                // coerced shapes and the attribute reads prove a document field is compared.
+                if !money.coerced && !money.attribute {
+                    continue;
+                }
+                if py_guards_field(&lines, i, &money.field) {
+                    continue;
+                }
+                let (expr, limit) = if money.field == field_of(lhs.as_str()) {
+                    (lhs.as_str(), rhs.as_str())
+                } else {
+                    (rhs.as_str(), lhs.as_str())
+                };
+                // `x > 0` / `x <= 0` is an emptiness test, not a threshold: zero is exactly what
+                // Frappe returns for an unfilled Currency, so that comparison is the branch.
+                if limit
+                    .trim()
+                    .parse::<f64>()
+                    .map(|v| v == 0.0)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                out.push(viol(
+                    "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+                    &path,
+                    i + 1,
+                    line.trim(),
+                    format!(
+                        "`{path}:{}` decides on Currency field `{}` with `{expr} {} {limit}`: Frappe stores an unfilled Currency as 0.0, so an empty value reads as zero and the threshold decides on it silently (GB-123/GB-133). An empty value needs its own branch before the comparison.",
+                        i + 1,
+                        money.field,
+                        op.as_str()
+                    ),
+                    "Answer the empty case explicitly (`if doc.<field> is None: frappe.throw(...)`, or return/reject) before comparing, so \"no amount\" is never read as \"amount zero\".",
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The last dotted segment of an expression, for matching an operand back to its side.
+fn field_of(expr: &str) -> &str {
+    let trimmed = expr.trim().trim_matches(['(', ')']).trim();
+    trimmed.rsplit('.').next().unwrap_or(trimmed)
+}
+
 /// Top-level functions a generator module defines — the entry points a test has to call to prove
 /// the boards exist.
 fn generator_symbols(text: &str) -> Vec<String> {
@@ -3327,6 +3953,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_patches,
         rule_hooks,
         rule_tests,
+        rule_test_parity,
         rule_sidebar,
         rule_roles,
         rule_select_case,
@@ -3334,6 +3961,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_whitelist,
         rule_rules_coverage,
         rule_role_fixture_parity,
+        rule_currency_threshold,
         rule_silent_except,
         rule_min_syntax,
         rule_privileged_read,
@@ -3418,6 +4046,12 @@ const ROADMAP_JSON: &str = r#"{
 }"#;
 /// FRAPPE-KANBAN-BOARD-DERIVED: a generator no test of the app exercises.
 const BOARDS_PY: &str = "import json\n\n\ndef boards():\n\treturn json.dumps([\"Tasks\"])\n";
+/// FRAPPE-CURRENCY-THRESHOLD-UNSET: `Thing.price` is the only Currency of the fixture app. The
+/// good module answers the empty case before comparing; the bad one coerces it to zero, which is
+/// the shape that approved a Decision with no amount. `amount` and `code` are NOT Currency here,
+/// so naming them proves the fieldname is resolved against the DocType JSONs.
+const PRICING_GOOD: &str = "import frappe\nfrom frappe.utils import flt\n\nLIMIT = 250000\n\n\ndef is_large(price):\n\t\"\"\"A missing price is a decision of its own: never read as zero.\"\"\"\n\tif price is None:\n\t\tfrappe.throw(\"Price is required.\")\n\treturn flt(price) >= LIMIT\n";
+const PRICING_BAD: &str = "from frappe.utils import flt\n\nLIMIT = 250000\n\n\ndef is_large(amount):\n\treturn (amount or 0) >= LIMIT\n\n\ndef is_huge(doc):\n\treturn flt(doc.price) >= LIMIT\n\n\ndef is_guarded(doc):\n\tif doc.price is not None and flt(doc.price) > LIMIT:\n\t\treturn True\n\treturn False\n\n\ndef is_code(doc):\n\treturn (doc.code or 0) >= 1\n";
 
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
@@ -3552,7 +4186,25 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             ),
         ),
         f("demoapp/tests/alpha.py", "def run():\n    pass\n"),
-        f("AGENTS.md", "## 2. Tests\n`alpha`\n## 3. Other\nbeta\n"),
+        // FRAPPE-TEST-PARITY: the document declares which pure modules run without a site, the
+        // battery below is the second copy of the same set. The bad tree adds `gamma` to the
+        // battery and never declares it.
+        f(
+            "AGENTS.md",
+            "## 2. Tests\n`alpha`\nThe pure ones (`alpha`) also run without a site.\n## 3. Other\nbeta\n",
+        ),
+        f(
+            "scripts/release-checks.sh",
+            if bad {
+                "#!/usr/bin/env bash\n# release gates that need no site\nnames=(alpha gamma)\ncmds=(\n  \"python3 -I demoapp/tests/alpha.py\"\n  \"python3 -I demoapp/tests/gamma.py\"\n)\n"
+            } else {
+                "#!/usr/bin/env bash\n# release gates that need no site\nnames=(alpha)\ncmds=(\n  \"python3 -I demoapp/tests/alpha.py\"\n)\n"
+            },
+        ),
+        f(
+            "demoapp/pricing.py",
+            if bad { PRICING_BAD } else { PRICING_GOOD },
+        ),
     ];
     if !bad {
         v.push(f(
@@ -3562,6 +4214,7 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
     } else {
         v.push(f("demoapp/patches/second.py", "def execute():\n    pass\n"));
         v.push(f("demoapp/tests/beta.py", "def run():\n    pass\n"));
+        v.push(f("demoapp/tests/gamma.py", "def run():\n    pass\n"));
         // FRAPPE-AUTONAME-COLLISION: deterministic autoname plus a guard that compares the
         // found row with doc.name, which is already filled at validate.
         v.push(f("demoapp/demo/doctype/slot/__init__.py", ""));
@@ -3756,10 +4409,20 @@ mod tests {
             app: Some("app".into()),
             ..FrappeConfig::default()
         };
+        audit_rule_with(tag, files, rule, &cfg)
+    }
+
+    /// The same audit with an explicit `[frappe]` table (paths, anchor, battery).
+    fn audit_rule_with(
+        tag: &str,
+        files: &[(String, String)],
+        rule: &str,
+        cfg: &FrappeConfig,
+    ) -> Vec<Violation> {
         let Some(root) = write_fixture(tag, files) else {
             return Vec::new();
         };
-        let got = audit(&root, &cfg).unwrap_or_default();
+        let got = audit(&root, cfg).unwrap_or_default();
         let _ = fs::remove_dir_all(&root);
         got.into_iter().filter(|v| v.rule_id == rule).collect()
     }
@@ -3981,5 +4644,293 @@ mod tests {
         ]);
         let got = audit_rule("gen-mention", &mention, "FRAPPE-KANBAN-BOARD-DERIVED");
         assert_eq!(got.len(), 1, "a mention is not a call: {got:?}");
+    }
+
+    // ── FRAPPE-TEST-PARITY ─────────────────────────────────────────────────
+    // The battery exists twice: a document declares the pure modules, the release script runs
+    // them. Every test below changes ONE thing in a healthy pair, in both directions — a set
+    // compared on one side only still lets the other drift.
+
+    const PARITY_DOC: &str = "## 2. Release rules\n\n1. Tag once.\n   The pure ones (`alpha_pure`, `beta_pure`, `gamma_pure`) also run without a site.\n2. Other rule.\n";
+
+    /// A battery in the shape the release script writes: labels in `names`, one quoted command
+    /// per line in `cmds`, both parallel.
+    fn battery(labels: &[&str], modules: &[&str]) -> String {
+        let cmds: Vec<String> = modules
+            .iter()
+            .map(|m| format!("  \"python3 -I app/tests/{m}.py\""))
+            .collect();
+        format!(
+            "names=({})\ncmds=(\n{}\n)\n",
+            labels.join(" "),
+            cmds.join("\n")
+        )
+    }
+
+    fn parity_cfg() -> FrappeConfig {
+        FrappeConfig {
+            app: Some("app".into()),
+            test_list_file: Some("docs/AGENTS.md".into()),
+            test_list_anchor: Some("## 2. Release rules".into()),
+            battery_file: Some("scripts/release-checks.sh".into()),
+            ..FrappeConfig::default()
+        }
+    }
+
+    fn parity_tree(doc: &str, script: &str, extra_tests: &[&str]) -> Vec<(String, String)> {
+        let mut files = vec![
+            ("docs/AGENTS.md".to_string(), doc.to_string()),
+            ("scripts/release-checks.sh".to_string(), script.to_string()),
+            (
+                "app/tests/alpha_pure.py".to_string(),
+                "def run():\n\tpass\n".to_string(),
+            ),
+            (
+                "app/tests/beta_pure.py".to_string(),
+                "def run():\n\tpass\n".to_string(),
+            ),
+            (
+                "app/tests/gamma_pure.py".to_string(),
+                "def run():\n\tpass\n".to_string(),
+            ),
+        ];
+        for m in extra_tests {
+            files.push((
+                format!("app/tests/{m}.py"),
+                "def run():\n\tpass\n".to_string(),
+            ));
+        }
+        app_tree(files.iter().map(|(p, t)| (p.as_str(), t.clone())).collect())
+    }
+
+    /// The healthy pair is silent: the document and the battery describe one set.
+    #[test]
+    fn test_parity_is_silent_when_doc_and_battery_agree() {
+        let script = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+        );
+        let got = audit_rule_with(
+            "parity-green",
+            &parity_tree(PARITY_DOC, &script, &[]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// MUTATION of the healthy pair, direction 1: `beta_pure` leaves the battery and stays
+    /// declared. The finding names the module, the declaration line and the script that skips it.
+    #[test]
+    fn test_parity_refuses_a_declared_module_the_battery_skips() {
+        let script = battery(&["alpha_pure", "gamma_pure"], &["alpha_pure", "gamma_pure"]);
+        let got = audit_rule_with(
+            "parity-skip",
+            &parity_tree(PARITY_DOC, &script, &[]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "docs/AGENTS.md");
+        assert_eq!(got[0].line_number, 4);
+        assert_eq!(got[0].severity, Severity::Error);
+        assert!(got[0].message.contains("beta_pure"), "{}", got[0].message);
+        assert!(
+            got[0].message.contains("never runs it"),
+            "{}",
+            got[0].message
+        );
+        assert!(
+            got[0].message.contains("scripts/release-checks.sh"),
+            "{}",
+            got[0].message
+        );
+    }
+
+    /// MUTATION, direction 2: `delta_pure` runs in the battery and nobody declared it.
+    #[test]
+    fn test_parity_refuses_a_battery_module_nobody_declared() {
+        let script = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure", "delta_pure"],
+            &["alpha_pure", "beta_pure", "gamma_pure", "delta_pure"],
+        );
+        let got = audit_rule_with(
+            "parity-extra",
+            &parity_tree(PARITY_DOC, &script, &["delta_pure"]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "scripts/release-checks.sh");
+        assert!(got[0].message.contains("delta_pure"), "{}", got[0].message);
+        assert!(
+            got[0].message.contains("no pure-test declaration"),
+            "{}",
+            got[0].message
+        );
+    }
+
+    /// MUTATION, the incident itself: one command removed from a three-label battery. The arrays
+    /// are parallel, so slot 2 would log `gamma_pure` for the command of `beta_pure`.
+    #[test]
+    fn test_parity_refuses_drifted_parallel_arrays_and_a_mislabelled_slot() {
+        let short = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+            &["alpha_pure", "beta_pure"],
+        );
+        let got = audit_rule_with(
+            "parity-short",
+            &parity_tree(PARITY_DOC, &short, &[]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert!(
+            got.iter().any(|v| v.message.contains("are parallel")),
+            "{got:?}"
+        );
+
+        let swapped = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+            &["alpha_pure", "gamma_pure", "beta_pure"],
+        );
+        let got = audit_rule_with(
+            "parity-swap",
+            &parity_tree(PARITY_DOC, &swapped, &[]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(
+            got.iter()
+                .all(|v| v.message.contains("drifted out of alignment")),
+            "{got:?}"
+        );
+        assert!(
+            got.iter().any(|v| v.message.contains("`beta_pure`")),
+            "{got:?}"
+        );
+    }
+
+    /// A battery slot naming a module the app does not carry fails at release time (or is
+    /// skipped by a guard): the label promises a test that is not there.
+    #[test]
+    fn test_parity_refuses_a_battery_slot_without_its_file() {
+        let script = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure", "ghost_pure"],
+            &["alpha_pure", "beta_pure", "gamma_pure", "ghost_pure"],
+        );
+        let got = audit_rule_with(
+            "parity-ghost",
+            &parity_tree(PARITY_DOC, &script, &[]),
+            "FRAPPE-TEST-PARITY",
+            &parity_cfg(),
+        );
+        assert!(
+            got.iter().any(|v| v.message.contains("is not in the app")),
+            "{got:?}"
+        );
+    }
+
+    /// Neither side present (isolated repo, partial checkout): the rule is inert and SAYS why,
+    /// as a Warning — it never fails a tree for the other repository being absent. The tag
+    /// carries a `/` so the fixture root sits one level below its own directory and the bounded
+    /// discovery cannot see the trees of the tests running in parallel.
+    #[test]
+    fn test_parity_is_inert_without_the_other_side() {
+        let got = audit_rule_with(
+            "parity/inert",
+            &app_tree(vec![]),
+            "FRAPPE-TEST-PARITY",
+            &FrappeConfig {
+                app: Some("app".into()),
+                ..FrappeConfig::default()
+            },
+        );
+        assert!(!got.is_empty(), "an inert rule still says why: {got:?}");
+        assert!(
+            got.iter().all(|v| v.severity == Severity::Warning),
+            "{got:?}"
+        );
+        assert!(
+            got.iter().any(|v| v.message.contains("unverified")),
+            "{got:?}"
+        );
+    }
+
+    // ── FRAPPE-CURRENCY-THRESHOLD-UNSET ────────────────────────────────────
+    // `Thing.price` is the only Currency of the tree; `code` is Data and `value` is a local
+    // parameter, so the rule has to resolve the name against the DocType JSON to stay quiet.
+
+    const PRICE_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"price","fieldtype":"Currency"},{"fieldname":"code","fieldtype":"Data"}],"permissions":[{"role":"System Manager"}]}"#;
+
+    fn price_app(module: &str) -> Vec<(String, String)> {
+        app_tree(vec![
+            ("app/demo/doctype/thing/thing.json", PRICE_JSON.to_string()),
+            (
+                "app/demo/doctype/thing/thing.py",
+                "class Thing:\n\tpass\n".to_string(),
+            ),
+            ("app/pricing.py", module.to_string()),
+        ])
+    }
+
+    /// MUTATION: `flt(doc.price) >= LIMIT` with no branch for an empty amount. The finding names
+    /// file:line, the field, the threshold and the missing branch; the same module with the
+    /// guard (and the local `amount`, the Data field and the docstring) is silent.
+    #[test]
+    fn currency_threshold_fires_on_unset_currency_and_names_it() {
+        let red = audit_rule(
+            "money-red",
+            &price_app(PRICING_BAD),
+            "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+        );
+        assert_eq!(red.len(), 1, "{red:?}");
+        assert_eq!(red[0].file_path, "app/pricing.py");
+        assert_eq!(red[0].line_number, 11);
+        assert_eq!(red[0].severity, Severity::Error);
+        for needle in [
+            "app/pricing.py:11",
+            "`price`",
+            "LIMIT",
+            "empty value needs its own branch",
+            "0.0",
+        ] {
+            assert!(red[0].message.contains(needle), "{}", red[0].message);
+        }
+
+        let green = audit_rule(
+            "money-green",
+            &price_app(PRICING_GOOD),
+            "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+        );
+        assert!(green.is_empty(), "{green:?}");
+    }
+
+    /// A bare local parameter, a Data field, a docstring that quotes the comparison and a
+    /// zero-test (`x <= 0`, the emptiness branch Frappe's 0.0 makes readable) are not Currency
+    /// thresholds: the rule resolves the fieldname against the DocType JSONs.
+    #[test]
+    fn currency_threshold_ignores_names_that_are_not_currency() {
+        let module = "import frappe\nfrom frappe.utils import flt\n\n\ndef rating(value):\n\tif not 1 <= value <= 5:\n\t\tfrappe.throw(\"Rating out of range.\")\n\treturn value\n\n\ndef code_of(doc):\n\treturn (doc.code or 0) >= 1\n\n\ndef positive(doc):\n\treturn flt(doc.price) > 0\n\n\ndef note():\n\t\"\"\"A Decision is strategic when amount >= 250000.\"\"\"\n\treturn None\n";
+        let got = audit_rule(
+            "money-types",
+            &price_app(module),
+            "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+        );
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// The mirrored form decides the same way and is accused the same way.
+    #[test]
+    fn currency_threshold_reads_the_mirrored_comparison() {
+        let module = "LIMIT = 250000\n\n\ndef is_large(doc):\n\tif LIMIT <= (doc.price or 0):\n\t\treturn True\n\treturn False\n";
+        let got = audit_rule(
+            "money-mirror",
+            &price_app(module),
+            "FRAPPE-CURRENCY-THRESHOLD-UNSET",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].message.contains("`price`"), "{}", got[0].message);
+        assert_eq!(got[0].line_number, 5);
     }
 }

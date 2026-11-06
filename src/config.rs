@@ -101,6 +101,10 @@ pub struct FrappeConfig {
     pub test_list_file: Option<String>,
     /// Heading line that opens the section of that file listing the tests.
     pub test_list_anchor: Option<String>,
+    /// Release battery script whose `names`/`cmds` arrays run the pure tests (absolute, or
+    /// relative to the app root). Absent, the engine looks for `scripts/release-checks.sh` next
+    /// to the app and then for the nearest one above it; env `STENIO_FRAPPE_BATTERY` wins.
+    pub battery_file: Option<String>,
     /// File listing DocTypes that need no sidebar entry (`Name | reason` per line).
     pub sidebar_allowlist: Option<String>,
     /// Roles that exist without a fixture (added to the built-in Frappe core list).

@@ -805,6 +805,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &[
                 "FRAPPE-DOCTYPE-CONTROLLER",
                 "FRAPPE-HOOK-TARGETS",
+                "FRAPPE-TEST-PARITY",
+                "FRAPPE-CURRENCY-THRESHOLD-UNSET",
                 "no suppression directive",
             ],
         ),
