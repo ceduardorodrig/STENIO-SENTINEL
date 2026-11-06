@@ -149,6 +149,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Broad Role On A Person-Scoped DocType Without A Scope",
         Severity::Error,
     ),
+    (
+        "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
+        "Published Content Left Behind In The Patch Ledger",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -860,6 +865,205 @@ fn rule_hooks(c: &Ctx) -> Vec<Violation> {
                 ));
             }
         }
+    }
+    out
+}
+
+// ── FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE (GB-142) ────────────────────
+// A patch that publishes a file shipped in the image into a record is the one shape Frappe's
+// patch ledger gets wrong: `patches.txt` records what already ran, so the release that carries a
+// new `docs/manual.html` never writes it again — the site keeps serving the previous edition.
+const PUBLISHED_FIELDS: &[&str] = &[
+    "content",
+    "body",
+    "html",
+    "markup",
+    "page_content",
+    "page_html",
+    "rich_text",
+    "long_description",
+];
+
+/// The verbs a patch uses to write a record. A patch that reads a file and writes rows through
+/// one of these is a publisher; one that only compares or logs is not.
+const WRITE_VERBS: &[&str] = &[
+    ".insert(",
+    ".save(",
+    ".set_value(",
+    ".set_single_value(",
+    ".db_set(",
+    ".db_insert(",
+];
+
+/// The ways a module reads a file that ships inside the app package.
+const FILE_READS: &[&str] = &[
+    "read_text(",
+    "read_bytes(",
+    "pkgutil.get_data",
+    "importlib.resources",
+    "open(",
+];
+
+/// A byte slice of `text` around `at`, widened to char boundaries so UTF-8 can be cut safely.
+fn window(text: &str, at: usize, back: usize, fwd: usize) -> &str {
+    let mut lo = at.saturating_sub(back);
+    while lo > 0 && !text.is_char_boundary(lo) {
+        lo -= 1;
+    }
+    let mut hi = (at + fwd).min(text.len());
+    while hi < text.len() && !text.is_char_boundary(hi) {
+        hi += 1;
+    }
+    &text[lo..hi]
+}
+
+/// Every write into a record that names a long-text field nearby: `(offset of the verb, field)`.
+/// `set_single_value("Handbook", "content", body)` and the dict-shaped
+/// `get_doc({"doctype": ..., "content": body}).insert()` are both read from the same window.
+fn published_writes(text: &str) -> Vec<(usize, String)> {
+    let Ok(field_re) = Regex::new(r#"["']([a-z_]+)["']"#) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for verb in WRITE_VERBS {
+        for (at, _) in text.match_indices(verb) {
+            let near = window(text, at, 200, 320);
+            if let Some(m) = field_re
+                .captures_iter(near)
+                .find(|m| PUBLISHED_FIELDS.contains(&m[1].to_string().as_str()))
+            {
+                out.push((at, m[1].to_string()));
+            }
+        }
+    }
+    out.sort_by_key(|(at, _)| *at);
+    out
+}
+
+/// The first file the module names with a document extension, for the finding.
+fn published_file(text: &str) -> Option<String> {
+    let re = Regex::new(r#"["']([\w./-]+\.(?:html|htm|md|markdown|txt|rst))["']"#).ok()?;
+    re.captures(text).map(|m| m[1].to_string())
+}
+
+/// The DocTypes a module writes by name — the dict literal and the direct call forms.
+fn written_doctypes(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for pat in [
+        r#""doctype"\s*:\s*"([^"]+)""#,
+        r#"(?:get_doc|new_doc|set_single_value|set_value|db\.set_value)\(\s*["']([A-Z][^"']*)["']"#,
+    ] {
+        let Ok(re) = Regex::new(pat) else { continue };
+        for m in re.captures_iter(text) {
+            let name = m[1].to_string();
+            if name != "DocType" && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out.truncate(4);
+    out
+}
+
+/// The dotted paths `hooks.py` registers under `after_migrate`, in any layout: one line, a
+/// bracketed list over several lines, or an augmented assignment. A commented block registers
+/// nothing, exactly as Frappe sees it.
+fn after_migrate_paths(hooks: &str) -> Vec<String> {
+    let Ok(re) = Regex::new(r#"["']([A-Za-z_][A-Za-z0-9_.]*)["']"#) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut depth: i32 = 0;
+    let mut collecting = false;
+    for raw in hooks.lines() {
+        let code = strip_comment(raw);
+        if !collecting {
+            let Some(rest) = code.trim_start().strip_prefix("after_migrate") else {
+                continue;
+            };
+            let rest = rest.trim_start();
+            if !(rest.starts_with('=') || rest.starts_with("+=")) {
+                continue;
+            }
+            collecting = true;
+        }
+        out.extend(re.captures_iter(&code).map(|m| m[1].to_string()));
+        depth += code.matches(['[', '(']).count() as i32 - code.matches([']', ')']).count() as i32;
+        if depth <= 0 {
+            break;
+        }
+    }
+    out
+}
+
+fn rule_published_content(c: &Ctx) -> Vec<Violation> {
+    let list = c.pkg.join("patches.txt");
+    let text = read(&list);
+    let lr = rel(&c.root, &list);
+    let mut listed: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, raw) in text.lines().enumerate() {
+        let l = raw.split('#').next().unwrap_or("").trim();
+        if l.is_empty() || l.starts_with('[') || l.starts_with("execute:") {
+            continue;
+        }
+        listed.insert(l.split_whitespace().next().unwrap_or("").to_string(), i + 1);
+    }
+    if listed.is_empty() {
+        return Vec::new();
+    }
+    let registered = after_migrate_paths(&read(&c.pkg.join("hooks.py")));
+    let prefix = format!("{}.patches.", c.app);
+    let mut out = Vec::new();
+    for (name, list_line) in &listed {
+        // Only the module a patch line names, never a dotted function inside it.
+        let Some(stem) = name.strip_prefix(&prefix).filter(|s| !s.contains('.')) else {
+            continue;
+        };
+        let path = c.pkg.join("patches").join(format!("{stem}.py"));
+        if !path.is_file() {
+            continue;
+        }
+        let src = read(&path);
+        if !FILE_READS.iter().any(|m| src.contains(m)) {
+            continue; // reads no file of the image: nothing to republish
+        }
+        let Some((at, field)) = published_writes(&src).into_iter().next() else {
+            continue; // writes no long-text record: a data patch, not a publisher
+        };
+        let owner = format!("{prefix}{stem}");
+        if registered
+            .iter()
+            .any(|r| r == &owner || r.starts_with(&format!("{owner}.")))
+        {
+            continue; // republished by every migrate: the image is the source of truth
+        }
+        let doctypes = written_doctypes(&src);
+        let target = if doctypes.is_empty() {
+            format!("the long-text field `{field}` of a record it writes")
+        } else {
+            format!(
+                "`{field}` on {}",
+                doctypes
+                    .iter()
+                    .map(|d| format!("`{d}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let file = published_file(&src).unwrap_or_else(|| "a file shipped in the image".into());
+        let at_line = src[..at].matches('\n').count() + 1;
+        out.push(viol(
+            "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
+            &rel(&c.root, &path),
+            at_line,
+            &format!("{stem}: {target}"),
+            format!(
+                "Patch `{stem}` publishes `{file}` into {target} but is registered only in `{lr}`:{list_line}: Frappe runs a patch once, so the second edition of the document never reaches the site."
+            ),
+            &format!(
+                "Register `{owner}` (or `{owner}.execute`) in `after_migrate` of hooks.py, behind the content hash guard, so every image republishes its documents."
+            ),
+        ));
     }
     out
 }
@@ -4185,6 +4389,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_link_title,
         rule_patches,
         rule_hooks,
+        rule_published_content,
         rule_tests,
         rule_test_parity,
         rule_sidebar,
@@ -4289,6 +4494,11 @@ const BOARDS_PY: &str = "import json\n\n\ndef boards():\n\treturn json.dumps([\"
 const PRICING_GOOD: &str = "import frappe\nfrom frappe.utils import flt\n\nLIMIT = 250000\n\n\ndef is_large(price):\n\t\"\"\"A missing price is a decision of its own: never read as zero.\"\"\"\n\tif price is None:\n\t\tfrappe.throw(\"Price is required.\")\n\treturn flt(price) >= LIMIT\n";
 const PRICING_BAD: &str = "from frappe.utils import flt\n\nLIMIT = 250000\n\n\ndef is_large(amount):\n\treturn (amount or 0) >= LIMIT\n\n\ndef is_huge(doc):\n\treturn flt(doc.price) >= LIMIT\n\n\ndef is_guarded(doc):\n\tif doc.price is not None and flt(doc.price) > LIMIT:\n\t\treturn True\n\treturn False\n\n\ndef is_code(doc):\n\treturn (doc.code or 0) >= 1\n";
 
+/// FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE: the shape a publisher has — a file of the package
+/// read at import of `execute()` and written into a Single's long-text field, with the hash guard
+/// the real fix carries.
+const PUBLISHER_PY: &str = "import hashlib\nfrom pathlib import Path\n\nDOCS = Path(__file__).resolve().parents[1] / \"docs\"\n\n\ndef same_content(stored, desired):\n\treturn hashlib.sha256(stored.encode()).hexdigest() == hashlib.sha256(desired.encode()).hexdigest()\n\n\ndef execute():\n\timport frappe\n\n\tbody = (DOCS / \"manual.html\").read_text(encoding=\"utf-8\")\n\tstored = frappe.db.get_single_value(\"Handbook\", \"content\")\n\tif same_content(stored or \"\", body):\n\t\treturn\n\tif frappe.db.exists(\"Handbook\", \"Handbook\"):\n\t\tfrappe.db.set_single_value(\"Handbook\", \"content\", body)\n\telse:\n\t\tfrappe.get_doc({\"doctype\": \"Handbook\", \"title\": \"Manual\", \"content\": body}).insert(ignore_permissions=True)\n";
+
 /// The files of a tiny demo app; `bad` plants one violation of every rule.
 pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
     let f = |p: &str, t: &str| (p.to_string(), t.to_string());
@@ -4298,7 +4508,7 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/hooks.py",
             &format!(
-                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\", \"validate\": \"demoapp.session.sync_members\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n{}]\n",
+                "app_name = \"demoapp\"\ndoc_events = {{\"ToDo\": {{\"on_update\": \"demoapp.api.{}\", \"validate\": \"demoapp.session.sync_members\"}}}}  # \"demoapp.api.commented\"\nfixtures = [\n\t{{\"dt\": \"Role\", \"filters\": [[\"name\", \"in\", {}]]}},\n{}]\n{}",
                 if bad { "missing_fn" } else { "on_todo" },
                 if bad {
                     "[\"Demo Role\", \"Phantom Role\"]"
@@ -4311,6 +4521,14 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
                     "\t{\"dt\": \"Kanban Board\", \"filters\": [[\"name\", \"in\", [\"Tasks\"]]]},\n"
                 } else {
                     ""
+                },
+                // FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE: `patches/first.py` publishes
+                // `docs/manual.html` into a Single, so the good tree republishes it on every
+                // migrate; the bad tree leaves it in the one-shot ledger.
+                if bad {
+                    ""
+                } else {
+                    "after_migrate = [\"demoapp.patches.first.execute\"]\n"
                 }
             ),
         ),
@@ -4333,7 +4551,8 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             ),
         ),
         f("demoapp/patches/__init__.py", ""),
-        f("demoapp/patches/first.py", "def execute():\n    pass\n"),
+        f("demoapp/patches/first.py", PUBLISHER_PY),
+        f("demoapp/docs/manual.html", "<p>Manual, first edition</p>\n"),
         f("demoapp/demo/doctype/part/__init__.py", ""),
         f(
             "demoapp/demo/doctype/part/part.py",
@@ -5415,6 +5634,157 @@ mod tests {
             got.iter().map(|v| v.line_number).collect::<Vec<usize>>(),
             vec![8, 9],
             "each finding points at its own row"
+        );
+    }
+
+    // ── FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE (GB-142) ────────────────
+    // The publisher in the shape the app has it: a file of the package, read inside `execute()`,
+    // written into a Single's long-text field. Line 9 is the write the finding points at.
+    const PUBLISHER_T: &str = "import frappe\nfrom pathlib import Path\n\nDOCS = Path(__file__).resolve().parents[1] / \"docs\"\n\n\ndef execute():\n\tbody = (DOCS / \"manual.html\").read_text(encoding=\"utf-8\")\n\tfrappe.db.set_single_value(\"Handbook\", \"content\", body)\n";
+    /// The same field, migrated once and never from a file: a data patch, not a publisher.
+    const MIGRATOR_T: &str = "import frappe\n\n\ndef execute():\n\tfrappe.db.set_value(\"Handbook\", \"Handbook\", \"content\", \"cleaned\")\n";
+    /// Reads a file and writes a record, but no long-text field: a chart/board installer.
+    const INSTALLER_T: &str = "import json\nfrom pathlib import Path\n\nDESK = Path(__file__).resolve().parent / \"desk\"\n\n\ndef execute():\n\tfrappe.db.set_value(\"Dashboard Chart\", \"Deals by Stage\", \"chart_type\", json.loads((DESK / \"chart.json\").read_text())[\"chart_type\"])\n";
+    const HOOKS_ONE_SHOT: &str = "app_name = \"app\"\n";
+    /// The same registration over three lines: the layout Frappe itself ships.
+    const HOOKS_REPUBLISHED: &str =
+        "app_name = \"app\"\nafter_migrate = [\n\t\"app.patches.publisher.execute\",\n]\n";
+
+    /// A one-patch app: the module, the file it publishes and the hooks. `listed` decides whether
+    /// the patch is also in `patches.txt` (the one-shot ledger the rule is about).
+    fn publish_app(module: &str, hooks: &str, listed: bool) -> Vec<(String, String)> {
+        let mut v = vec![
+            (
+                "app/__init__.py".to_string(),
+                "__version__ = \"0.1.0\"\n".to_string(),
+            ),
+            ("app/hooks.py".to_string(), hooks.to_string()),
+            ("app/patches/__init__.py".to_string(), String::new()),
+            ("app/patches/publisher.py".to_string(), module.to_string()),
+            (
+                "app/docs/manual.html".to_string(),
+                "<p>edition one</p>\n".to_string(),
+            ),
+        ];
+        if listed {
+            v.push((
+                "app/patches.txt".to_string(),
+                "[post_model_sync]\napp.patches.publisher\n".to_string(),
+            ));
+        }
+        v
+    }
+
+    /// (a) The incident, statically: the publisher is in `patches.txt` and nowhere else. One ERROR
+    /// naming the patch, the file, the DocType, the field and the consequence the release met.
+    #[test]
+    fn published_content_is_refused_when_the_patch_is_the_only_registration() {
+        let got = audit_rule(
+            "publish-a",
+            &publish_app(PUBLISHER_T, HOOKS_ONE_SHOT, true),
+            "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "app/patches/publisher.py");
+        assert_eq!(got[0].line_number, 9, "the write, not the import");
+        assert_eq!(got[0].severity, Severity::Error);
+        for needle in [
+            "`publisher`",
+            "`manual.html`",
+            "`Handbook`",
+            "`content`",
+            "`app/patches.txt`:2",
+            "runs a patch once",
+            "second edition of the document never reaches the site",
+        ] {
+            assert!(got[0].message.contains(needle), "{}", got[0].message);
+        }
+        assert!(
+            got[0]
+                .suggestion
+                .as_deref()
+                .unwrap_or("")
+                .contains("after_migrate"),
+            "{:?}",
+            got[0].suggestion
+        );
+    }
+
+    /// (b) The fix: the same module registered in `after_migrate` is republished by every migrate,
+    /// so the rule is silent — over one line or three.
+    #[test]
+    fn published_content_is_silent_when_the_module_runs_on_every_migrate() {
+        assert!(
+            audit_rule(
+                "publish-b",
+                &publish_app(PUBLISHER_T, HOOKS_REPUBLISHED, true),
+                "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE"
+            )
+            .is_empty()
+        );
+        let one_line = "app_name = \"app\"\nafter_migrate = [\"app.patches.publisher\"]\n";
+        assert!(
+            audit_rule(
+                "publish-b-flat",
+                &publish_app(PUBLISHER_T, one_line, true),
+                "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE"
+            )
+            .is_empty()
+        );
+    }
+
+    /// (c) A patch that migrates a field and reads no file of the image is not a publisher; (d) a
+    /// module registered in `after_migrate` but absent from `patches.txt` has nothing to compare
+    /// against; and a file-reading installer that writes no long-text field is left alone — the
+    /// rule would rather miss than accuse a tree that is fine.
+    #[test]
+    fn published_content_ignores_data_patches_installers_and_a_registration_alone() {
+        for (tag, module, listed, hooks) in [
+            ("publish-c", MIGRATOR_T, true, HOOKS_ONE_SHOT),
+            ("publish-c-installer", INSTALLER_T, true, HOOKS_ONE_SHOT),
+            ("publish-d", PUBLISHER_T, false, HOOKS_REPUBLISHED),
+        ] {
+            let got = audit_rule(
+                tag,
+                &publish_app(module, hooks, listed),
+                "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
+            );
+            assert!(got.is_empty(), "{tag}: {got:?}");
+        }
+    }
+
+    /// A commented `after_migrate` template registers nothing, exactly as Frappe reads it, and the
+    /// publisher stays accused.
+    #[test]
+    fn published_content_reads_no_registration_out_of_a_comment() {
+        let commented =
+            "app_name = \"app\"\n# after_migrate = [\"app.patches.publisher.execute\"]\n";
+        let got = audit_rule(
+            "publish-comment",
+            &publish_app(PUBLISHER_T, commented, true),
+            "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn after_migrate_paths_reads_the_layouts_hooks_use() {
+        assert_eq!(
+            after_migrate_paths("app_name = \"app\"\nafter_migrate = [\"a.b.c\"]\n"),
+            vec!["a.b.c".to_string()]
+        );
+        assert_eq!(
+            after_migrate_paths("after_migrate = [\n\t\"a.b\",\n\t\"a.c\",\n]\n"),
+            vec!["a.b".to_string(), "a.c".to_string()]
+        );
+        assert_eq!(
+            after_migrate_paths("after_migrate += (\"a.b\",)\n"),
+            vec!["a.b".to_string()]
+        );
+        assert!(after_migrate_paths("app_name = \"app\"\n").is_empty());
+        assert!(
+            after_migrate_paths("after_migrate_backup = [\"a.b\"]\n").is_empty(),
+            "a different hook name is not the hook"
         );
     }
 }
