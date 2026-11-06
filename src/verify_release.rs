@@ -47,6 +47,22 @@ struct VerifyArgs {
     max_backup_age_hours: u64,
     #[arg(long, default_value_t = 40)]
     timeout_secs: u64,
+    #[arg(
+        long,
+        help = "Public entry point the site must advertise (default: MIRACENA_PUBLIC_URL in <project-dir>/.env)"
+    )]
+    public_url: Option<String>,
+    #[arg(
+        long,
+        help = "Repository compose file (default: <repo>/compose/frappe/compose.yml, then <repo>/../miracena-infra/compose/frappe/compose.yml)"
+    )]
+    repo_compose: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value = "compose.yml",
+        help = "Compose file name inside --project-dir on the deploy host"
+    )]
+    host_compose: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +109,8 @@ pub enum Cmd {
     GitRev(String),
     Sha256(String),
     ContainerPolicies,
+    SiteConfig,
+    ComposeFile(String),
 }
 
 impl Cmd {}
@@ -152,6 +170,13 @@ impl Cmd {
             Cmd::GitRev(r) => format!("rev-parse {r}"),
             Cmd::Sha256(p) => format!("sha256sum {p}"),
             Cmd::ContainerPolicies => "docker ps -aq | xargs -r docker inspect -f '{{.Name}}|{{.HostConfig.RestartPolicy.Name}}|{{.State.Status}}|{{.State.ExitCode}}|{{index .Config.Labels \"homelab.restart-exempt\"}}'".to_string(),
+            // The site config lives in the `sites` volume, not on the host filesystem: read it through
+            // the backend container, the same way the other checks read the live stack.
+            Cmd::SiteConfig => format!(
+                "{cd}docker compose exec -T backend cat sites/{}/site_config.json",
+                c.site
+            ),
+            Cmd::ComposeFile(f) => format!("{cd}cat {f}"),
         })
     }
 }
@@ -257,6 +282,15 @@ pub struct Opts {
     pub fc: FrappeConfig,
     pub site: String,
     pub dir: String,
+    /// Repository holding the app and the compose file (local paths, readable here).
+    pub repo: PathBuf,
+    /// Public entry point the site must advertise as `host_name`; None when neither the flag nor
+    /// `[frappe] public_url` declares one, and then the check warns instead of inventing a host.
+    pub public_url: Option<String>,
+    /// Compose file of the repository; None means the default candidates next to `dir`'s project.
+    pub repo_compose: Option<PathBuf>,
+    /// Compose file inside the deploy directory.
+    pub host_compose: String,
 }
 
 fn one_line(o: &Out) -> String {
@@ -414,6 +448,14 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
             Err(e) => out.push(check(Status::Fail, "ping", e)),
         },
     }
+
+    // 5b. public host name: every e-mail (welcome, password reset, 2FA) is built from host_name,
+    //     so a host_name that is not the public entry point ships unreachable links.
+    out.push(check_host_name(t, &c, o));
+
+    // 5c. compose parity, keys only: a key that exists on one side and not the other is a value
+    //     the deploy silently drops (or a container that silently loses an attribute).
+    out.push(check_compose_parity(t, &c, o));
 
     // 6. image tags
     if let Some(img) = &o.image {
@@ -717,6 +759,232 @@ fn check_scheduled_backup(t: &dyn Transport, c: &Ctx, fc: &FrappeConfig) -> Chec
     }
 }
 
+/// Normalises a URL for comparison: no trailing slash, lower case. The scheme is kept, because
+/// `http://x` and `https://x` are different links inside an e-mail.
+fn norm_url(u: &str) -> String {
+    u.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// `host-name`: the site's `host_name` must be the public entry point. Expected value comes from
+/// `--public-url`, else from `MIRACENA_PUBLIC_URL` in the deploy `.env`. With neither there is
+/// nothing to compare against, so the check warns: the engine does not know the Funnel and never
+/// invents a host.
+fn check_host_name(t: &dyn Transport, c: &Ctx, o: &Opts) -> Check {
+    let expected = match o
+        .public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(u) => u.to_string(),
+        None => {
+            return check(
+                Status::Warn,
+                "host-name",
+                "no expected public URL (--public-url or [frappe] public_url): host_name not judged",
+            );
+        }
+    };
+    let raw = match t.run(&Cmd::SiteConfig, c) {
+        Ok(r) if r.code == 0 && !one_line(&r).is_empty() => one_line(&r),
+        Ok(_) => {
+            return check(
+                Status::Fail,
+                "host-name",
+                format!("cannot read sites/{}/site_config.json", c.site),
+            );
+        }
+        Err(e) => return check(Status::Fail, "host-name", e),
+    };
+    let doc: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return check(
+                Status::Fail,
+                "host-name",
+                format!("site_config.json is not JSON: {e}"),
+            );
+        }
+    };
+    let host = doc
+        .get("host_name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    if host.is_empty() {
+        return check(
+            Status::Fail,
+            "host-name",
+            format!(
+                "site_config.json has no host_name: e-mail links carry the site name (expected '{expected}')"
+            ),
+        );
+    }
+    if norm_url(host) == norm_url(&expected) {
+        check(
+            Status::Pass,
+            "host-name",
+            format!("host_name = {host} = declared public URL"),
+        )
+    } else {
+        check(
+            Status::Fail,
+            "host-name",
+            format!(
+                "host_name '{host}' != expected public URL '{expected}' (--public-url / [frappe] public_url)"
+            ),
+        )
+    }
+}
+
+/// Environment KEYS of a compose file, across every service, in both shapes compose accepts (a
+/// mapping and a `- KEY=value` list). Keys only: printing values would put secrets in a gate log.
+fn compose_env_keys(text: &str) -> Result<BTreeSet<String>, String> {
+    let mut doc: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|e| format!("not YAML: {e}"))?;
+    doc.apply_merge().map_err(|e| format!("merge keys: {e}"))?;
+    let Some(services) = doc.get("services").and_then(|v| v.as_mapping()) else {
+        return Err("no services mapping".into());
+    };
+    let mut keys = BTreeSet::new();
+    for (_, svc) in services {
+        let Some(env) = svc.get("environment") else {
+            continue;
+        };
+        match env {
+            serde_yaml::Value::Mapping(m) => {
+                for (k, _) in m {
+                    if let Some(k) = k.as_str().map(str::trim).filter(|k| !k.is_empty()) {
+                        keys.insert(k.to_string());
+                    }
+                }
+            }
+            serde_yaml::Value::Sequence(items) => {
+                for it in items {
+                    if let Some(s) = it.as_str() {
+                        let key = s.split_once('=').map(|(k, _)| k).unwrap_or(s);
+                        if !key.trim().is_empty() {
+                            keys.insert(key.trim().to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(keys)
+}
+
+/// The repository compose file: the flag when given, else the two layouts this workspace uses.
+fn resolve_repo_compose(o: &Opts) -> Result<PathBuf, String> {
+    if let Some(p) = &o.repo_compose {
+        return if p.is_file() {
+            Ok(p.clone())
+        } else {
+            Err(format!("{} does not exist (--repo-compose)", p.display()))
+        };
+    }
+    let candidates = [
+        o.repo.join("compose").join("frappe").join("compose.yml"),
+        o.repo
+            .join("..")
+            .join("miracena-infra")
+            .join("compose")
+            .join("frappe")
+            .join("compose.yml"),
+    ];
+    match candidates.iter().find(|p| p.is_file()) {
+        Some(p) => Ok(p.clone()),
+        None => Err(format!(
+            "no compose file in the repository: tried {} and {} (use --repo-compose)",
+            candidates[0].display(),
+            candidates[1].display()
+        )),
+    }
+}
+
+/// First 10 keys, so a drifted file cannot turn one gate line into a wall of text.
+fn keys_list(keys: &[&String]) -> String {
+    let shown: Vec<&str> = keys.iter().take(10).map(|k| k.as_str()).collect();
+    let more = keys.len().saturating_sub(shown.len());
+    let mut s = shown.join(", ");
+    if more > 0 {
+        s.push_str(&format!(" (+{more} more)"));
+    }
+    s
+}
+
+/// `compose-parity`: the environment keys of the repository compose must match the host's. Values
+/// are never compared — one side can legitimately carry a secret — but a key present on only one
+/// side is a value the deploy drops, or a container attribute the next copy of the repo removes.
+fn check_compose_parity(t: &dyn Transport, c: &Ctx, o: &Opts) -> Check {
+    let repo_file = match resolve_repo_compose(o) {
+        Ok(p) => p,
+        Err(e) => return check(Status::Warn, "compose-parity", e),
+    };
+    let repo_keys = match std::fs::read_to_string(&repo_file)
+        .map_err(|e| format!("{}: {e}", repo_file.display()))
+        .and_then(|s| compose_env_keys(&s).map_err(|e| format!("{}: {e}", repo_file.display())))
+    {
+        Ok(k) => k,
+        Err(e) => return check(Status::Fail, "compose-parity", e),
+    };
+    let host_keys = match t.run(&Cmd::ComposeFile(o.host_compose.clone()), c) {
+        Ok(r) if r.code == 0 && !r.stdout.trim().is_empty() => match compose_env_keys(&r.stdout) {
+            Ok(k) => k,
+            Err(e) => {
+                return check(
+                    Status::Fail,
+                    "compose-parity",
+                    format!("{} on the host: {e}", o.host_compose),
+                );
+            }
+        },
+        Ok(_) => {
+            return check(
+                Status::Warn,
+                "compose-parity",
+                format!("{} not readable on the host: skipped", o.host_compose),
+            );
+        }
+        Err(e) => {
+            return check(
+                Status::Warn,
+                "compose-parity",
+                format!("{} on the host: {e}", o.host_compose),
+            );
+        }
+    };
+    let repo_only: Vec<&String> = repo_keys.difference(&host_keys).collect();
+    let host_only: Vec<&String> = host_keys.difference(&repo_keys).collect();
+    if repo_only.is_empty() && host_only.is_empty() {
+        return check(
+            Status::Pass,
+            "compose-parity",
+            format!(
+                "{} env key(s) identical in the repository and the host compose",
+                repo_keys.len()
+            ),
+        );
+    }
+    let mut parts = Vec::new();
+    if !repo_only.is_empty() {
+        parts.push(format!("repo-only: {}", keys_list(&repo_only)));
+    }
+    if !host_only.is_empty() {
+        parts.push(format!("host-only: {}", keys_list(&host_only)));
+    }
+    check(
+        Status::Fail,
+        "compose-parity",
+        format!(
+            "{} env key(s) diverge — {}",
+            repo_only.len() + host_only.len(),
+            parts.join("; ")
+        ),
+    )
+}
+
 fn parse_protected(raw: &[String]) -> Result<Vec<(String, String, String)>, String> {
     raw.iter()
         .map(|s| {
@@ -786,6 +1054,16 @@ pub fn run_cli(argv: &[String]) -> i32 {
             .as_deref()
             .map(|s| safe(s, ":/"))
             .unwrap_or(true)
+        && a.public_url
+            .as_deref()
+            .map(|s| safe(s, ":/"))
+            .unwrap_or(true)
+        && fc
+            .public_url
+            .as_deref()
+            .map(|s| safe(s, ":/"))
+            .unwrap_or(true)
+        && safe(&a.host_compose, "/._-")
         && a.previous_tag
             .as_deref()
             .map(|s| safe(s, ""))
@@ -804,6 +1082,10 @@ pub fn run_cli(argv: &[String]) -> i32 {
         max_backup_age_hours: a.max_backup_age_hours,
         site: fc.site.clone().unwrap_or_else(|| "frontend".into()),
         dir: a.project_dir.clone(),
+        repo: a.repo.clone(),
+        public_url: a.public_url.clone().or_else(|| fc.public_url.clone()),
+        repo_compose: a.repo_compose.clone(),
+        host_compose: a.host_compose.clone(),
         fc,
     };
     let t = SshTransport {
@@ -847,6 +1129,25 @@ impl Transport for Fake {
 
 const SHA: &str = "f464242c6215c18f69ba59f47aa0d240c0f75c7e";
 
+const SITE_PUBLIC: &str = "{\"host_name\": \"https://public.example.com\"}";
+const SITE_TAILNET: &str = "{\"host_name\": \"https://tailnet.example.com:8446\"}";
+const REPO_COMPOSE: &str =
+    "services:\n  backend:\n    environment:\n      DB_HOST: db\n      FORWARDED_ALLOW_IPS: '*'\n";
+const HOST_COMPOSE: &str =
+    "services:\n  backend:\n    environment:\n      DB_HOST: db\n      FORWARDED_ALLOW_IPS: '*'\n";
+const HOST_COMPOSE_DRIFT: &str =
+    "services:\n  backend:\n    environment:\n      DB_HOST: db\n      SESSION_COOKIE_SECURE: 1\n";
+
+/// A compose file on disk: the parity check reads the repository side locally, so a fixture has to
+/// exist as a real file.
+fn compose_fixture(text: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("stenio-vr-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("compose.yml");
+    let _ = std::fs::write(&path, text);
+    path
+}
+
 fn fixture_opts() -> Opts {
     let fc = FrappeConfig {
         image: Some("acme/app".into()),
@@ -871,6 +1172,10 @@ fn fixture_opts() -> Opts {
         max_backup_age_hours: 30,
         site: "frontend".into(),
         dir: "/srv/acme".into(),
+        repo: std::env::temp_dir().join(format!("stenio-vr-{}", std::process::id())),
+        public_url: Some("https://public.example.com".into()),
+        repo_compose: Some(compose_fixture(REPO_COMPOSE)),
+        host_compose: "compose.yml".into(),
         fc,
     }
 }
@@ -933,11 +1238,22 @@ fn good_fake(o: &Opts) -> BTreeMap<Cmd, (i32, String)> {
         ok("4500"),
     );
     m.insert(Cmd::RemoteNow, ok("4600"));
+    m.insert(Cmd::SiteConfig, ok(SITE_PUBLIC));
+    m.insert(Cmd::ComposeFile("compose.yml".into()), ok(HOST_COMPOSE));
     let _ = o;
     m
 }
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
+    let cases = self_test_cases_inner();
+    // The parity check needs a real compose file; the fixture directory is not an artifact to keep.
+    let _ = std::fs::remove_dir_all(
+        std::env::temp_dir().join(format!("stenio-vr-{}", std::process::id())),
+    );
+    cases
+}
+
+fn self_test_cases_inner() -> Vec<(String, bool)> {
     let o = fixture_opts();
     let good = run_checks(&Fake(good_fake(&o)), &o);
     let all_pass = good.iter().all(|c| c.status == Status::Pass);
@@ -960,6 +1276,11 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (0, "3\n".into()),
     );
     bad_map.insert(Cmd::RemoteNow, (0, "999999\n".into()));
+    bad_map.insert(Cmd::SiteConfig, (0, SITE_TAILNET.into()));
+    bad_map.insert(
+        Cmd::ComposeFile("compose.yml".into()),
+        (0, HOST_COMPOSE_DRIFT.into()),
+    );
     let bad = run_checks(&Fake(bad_map), &o);
     let failed: BTreeSet<&str> = bad
         .iter()
@@ -973,6 +1294,8 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         "rehearsal-leftovers",
         "error-log",
         "backup-age",
+        "host-name",
+        "compose-parity",
     ];
     vec![
         ("verify-release good".to_string(), all_pass),
@@ -1008,6 +1331,65 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 let st = |n: &str| out.iter().find(|c| c.name == n).map(|c| c.status);
                 st("backup-age") == Some(Status::Pass)
                     && st("backup-age-scheduled") == Some(Status::Fail)
+            },
+        ),
+        ("verify-release host-name names both values".to_string(), {
+            let mut tailnet = good_fake(&o);
+            tailnet.insert(Cmd::SiteConfig, (0, SITE_TAILNET.into()));
+            let out = run_checks(&Fake(tailnet), &o);
+            match out.iter().find(|c| c.name == "host-name") {
+                Some(c) if c.status == Status::Fail => {
+                    c.detail.contains("tailnet.example.com:8446")
+                        && c.detail.contains("public.example.com")
+                }
+                _ => false,
+            }
+        }),
+        (
+            "verify-release host-name warns without an expected URL".to_string(),
+            {
+                // No `--public-url` and no `[frappe] public_url`: nothing to compare against, so
+                // the check must say so instead of inventing a host.
+                let mut o2 = fixture_opts();
+                o2.public_url = None;
+                let out = run_checks(&Fake(good_fake(&o2)), &o2);
+                match out.iter().find(|c| c.name == "host-name") {
+                    Some(c) => c.status == Status::Warn,
+                    None => false,
+                }
+            },
+        ),
+        (
+            "verify-release compose-parity names the key and caps the list".to_string(),
+            {
+                let mut drift = good_fake(&o);
+                let mut yaml = String::from("services:\n  backend:\n    environment:\n");
+                for i in 0..12 {
+                    yaml.push_str(&format!("      HOST_ONLY_{i:02}: x\n"));
+                }
+                drift.insert(Cmd::ComposeFile("compose.yml".into()), (0, yaml));
+                let out = run_checks(&Fake(drift), &o);
+                match out.iter().find(|c| c.name == "compose-parity") {
+                    Some(c) if c.status == Status::Fail => {
+                        c.detail.contains("HOST_ONLY_0")
+                            && !c.detail.contains("HOST_ONLY_10")
+                            && c.detail.contains("(+2 more)")
+                            && c.detail.contains("FORWARDED_ALLOW_IPS")
+                    }
+                    _ => false,
+                }
+            },
+        ),
+        (
+            "verify-release compose-parity warns on a missing repository compose".to_string(),
+            {
+                let mut o2 = fixture_opts();
+                o2.repo_compose = Some(PathBuf::from("/nonexistent/compose.yml"));
+                let out = run_checks(&Fake(good_fake(&o2)), &o2);
+                match out.iter().find(|c| c.name == "compose-parity") {
+                    Some(c) => c.status == Status::Warn,
+                    None => false,
+                }
             },
         ),
     ]

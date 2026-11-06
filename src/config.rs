@@ -117,6 +117,8 @@ pub struct FrappeConfig {
     pub site: Option<String>,
     /// URL of the ping endpoint as seen from the deploy host (verify-release).
     pub ping_url: Option<String>,
+    /// Public entry point the site must advertise as `host_name` (verify-release).
+    pub public_url: Option<String>,
     /// Compose project name of rehearsal stacks (verify-release).
     pub rehearsal_project: Option<String>,
     /// Shell glob of rehearsal directories on the host (verify-release).

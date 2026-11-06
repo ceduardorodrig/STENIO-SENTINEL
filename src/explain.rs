@@ -1213,6 +1213,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "# app/boards.py + app/tests/kanban_boards.py\n#   def run(): builds a Squad (status Formed) and a Guild, asserts each gets its board\n# desk/kanban_board.json published by the create-only sync (FILES = (... \"kanban_board.json\"))",
         remediation: "Point the board at a real Select field, install the file from the create-only sync instead of shipping it by hand, and add a test under the app's tests/ that builds a Formed Squad and a Guild and asserts each gets its board.",
     },
+    RuleExplanation {
+        id: "VERIFY-HOST-NAME",
+        name: "Site host_name Is Not The Public Entry Point",
+        severity: "ERROR",
+        tag: "infra",
+        summary: "`stenio verify-release` compares `host_name` in the site's `site_config.json` with the declared public URL (`--public-url`, else `[frappe] public_url`) and FAILs naming both values. With neither declared it WARNs: the engine does not know the Funnel and never invents a host.",
+        rationale: "Every e-mail the platform sends — welcome, password reset, 2FA — is built from `host_name`, so a `host_name` that only answers inside the tailnet ships a link nobody outside it can open. That was GB-127: `site_config.json` carried `https://<host>.ts.net:8446`, a port only `tailscale serve` answers on inside the tailnet, while the Funnel was healthy on 443 and the ping check was green — the deploy looked perfect and the invitation link was dead. No check compared the two, because the engine has no way to know which public entry point fronts the host: that is a decision, not an observation. Hence the flag: the operator (or the reviewed `[frappe] public_url` in `steniocheck.toml`) declares the entry point, and the check compares the live site against the declaration. The runtime variable is deliberately NOT the default: the app itself derives `host_name` from `MIRACENA_PUBLIC_URL` at deploy time, so comparing those two would only prove that the pipeline is consistent, and it was consistent in the incident — both said `:8446`. The read goes through the backend container (`docker compose exec -T backend cat sites/<site>/site_config.json`) because `sites/` is a volume, not a host path.",
+        bad_example: "# [frappe] public_url = \"https://kuaray.example.ts.net\"\n# site_config.json on the deploy host:\n{\"host_name\": \"https://kuaray.example.ts.net:8446\"}\n# FAIL host-name  host_name 'https://kuaray.example.ts.net:8446' != expected public URL 'https://kuaray.example.ts.net'",
+        good_example: "# [frappe] public_url = \"https://kuaray.example.ts.net\"\n# site_config.json on the deploy host:\n{\"host_name\": \"https://kuaray.example.ts.net\"}\n# PASS host-name  host_name = https://kuaray.example.ts.net = declared public URL",
+        remediation: "Set the Funnel/public URL once in `[frappe] public_url` (or pass `--public-url`), fix `host_name` with `bench set-config host_name <url>` — or let the app's deploy baseline apply it from `MIRACENA_PUBLIC_URL`, which must carry the same value — and re-run the release so the exit gate reads PASS.",
+    },
+    RuleExplanation {
+        id: "VERIFY-COMPOSE-PARITY",
+        name: "Repository Compose And Host Compose Diverge",
+        severity: "ERROR",
+        tag: "infra",
+        summary: "`stenio verify-release` compares the environment KEYS of the repository compose with the ones of the compose on the deploy host, and FAILs naming the keys that exist on only one side (first 10). Values are never compared: one side legitimately carries a secret.",
+        rationale: "The compose in the repository and the compose that runs on the host are two artifacts that drift silently, and both directions cost something. That was GB-096: the host compose carried `FORWARDED_ALLOW_IPS` and the repository one did not, so copying the repository over the host — the obvious way to apply a change — would have dropped the header the proxy trusts, and the session cookie would have lost its `Secure` attribute with no error anywhere: the stack comes up healthy, the login works, and only a browser inspecting the cookie sees the regression. The opposite direction is a key the repository intends and the host never receives, which is a value the deploy silently does nothing with. Comparing keys, not values, is what makes the check safe to print and safe to run against production: the compass of the fix is a key that exists on one side, and the value is the operator's to carry over. A missing file on either side is a WARN, not a FAIL — an unreadable artifact is an absence of evidence, and this check must not turn a repository layout the engine does not know into a red release.",
+        bad_example: "# repository compose.yml        # host compose.yml\nservices:                       services:\n  backend:                        backend:\n    environment:                    environment:\n      DB_HOST: db                     DB_HOST: db\n                                      FORWARDED_ALLOW_IPS: \"*\"\n# FAIL compose-parity  1 env key(s) diverge - host-only: FORWARDED_ALLOW_IPS",
+        good_example: "# both files carry the same key set\nservices:\n  backend:\n    environment:\n      DB_HOST: db\n      FORWARDED_ALLOW_IPS: \"*\"\n# PASS compose-parity  20 env key(s) identical in the repository and the host compose",
+        remediation: "Add the missing key to whichever side lacks it (and carry its value deliberately), then re-run the release. Point the check at the right files with `--repo-compose` and `--host-compose` when the layout differs from `<repo>/compose/frappe/compose.yml` and `<project-dir>/compose.yml`.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
