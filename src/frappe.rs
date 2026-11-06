@@ -144,6 +144,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         "Currency Threshold Decided Without An Empty Branch",
         Severity::Error,
     ),
+    (
+        "FRAPPE-PERMISSION-SCOPE",
+        "Broad Role On A Person-Scoped DocType Without A Scope",
+        Severity::Error,
+    ),
 ];
 
 const SKIP_DIRS: &[&str] = &[
@@ -287,9 +292,23 @@ struct DocType {
     rel: String,
     text: String,
     is_child: bool,
+    /// A Single holds one configuration record, not rows about people: it has no table to scope.
+    is_single: bool,
     title_ok: bool,
     fields: Vec<Field>,
     roles: Vec<String>,
+    /// The same rows as `roles`, kept whole: `FRAPPE-PERMISSION-SCOPE` needs which operations a
+    /// role was granted, not only that it appears.
+    perms: Vec<Perm>,
+}
+
+/// One row of a DocType's `permissions` array.
+struct Perm {
+    role: String,
+    read: bool,
+    write: bool,
+    /// Set on the row itself: it narrows the rows that role may touch to the ones it owns.
+    if_owner: bool,
 }
 
 struct Ctx {
@@ -384,25 +403,33 @@ fn load_doctype(root: &Path, path: &Path) -> Option<DocType> {
                 .collect()
         })
         .unwrap_or_default();
-    let roles = v
+    let perms: Vec<Perm> = v
         .get("permissions")
         .and_then(|f| f.as_array())
         .map(|a| {
             a.iter()
-                .map(|p| str_of(p, "role"))
-                .filter(|r| !r.is_empty())
+                .map(|p| Perm {
+                    role: str_of(p, "role"),
+                    read: flag(p, "read"),
+                    write: flag(p, "write"),
+                    if_owner: flag(p, "if_owner"),
+                })
+                .filter(|p| !p.role.is_empty())
                 .collect()
         })
         .unwrap_or_default();
+    let roles = perms.iter().map(|p| p.role.clone()).collect();
     let title_ok = (!str_of(&v, "title_field").is_empty() && flag(&v, "show_title_field_in_link"))
         || !str_of(&v, "search_fields").trim().is_empty();
     Some(DocType {
         name: str_of(&v, "name"),
         rel: rel(root, path),
         is_child: flag(&v, "istable"),
+        is_single: flag(&v, "issingle"),
         title_ok,
         fields,
         roles,
+        perms,
         text,
     })
 }
@@ -3941,6 +3968,212 @@ fn rel_to_fixtures(path: &str) -> bool {
     path.split('/').any(|seg| seg == "fixtures")
 }
 
+// ── FRAPPE-PERMISSION-SCOPE ────────────────────────────────────────────────
+// HOUSE POLICY, not a deduction from the app: roles that carry no identity of their own. A DocType
+// that stores rows about a PERSON and lets one of these roles `read` or `write` needs a row-level
+// scope in `hooks.py`. Adding a role here is a policy edit, deliberate and reviewed in the
+// repository — the same way `mnemocine/network/gpu-consumers.txt` registers a GPU consumer.
+const BROAD_ROLES: &[&str] = &[
+    "Miracena Member",
+    "Miracena Freelancer",
+    "Desk User",
+    "All",
+    "Guest",
+];
+
+// Fieldnames that name a person even when the field is not a Link (a `Data` field holding a
+// username, a Select of reviewers). A Link is resolved by its `options` INSTEAD: the target
+// DocType is the fact and the fieldname is only a hint — a Link called `member` that points at
+// `Member Squad` is not a person, while `assigned_to` pointing at `Member` is.
+const PERSON_FIELDNAMES: &[&str] = &[
+    "member",
+    "user",
+    "employee",
+    "assigned_to",
+    "voter",
+    "reviewer",
+    "reviewee",
+    "candidate",
+    "custodian",
+];
+
+/// DocTypes that are public BY DECLARATION live in this data file (one name per line, reason after
+/// `#`). It is read from the app root — the package that carries `hooks.py`, which is what Frappe
+/// calls an app — and, as an accepted alternative, from `--path` itself, so a repository that keeps
+/// the file beside its `steniocheck.toml` is not forced to move it. A missing file is an EMPTY
+/// allowlist on purpose: every DocType stays protected until somebody states, in the repository,
+/// that a catalogue is meant to be readable by everyone. Registering a public DocType is therefore a
+/// data edit, never an engine change.
+const PUBLIC_PERMISSIONS_FILE: &str = "permissions-public.txt";
+
+/// `Some(description)` when the field identifies a person, e.g. `` `assigned_to` (Link to Member)``.
+fn person_field(f: &Field) -> Option<String> {
+    let target = f.options.trim();
+    if f.fieldtype.eq_ignore_ascii_case("Link") {
+        return match target {
+            "Member" | "User" => Some(format!("`{}` (Link to {target})", f.fieldname)),
+            _ => None,
+        };
+    }
+    let name = f.fieldname.to_ascii_lowercase();
+    PERSON_FIELDNAMES
+        .contains(&name.as_str())
+        .then(|| format!("`{}` ({})", f.fieldname, f.fieldtype))
+}
+
+/// DocTypes named as a key of `permission_query_conditions` or `has_permission` in `hooks.py`.
+///
+/// Only the KEYS are read: the body of the function is never inspected, because whether a
+/// condition is correct is not decidable statically — registration is the decision this rule can
+/// verify. Two shapes are accepted, the ones the fleet writes: a literal key
+/// (`"PDI": "miracena.pdi.pdi_conditions"`) and the spread comprehension
+/// (`**{dt: "miracena.access.query_conditions" for dt in ("Invoice", "Deal", "Project")}`), because
+/// both leave the DocType name as a quoted literal without a dot inside the block. A dotted literal
+/// is a function path. Comments are dropped first, so the commented template that Frappe ships in
+/// every `hooks.py` (`# permission_query_conditions = {`) registers nothing.
+fn scoped_doctypes(c: &Ctx) -> BTreeSet<String> {
+    let mut clean = String::new();
+    for raw in read(&c.pkg.join("hooks.py")).lines() {
+        clean.push_str(&strip_comment(raw));
+        clean.push('\n');
+    }
+    let Ok(head) = Regex::new(r"(?m)^[ \t]*(?:permission_query_conditions|has_permission)\s*=")
+    else {
+        return BTreeSet::new();
+    };
+    let Ok(quoted) = Regex::new(r#""([^"\n]*)"|'([^'\n]*)'"#) else {
+        return BTreeSet::new();
+    };
+    let mut out = BTreeSet::new();
+    for m in head.find_iter(&clean) {
+        let rest = &clean[m.end()..];
+        let Some(brace) = rest.find('{') else {
+            continue;
+        };
+        // The value must be a dict literal, not a name bound elsewhere: anything before the brace
+        // that is not whitespace or a `**` spread means the dict is built somewhere we do not read.
+        if !rest[..brace]
+            .trim_start_matches(|c: char| c == '*' || c.is_whitespace())
+            .is_empty()
+        {
+            continue;
+        }
+        let Some((_, end)) = balanced_at(rest, brace, b'{', b'}') else {
+            continue;
+        };
+        let Some(block) = rest.get(brace..end) else {
+            continue;
+        };
+        for q in quoted.captures_iter(block) {
+            let Some(lit) = q.get(1).or_else(|| q.get(2)) else {
+                continue;
+            };
+            let name = lit.as_str().trim();
+            // A dotted literal is the function path, not the DocType key.
+            if !name.is_empty() && !name.contains('.') {
+                out.insert(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// DocTypes declared public in `permissions-public.txt` (app root, or `--path` when the app keeps it
+/// beside `steniocheck.toml`). The name is everything before the `#` — DocType names carry spaces
+/// (`Studio Space`), so the line is not split on whitespace.
+fn public_doctypes(c: &Ctx) -> BTreeSet<String> {
+    [
+        c.pkg.join(PUBLIC_PERMISSIONS_FILE),
+        c.root.join(PUBLIC_PERMISSIONS_FILE),
+    ]
+    .iter()
+    .flat_map(|p| {
+        read(p)
+            .lines()
+            .filter_map(|raw| {
+                let line = raw.split('#').next().unwrap_or("").trim();
+                (!line.is_empty()).then(|| line.to_string())
+            })
+            .collect::<Vec<String>>()
+    })
+    .collect()
+}
+
+/// Line of the `nth` (1-based) permission row naming `role`. A DocType may grant the same role
+/// twice — one row plain and one with `if_owner`, exactly the shape that reopens a table — so each
+/// finding has to point at its own row instead of the first mention of the name.
+fn perm_line(text: &str, role: &str, nth: usize) -> usize {
+    let needle = format!("\"{role}\"");
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains(&needle))
+        .map(|(i, _)| i + 1)
+        .nth(nth.saturating_sub(1))
+        .unwrap_or(1)
+}
+
+fn rule_permission_scope(c: &Ctx) -> Vec<Violation> {
+    let scoped = scoped_doctypes(c);
+    let public = public_doctypes(c);
+    let mut out = Vec::new();
+    for d in c.doctypes.iter().filter(|d| !d.is_child && !d.is_single) {
+        // A registered scope and a declared-public DocType are both an answer: the rule is silent.
+        if scoped.contains(&d.name) || public.contains(&d.name) {
+            continue;
+        }
+        let Some(field) = d.fields.iter().find_map(person_field) else {
+            continue; // a catalogue, not a table about people
+        };
+        let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+        for p in &d.perms {
+            let nth = seen.entry(p.role.as_str()).or_insert(0);
+            *nth += 1;
+            let nth = *nth;
+            if !BROAD_ROLES.iter().any(|r| r.eq_ignore_ascii_case(&p.role)) {
+                continue;
+            }
+            let mut ops: Vec<&str> = Vec::new();
+            if p.read {
+                ops.push("read");
+            }
+            if p.write {
+                ops.push("write");
+            }
+            if ops.is_empty() {
+                continue; // report/export alone cannot change or page through a row's content
+            }
+            // `if_owner` narrows the row that declares it and nothing else: another broad role on
+            // the same DocType reopens the whole table, and a role added later does so with no
+            // record of the decision. A permission row is not a scope; hooks.py is where the
+            // scope of a DocType is written down, so the finding stands.
+            let owner = if p.if_owner {
+                " `if_owner` on this row narrows only the role that declares it: another broad row, or a role added later, reopens every record with no line in hooks.py saying so."
+            } else {
+                ""
+            };
+            out.push(viol(
+                "FRAPPE-PERMISSION-SCOPE",
+                &d.rel,
+                perm_line(&d.text, &p.role, nth),
+                &format!("{field} -> {}", p.role),
+                format!(
+                    "DocType `{}` stores rows about a person — {field} — and grants the broad role `{}` {}: neither `permission_query_conditions` nor `has_permission` names this DocType in hooks.py, so the grant is the whole table: every holder of `{}` reaches every record.{owner} Register `{}` in hooks.py (`permission_query_conditions`/`has_permission`) or declare the DocType public in {PUBLIC_PERMISSIONS_FILE}.",
+                    d.name,
+                    p.role,
+                    ops.join(" and "),
+                    p.role,
+                    d.name
+                ),
+                &format!(
+                    "Register `{}` in hooks.py — `permission_query_conditions[\"{}\"]` and `has_permission[\"{}\"]` — or declare it public in {PUBLIC_PERMISSIONS_FILE} (one DocType per line, reason after `#`).",
+                    d.name, d.name, d.name
+                ),
+            ));
+        }
+    }
+    out
+}
+
 /// Runs every rule and returns the violations (sorted by file and line).
 pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> {
     let c = build_ctx(root, cfg)?;
@@ -3962,6 +4195,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_rules_coverage,
         rule_role_fixture_parity,
         rule_currency_threshold,
+        rule_permission_scope,
         rule_silent_except,
         rule_min_syntax,
         rule_privileged_read,
@@ -3984,8 +4218,10 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"kind","fieldtype":"Select","options":"KINDS"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}EXTRA],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
 const PART_JSON_BAD: &str = r#"{"doctype":"DocType","name":"Part","fields":[]}"#;
-const WIDGET_JSON: &str =
-    r#"{"doctype":"DocType","name":"Widget","fields":[],"permissions":[{"role":"Demo Role"}]}"#;
+/// `Widget` carries a Link to `User` — a record about a person. `PERM` is where the bad tree adds
+/// the broad role `FRAPPE-PERMISSION-SCOPE` refuses while `hooks.py` neither scopes nor the
+/// allowlist declares the DocType.
+const WIDGET_JSON: &str = r#"{"doctype":"DocType","name":"Widget","fields":[{"fieldname":"member","fieldtype":"Link","options":"User","label":"Member"}],"permissions":[{"role":"Demo Role"}PERM]}"#;
 /// The validation gate: `Thing` stores `price` as Currency, so the entry must normalise it.
 const VALIDATORS_GOOD: &str = "import frappe\n\n\ndef money(value):\n\treturn value\n\n\ndef _rule(**parts):\n\treturn {\"normalise\": {}, \"prepare\": (), \"checks\": (), \"raw\": ()} | parts\n\n\nRULES = {\n\t\"Part\": _rule(),\n\t\"Thing\": _rule(normalise={\"price\": money}, raw=(\"code\",)),\n}\n";
 const VALIDATORS_BAD: &str = "import frappe\n\n\ndef money(value):\n\treturn value\n\n\ndef _rule(**parts):\n\treturn {\"normalise\": {}, \"prepare\": (), \"checks\": (), \"raw\": ()} | parts\n\n\nRULES = {\n\t\"Part\": _rule(),\n\t\"Thing\": _rule(normalise={\"ghost_field\": money}, raw=(\"code\",)),\n}\n";
@@ -4003,7 +4239,7 @@ const SAFETY_BAD: &str = "import frappe\n\n\ndef sync(doc):\n\tskipped = 0\n\ttr
 /// reads the User in the session of whoever saved.
 const SESSION_GOOD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tprevious = frappe.session.user\n\tfrappe.set_user(\"Administrator\")\n\ttry:\n\t\tuser = frappe.get_doc(\"User\", \"Administrator\")\n\t\tuser.add_roles(\"Demo Role\")\n\tfinally:\n\t\tfrappe.set_user(previous)\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept (TypeError, ValueError):\n\t\treturn 0\n";
 const SESSION_BAD: &str = "import frappe\n\n\ndef sync_members(doc=None, method=None):\n\tuser = frappe.get_doc(\"User\", doc.user)\n\tuser.add_roles(\"Demo Role\")\n\n\ndef parse(text):\n\ttry:\n\t\treturn int(text)\n\texcept TypeError, ValueError:\n\t\treturn 0\n";
-const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Kind note\"\nmsgstr \"Nota do tipo\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
+const PO_GOOD: &str = "msgid \"\"\nmsgstr \"\"\n\nmsgid \"Things\"\nmsgstr \"Coisas\"\n\nmsgid \"Member\"\nmsgstr \"Membro\"\n\nmsgid \"Parts\"\nmsgstr \"Pecas\"\n\nmsgid \"Part\"\nmsgstr \"Peca\"\n\nmsgid \"Open day\"\nmsgstr \"Dia aberto\"\n\nmsgid \"Closed day\"\nmsgstr \"Dia fechado\"\n\nmsgid \"Kind note\"\nmsgstr \"Nota do tipo\"\n\nmsgid \"Widget\"\nmsgstr \"Widget\"\n";
 /// FRAPPE-I18N-SOURCE-LITERALS: one `_()` call inline and one wrapped over three lines. The good
 /// file only uses msgids the catalogue carries; the bad file adds a literal nobody translated.
 const LABELS_GOOD: &str = "from frappe import _\n\n\ndef parts_label():\n\treturn _(\"Parts\")\n\n\ndef wrapped():\n\treturn _(\n\t\t\"Parts\"\n\t)\n";
@@ -4161,7 +4397,19 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             if bad { LABELS_BAD } else { LABELS_GOOD },
         ),
         f("demoapp/demo/doctype/widget/__init__.py", ""),
-        f("demoapp/demo/doctype/widget/widget.json", WIDGET_JSON),
+        f(
+            "demoapp/demo/doctype/widget/widget.json",
+            &WIDGET_JSON.replace(
+                "PERM",
+                if bad {
+                    // FRAPPE-PERMISSION-SCOPE: a broad role with read+write on a record about a
+                    // person, with no scope registered in hooks.py.
+                    r#",{"role":"Desk User","read":1,"write":1}"#
+                } else {
+                    ""
+                },
+            ),
+        ),
         f(
             "demoapp/demo/doctype/widget/widget.py",
             "class Widget:\n    pass\n",
@@ -4932,5 +5180,241 @@ mod tests {
         assert_eq!(got.len(), 1, "{got:?}");
         assert!(got[0].message.contains("`price`"), "{}", got[0].message);
         assert_eq!(got[0].line_number, 5);
+    }
+
+    // ── FRAPPE-PERMISSION-SCOPE ────────────────────────────────────────────
+    // `Note` is one person's onboarding record: `owner_member` is a Link to `Member` (the field
+    // name says nothing, the resolved `options` does) and `Miracena Member` reads AND writes it.
+    // The two answers are a registration in hooks.py and a line in permissions-public.txt.
+    const NOTE_JSON: &str = "{\n \"doctype\": \"DocType\",\n \"name\": \"Note\",\n \"fields\": [\n  {\"fieldname\": \"title\", \"fieldtype\": \"Data\"},\n  {\"fieldname\": \"owner_member\", \"fieldtype\": \"Link\", \"options\": \"Member\"}\n ],\n \"permissions\": [\n  {\"role\": \"System Manager\", \"read\": 1, \"write\": 1},\n  {\"role\": \"Miracena Member\", \"read\": 1, \"write\": 1}\n ]\n}";
+    /// The same DocType, `if_owner` on the broad row: Frappe narrows that row only.
+    const NOTE_OWNER_JSON: &str = "{\n \"doctype\": \"DocType\",\n \"name\": \"Note\",\n \"fields\": [\n  {\"fieldname\": \"owner_member\", \"fieldtype\": \"Link\", \"options\": \"Member\"}\n ],\n \"permissions\": [\n  {\"role\": \"Miracena Member\", \"read\": 1, \"write\": 1, \"if_owner\": 1}\n ]\n}";
+    /// A catalogue: the broad role is fine because no row belongs to a person.
+    const CATALOGUE_JSON: &str = "{\"doctype\":\"DocType\",\"name\":\"Tag\",\"fields\":[{\"fieldname\":\"label\",\"fieldtype\":\"Data\"}],\"permissions\":[{\"role\":\"Miracena Member\",\"read\":1,\"write\":1}]}";
+    /// A child table: the permission that decides is the parent's, so the rows are not accused.
+    const CHILD_JSON: &str = "{\"doctype\":\"DocType\",\"name\":\"Note Line\",\"istable\":1,\"fields\":[{\"fieldname\":\"assigned_to\",\"fieldtype\":\"Link\",\"options\":\"Member\"}],\"permissions\":[{\"role\":\"Miracena Member\",\"read\":1,\"write\":1}]}";
+    /// A Single is one configuration record, not a table of people.
+    const SINGLE_JSON: &str = "{\"doctype\":\"DocType\",\"name\":\"Scope Settings\",\"issingle\":1,\"fields\":[{\"fieldname\":\"reviewer\",\"fieldtype\":\"Link\",\"options\":\"User\"}],\"permissions\":[{\"role\":\"Miracena Member\",\"read\":1,\"write\":1}]}";
+
+    const HOOKS_BARE: &str = "app_name = \"app\"\n";
+    const HOOKS_QCC: &str = "app_name = \"app\"\npermission_query_conditions = {\n\t\"Note\": \"app.access.note_conditions\",\n}\n";
+    const HOOKS_HP: &str = "app_name = \"app\"\nhas_permission = {\n\t**{dt: \"app.access.has_permission\" for dt in (\"Note\", \"Deal\")},\n}\n";
+    /// The template Frappe ships in every hooks.py, commented: it registers nothing.
+    const HOOKS_COMMENTED: &str = "app_name = \"app\"\n# permission_query_conditions = {\n# \t\"Note\": \"app.access.note_conditions\",\n# }\nhas_permission = {\n\t\"Deal\": \"app.access.has_permission\",\n}\n";
+
+    /// A one-DocType app; `extra` adds the hooks block, the allowlist or a sibling DocType.
+    fn scope_app(json: &str, hooks: &str, extra: Vec<(String, String)>) -> Vec<(String, String)> {
+        let mut v = vec![
+            (
+                "app/demo/doctype/note/note.json".to_string(),
+                json.to_string(),
+            ),
+            (
+                "app/demo/doctype/note/note.py".to_string(),
+                "class Note:\n\tpass\n".to_string(),
+            ),
+            ("app/hooks.py".to_string(), hooks.to_string()),
+        ];
+        v.extend(extra);
+        v
+    }
+
+    /// (a) The leak: 1 ERROR naming the DocType, the person field, the broad role, the operations
+    /// and the way out. The `snippet` carries the two facts that make it a finding.
+    #[test]
+    fn permission_scope_flags_a_person_doctype_with_a_broad_role() {
+        let got = audit_rule(
+            "scope-leak",
+            &scope_app(NOTE_JSON, HOOKS_BARE, vec![]),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].file_path, "app/demo/doctype/note/note.json");
+        assert_eq!(
+            got[0].line_number, 10,
+            "the permission row of the broad role"
+        );
+        assert_eq!(got[0].severity, Severity::Error);
+        for needle in [
+            "`Note`",
+            "`owner_member`",
+            "Link to Member",
+            "`Miracena Member`",
+            "read and write",
+            "permission_query_conditions",
+            "permissions-public.txt",
+        ] {
+            assert!(got[0].message.contains(needle), "{}", got[0].message);
+        }
+        assert!(
+            got[0]
+                .suggestion
+                .as_deref()
+                .unwrap_or("")
+                .contains("has_permission[\"Note\"]"),
+            "{:?}",
+            got[0].suggestion
+        );
+    }
+
+    /// (b) A registered scope silences the rule in either shape — a literal key and the spread
+    /// comprehension — and a registration for ANOTHER DocType does not. A commented template and
+    /// `if_owner` (f) do not either.
+    #[test]
+    fn permission_scope_goes_quiet_on_a_registration_and_only_on_that_doctype() {
+        assert!(
+            audit_rule(
+                "scope-qcc",
+                &scope_app(NOTE_JSON, HOOKS_QCC, vec![]),
+                "FRAPPE-PERMISSION-SCOPE"
+            )
+            .is_empty()
+        );
+        assert!(
+            audit_rule(
+                "scope-hp",
+                &scope_app(NOTE_JSON, HOOKS_HP, vec![]),
+                "FRAPPE-PERMISSION-SCOPE"
+            )
+            .is_empty()
+        );
+        let commented = audit_rule(
+            "scope-commented",
+            &scope_app(NOTE_JSON, HOOKS_COMMENTED, vec![]),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(
+            commented.len(),
+            1,
+            "a commented dict registers nothing: {commented:?}"
+        );
+    }
+
+    /// (c) The allowlist is data: a tolerant line (`Note   # reason`, blank lines, comments)
+    /// silence it, and the presence of the FILE alone does not — another DocType's line leaves
+    /// this one accused.
+    #[test]
+    fn permission_scope_reads_the_allowlist_as_data() {
+        let allowed = vec![(
+            "permissions-public.txt".to_string(),
+            "# catalogues the whole team reads\n\n  Note   # the onboarding checklist is public by design\n\n".to_string(),
+        )];
+        assert!(
+            audit_rule(
+                "scope-public",
+                &scope_app(NOTE_JSON, HOOKS_BARE, allowed),
+                "FRAPPE-PERMISSION-SCOPE"
+            )
+            .is_empty()
+        );
+
+        let other = vec![(
+            "permissions-public.txt".to_string(),
+            "Tag # only the catalogue\n".to_string(),
+        )];
+        let got = audit_rule(
+            "scope-other",
+            &scope_app(NOTE_JSON, HOOKS_BARE, other),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+
+        // A DocType name carries spaces (`Studio Space`): the line is the name up to the `#`, not
+        // its first word, so this entry silences `Note Space` and leaves `Note` accused.
+        let spaced = vec![
+            (
+                "app/demo/doctype/note_space/note_space.json".to_string(),
+                NOTE_JSON.replace("\"name\": \"Note\"", "\"name\": \"Note Space\""),
+            ),
+            (
+                "app/demo/doctype/note_space/note_space.py".to_string(),
+                "class NoteSpace:\n\tpass\n".to_string(),
+            ),
+            (
+                "permissions-public.txt".to_string(),
+                "Note Space   # a catalogue of rooms the whole team books\n".to_string(),
+            ),
+        ];
+        let got = audit_rule(
+            "scope-spaced",
+            &scope_app(NOTE_JSON, HOOKS_BARE, spaced),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(got[0].message.contains("`Note`"), "{}", got[0].message);
+    }
+
+    /// (d) A catalogue with no person field and (e) a child table and a Single are never accused.
+    #[test]
+    fn permission_scope_ignores_catalogues_children_and_singles() {
+        let catalogue = vec![
+            (
+                "app/demo/doctype/tag/tag.json".to_string(),
+                CATALOGUE_JSON.to_string(),
+            ),
+            (
+                "app/demo/doctype/tag/tag.py".to_string(),
+                "class Tag:\n\tpass\n".to_string(),
+            ),
+            (
+                "app/demo/doctype/note_line/note_line.json".to_string(),
+                CHILD_JSON.to_string(),
+            ),
+            (
+                "app/demo/doctype/note_line/note_line.py".to_string(),
+                "class NoteLine:\n\tpass\n".to_string(),
+            ),
+            (
+                "app/demo/doctype/scope_settings/scope_settings.json".to_string(),
+                SINGLE_JSON.to_string(),
+            ),
+            (
+                "app/demo/doctype/scope_settings/scope_settings.py".to_string(),
+                "class ScopeSettings:\n\tpass\n".to_string(),
+            ),
+        ];
+        let got = audit_rule(
+            "scope-shapes",
+            &scope_app(NOTE_JSON, HOOKS_BARE, catalogue),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(
+            got.len(),
+            1,
+            "only `Note` is a parent table about people: {got:?}"
+        );
+        assert!(got[0].message.contains("`Note`"), "{}", got[0].message);
+    }
+
+    /// (f) `if_owner` does not silence the rule: it narrows the row that declares it, and the
+    /// finding says so. Two rows of the same role are also two findings, each on its own line.
+    #[test]
+    fn permission_scope_does_not_accept_if_owner_as_a_scope() {
+        let got = audit_rule(
+            "scope-if-owner",
+            &scope_app(NOTE_OWNER_JSON, HOOKS_BARE, vec![]),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].line_number, 8, "the role row, not the field");
+        assert!(got[0].message.contains("`if_owner`"), "{}", got[0].message);
+        assert!(
+            got[0].message.contains("another broad row"),
+            "{}",
+            got[0].message
+        );
+
+        let two_rows = "{\n \"doctype\": \"DocType\",\n \"name\": \"Note\",\n \"fields\": [\n  {\"fieldname\": \"member\", \"fieldtype\": \"Link\", \"options\": \"Member\"}\n ],\n \"permissions\": [\n  {\"role\": \"Miracena Member\", \"read\": 1, \"write\": 1},\n  {\"role\": \"Miracena Member\", \"read\": 1, \"if_owner\": 1}\n ]\n}";
+        let got = audit_rule(
+            "scope-two-rows",
+            &scope_app(two_rows, HOOKS_BARE, vec![]),
+            "FRAPPE-PERMISSION-SCOPE",
+        );
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(
+            got.iter().map(|v| v.line_number).collect::<Vec<usize>>(),
+            vec![8, 9],
+            "each finding points at its own row"
+        );
     }
 }
