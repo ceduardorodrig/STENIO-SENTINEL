@@ -8,11 +8,6 @@
 
 > **"Sub-millisecond static governance engine, anti-bypass quality gate, and architectural integrity sentinel for AI coding agents written in Rust 2024."**
 
-🛡️ Human-in-the-Loop Agentic Engineering
-
-Developed by Carlos Eduardo Rodrigues with AI coding agents.
-Every change is verified by the deterministic quality gate StenioSentinel.
-
 ---
 
 ## 📑 Table of Contents
@@ -258,3 +253,10 @@ For proprietary integrations, enterprise compliance, or sovereign deployments wi
 - **Creator & Maintainer:** **Carlos Eduardo Rodrigues** ([@ceduardorodrig](https://github.com/ceduardorodrig))
 - **Portfolio & Profile:** [ceduardorodrig](https://github.com/ceduardorodrig/ceduardorodrig)
 - **Venture:** [Sumænimá](https://sumaenima.chimaera-heptatonic.ts.net)
+
+---
+
+🛡️ Human-in-the-Loop Agentic Engineering
+
+Developed by Carlos Eduardo Rodrigues with AI coding agents.
+Every change is verified by the deterministic quality gate StenioSentinel.
