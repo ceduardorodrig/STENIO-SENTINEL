@@ -250,6 +250,9 @@ fn check_tag(r: &dyn Runner, a: &RelArgs) -> Result<String, String> {
 }
 
 fn check_origin(r: &dyn Runner, a: &RelArgs, commit: &str) -> Line {
+    // An annotated tag answers `git ls-remote` with TWO refs: the tag object and the commit it peels to (`^{}`). Asking
+    // only for the plain ref compares a tag object with the local commit, so every annotated tag reported a difference
+    // — a false failure that says nothing about the tree (GB-136). Ask for both and compare the commit.
     let argv = vec![
         "git".to_string(),
         "-C".to_string(),
@@ -258,23 +261,44 @@ fn check_origin(r: &dyn Runner, a: &RelArgs, commit: &str) -> Line {
         "--tags".to_string(),
         "origin".to_string(),
         format!("refs/tags/{}", a.tag),
+        format!("refs/tags/{}^{{}}", a.tag),
     ];
     match r.run(None, &argv, Duration::from_secs(60)) {
-        Ok(o) if out_ok(&o) && one_line(&o).starts_with(commit) => pass(
-            "tag-origin",
-            format!("origin has {} at {}", a.tag, short(commit)),
-        ),
-        Ok(o) if out_ok(&o) && one_line(&o).is_empty() => {
-            fail("tag-origin", format!("{} is not pushed to origin", a.tag))
+        Ok(o) if out_ok(&o) => {
+            let plain_ref = format!("refs/tags/{}", a.tag);
+            let mut plain = String::new();
+            let mut peeled = String::new();
+            for line in o.stdout.lines() {
+                let mut parts = line.split_whitespace();
+                let (Some(sha), Some(name)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
+                if name == format!("{plain_ref}^{{}}") {
+                    peeled = sha.to_string();
+                } else if name == plain_ref {
+                    plain = sha.to_string();
+                }
+            }
+            // The peeled ref wins when the tag is annotated; a lightweight tag has only the plain one.
+            let remote = if peeled.is_empty() { plain } else { peeled };
+            if remote.is_empty() {
+                fail("tag-origin", format!("{} is not pushed to origin", a.tag))
+            } else if remote.starts_with(commit) {
+                pass(
+                    "tag-origin",
+                    format!("origin has {} at {}", a.tag, short(commit)),
+                )
+            } else {
+                fail(
+                    "tag-origin",
+                    format!(
+                        "origin {} differs from local {}",
+                        short(&remote),
+                        short(commit)
+                    ),
+                )
+            }
         }
-        Ok(o) if out_ok(&o) => fail(
-            "tag-origin",
-            format!(
-                "origin {} differs from local {}",
-                short(&one_line(&o)),
-                short(commit)
-            ),
-        ),
         Ok(_) => fail("tag-origin", "git ls-remote failed"),
         Err(e) => fail("tag-origin", e),
     }
@@ -873,7 +897,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
     let version = a.tag.trim_start_matches('v').to_string();
     vec![
         ("tag-local", format!("git -C {} rev-parse --verify -q {}^{{commit}}", a.repo.display(), a.tag)),
-        ("tag-origin", format!("git -C {} ls-remote --tags origin refs/tags/{}", a.repo.display(), a.tag)),
+        ("tag-origin", format!("git -C {} ls-remote --tags origin refs/tags/{} refs/tags/{}^{{}} (compares the commit the tag peels to)", a.repo.display(), a.tag, a.tag)),
         ("ci", "gh run list --commit <tag sha> --json workflowName,status,conclusion".to_string()),
         ("lockfile", format!("cargo metadata --locked --offline --no-deps --format-version 1 (in {})", a.repo.display())),
         ("build", format!("cargo build --release --locked (in {})", a.repo.display())),
@@ -971,6 +995,8 @@ impl Runner for Fake {
 }
 
 const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+/// The object an annotated tag points to, which is never the commit it names.
+const TAG_OBJECT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -1055,9 +1081,14 @@ fn scripted(
             "--tags",
             "origin",
             &format!("refs/tags/{tag}"),
+            &format!("refs/tags/{tag}^{{}}"),
         ]
         .map(String::from)),
-        ok(&format!("{SHA_A}\trefs/tags/{tag}")),
+        // An annotated tag answers with the tag object AND the commit it peels to. The object differs from the
+        // commit on purpose: comparing the object is exactly the false failure this fixture pins (GB-136).
+        ok(&format!(
+            "{TAG_OBJECT}\trefs/tags/{tag}\n{SHA_A}\trefs/tags/{tag}^{{}}"
+        )),
     );
     m.insert(
         key(&["cargo", "build", "--release", "--locked"].map(String::from)),
