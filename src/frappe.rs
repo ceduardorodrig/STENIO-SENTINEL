@@ -1339,7 +1339,104 @@ fn rule_tests(c: &Ctx) -> Vec<Violation> {
                 "Add the module to the test list of the repository AGENTS.md (and to the rehearsal script)."));
         }
     }
+    out.extend(pure_registration(c, &sec, &tr, anchor));
     out
+}
+
+/// Modules the section declares as not run by the battery: any `;`-separated clause that says
+/// `site-only` or `skipped`, with its backticked module-shaped tokens. Kept apart from the
+/// `without a site` declaration FRAPPE-TEST-PARITY reads: a module is in one set or the other.
+fn site_only_declaration(section_text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Ok(backtick) = Regex::new(r"`([^`]+)`") else {
+        return out;
+    };
+    for line in section_text.lines() {
+        for part in line.split(';') {
+            let low = part.to_lowercase();
+            if !(low.contains("site-only") || low.contains("skipped")) {
+                continue;
+            }
+            for cap in backtick.captures_iter(part) {
+                if let Some(t) = cap.get(1).map(|m| m.as_str()).filter(|t| module_shaped(t)) {
+                    out.insert(t.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Rollout severity of the `*_pure.py` registration finding: the real Miracena tree has one
+/// unregistered module (`validators_pure`, rehearsal-only), so the check warns until the app declares it.
+const PURE_REGISTRATION_SEVERITY: Severity = Severity::Warning;
+
+/// GB-150/GB-139/GB-220: every `tests/*_pure.py` must be run by the release battery (read with the
+/// same discovery FRAPPE-TEST-PARITY uses) or be declared `site-only`/`skipped` in the test-list
+/// section. `assistant_api_pure` (628 lines) stayed out of the battery for days because nothing
+/// compared the directory with the arrays. A battery that cannot be read leaves the check inert
+/// and says so, never silently green.
+fn pure_registration(c: &Ctx, sec: &str, doc_rel: &str, anchor: &str) -> Vec<Violation> {
+    let tests = c.pkg.join("tests");
+    let mut pure: Vec<(String, PathBuf)> = c
+        .files
+        .iter()
+        .filter(|p| p.parent() == Some(tests.as_path()))
+        .filter_map(|p| {
+            let stem = p.file_stem()?.to_str()?;
+            let is_py = p.extension().map(|e| e == "py").unwrap_or(false);
+            (is_py && stem.ends_with("_pure")).then(|| (stem.to_string(), p.clone()))
+        })
+        .collect();
+    if pure.is_empty() {
+        return Vec::new();
+    }
+    pure.sort();
+    let Some(battery) = parity_battery(c).and_then(|p| read_battery(&c.root, &p)) else {
+        return vec![viol_as(
+            "FRAPPE-TEST-REGISTERED",
+            Severity::Warning,
+            "release-checks.sh",
+            1,
+            "release-checks.sh",
+            format!(
+                "No release battery with `names=(`/`cmds=(` was found from {}: the {} `*_pure.py` module(s) cannot be proven registered (isolated repo or partial checkout).",
+                c.root.display(),
+                pure.len()
+            ),
+            "Declare `[frappe] battery_file` (or STENIO_FRAPPE_BATTERY).",
+        )];
+    };
+    let Ok(module_re) = Regex::new(r"tests/([A-Za-z0-9_]+)\.py") else {
+        return Vec::new();
+    };
+    let ran: BTreeSet<String> = battery
+        .cmds
+        .iter()
+        .filter_map(|cmd| module_re.captures(&cmd.text))
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+    let site_only = site_only_declaration(sec);
+    pure.into_iter()
+        .filter(|(stem, _)| !ran.contains(stem) && !site_only.contains(stem))
+        .map(|(stem, path)| {
+            viol_as(
+                "FRAPPE-TEST-REGISTERED",
+                PURE_REGISTRATION_SEVERITY,
+                &rel(&c.root, &path),
+                1,
+                &stem,
+                format!(
+                    "Pure test `{stem}` is neither run by the release battery `{}` nor declared `site-only`/`skipped` in {doc_rel} (section `{anchor}`): it never gates a release.",
+                    battery.rel
+                ),
+                &format!(
+                    "Add `{stem}` to both arrays of `{}` (same slot), or declare it site-only/skipped in the test-list section.",
+                    battery.rel
+                ),
+            )
+        })
+        .collect()
 }
 
 // ── .po helpers, FRAPPE-SIDEBAR-COVERAGE, FRAPPE-SELECT-CASE ───────────────
@@ -4192,7 +4289,7 @@ fn rule_test_parity(c: &Ctx) -> Vec<Violation> {
                 *line,
                 module,
                 format!(
-                    "The release battery `{}`:{line} runs `{module}` but no pure-test declaration in `{doc_rel}` (section `{anchor}`) names it: the document and the gate describe different sets, so one of them is stale.",
+                    "The release battery `{}`:{line} runs `{module}` but no pure-test declaration in `{doc_rel}` (section `{anchor}`) names it: the document and the gate describe different sets, so one of them is stale (FRAPPE-TEST-REGISTERED already accepts a battery-listed module as registered; what is missing is this declaration).",
                     battery.rel
                 ),
                 &format!("Declare `{module}` in the pure list of `{doc_rel}`, or drop it from the battery."),
@@ -5319,7 +5416,71 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         "FRAPPE-TEST-PARITY-SPELLING".to_string(),
         parity_spelling_agrees(),
     ));
+    cases.push((
+        "FRAPPE-TEST-REGISTERED-PURE".to_string(),
+        pure_registration_agrees(),
+    ));
     cases
+}
+
+/// GB-150 mutation proof, run on every self-test: a stray `tests/stray_pure.py` is red, the same
+/// module registered in the battery is green, and declared `site-only` it is green too.
+pub(crate) fn pure_registration_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let doc = |extra: &str| {
+        format!("## 2. Tests\nThe pure ones (`alpha_pure`) also run without a site.{extra}\n")
+    };
+    let script = |with_stray: bool| {
+        let stray = if with_stray {
+            "  \"python3 -I app/tests/stray_pure.py\"\n"
+        } else {
+            ""
+        };
+        let names = if with_stray {
+            "alpha_pure stray_pure"
+        } else {
+            "alpha_pure"
+        };
+        format!("names=({names})\ncmds=(\n  \"python3 -I app/tests/alpha_pure.py\"\n{stray})\n")
+    };
+    let tree = |doc_text: String, battery_text: String| -> Vec<(String, String)> {
+        vec![
+            ("repo/AGENTS.md".into(), doc_text),
+            ("repo/scripts/release-checks.sh".into(), battery_text),
+            (
+                "repo/app/__init__.py".into(),
+                "__version__ = \"0.1.0\"\n".into(),
+            ),
+            ("repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+            ("repo/app/tests/alpha_pure.py".into(), "x = 1\n".into()),
+            ("repo/app/tests/stray_pure.py".into(), "x = 2\n".into()),
+        ]
+    };
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        test_list_file: Some("AGENTS.md".into()),
+        test_list_anchor: Some("## 2. Tests".into()),
+        ..FrappeConfig::default()
+    };
+    let hits = |doc_text: String, battery_text: String| -> Option<usize> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = write_fixture(
+            &format!("pure-registered-{n}"),
+            &tree(doc_text, battery_text),
+        )?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(
+            got?.iter()
+                .filter(|v| {
+                    v.rule_id == "FRAPPE-TEST-REGISTERED" && v.message.contains("stray_pure")
+                })
+                .count(),
+        )
+    };
+    hits(doc(""), script(false)) == Some(1)
+        && hits(doc(""), script(true)) == Some(0)
+        && hits(doc(" `stray_pure` is site-only."), script(false)) == Some(0)
 }
 
 /// GB-230: the same tree audited through an absolute and a relative spelling of its root (the
@@ -5799,6 +5960,65 @@ mod tests {
             ));
         }
         app_tree(files.iter().map(|(p, t)| (p.as_str(), t.clone())).collect())
+    }
+
+    fn registered_pure(got: Vec<Violation>) -> Vec<String> {
+        got.into_iter()
+            .filter(|v| v.message.starts_with("Pure test"))
+            .map(|v| v.snippet)
+            .collect()
+    }
+
+    /// GB-150: a `*_pure.py` outside the battery is accused; battery-listed or site-only is not;
+    /// the finding is a rollout warning and an unreadable battery is an inert warning.
+    #[test]
+    fn test_registered_reads_the_battery_for_pure_modules() {
+        let full = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+            &["alpha_pure", "beta_pure", "gamma_pure"],
+        );
+        let run = |tag: &str, doc: &str, script: &str, extra: &[&str]| {
+            audit_rule_with(
+                tag,
+                &parity_tree(doc, script, extra),
+                "FRAPPE-TEST-REGISTERED",
+                &parity_cfg(),
+            )
+        };
+        let doc_all = "## 2. Release rules\n\nThe pure ones (`alpha_pure`, `beta_pure`, `gamma_pure`, `stray_pure`) also run without a site.\n";
+        // Stray module, absent from battery: accused as a warning, by name.
+        let got = run("reg-stray", doc_all, &full, &["stray_pure"]);
+        assert_eq!(registered_pure(got.clone()), vec!["stray_pure"], "{got:?}");
+        assert!(
+            got.iter().all(|v| v.severity == Severity::Warning),
+            "{got:?}"
+        );
+        // Registered in the battery (the doc is not consulted for this rule): silent.
+        let with_stray = battery(
+            &["alpha_pure", "beta_pure", "gamma_pure", "stray_pure"],
+            &["alpha_pure", "beta_pure", "gamma_pure", "stray_pure"],
+        );
+        let got = run("reg-listed", doc_all, &with_stray, &["stray_pure"]);
+        assert!(registered_pure(got.clone()).is_empty(), "{got:?}");
+        // Declared site-only: silent; skipped: silent.
+        for word in ["site-only", "skipped"] {
+            let doc = format!("{doc_all}\n`stray_pure` is {word}; nothing else.\n");
+            let got = run("reg-declared", &doc, &full, &["stray_pure"]);
+            assert!(registered_pure(got.clone()).is_empty(), "{word}: {got:?}");
+        }
+        // No battery reachable: one inert warning that says why, never a silent pass.
+        let mut cfg = parity_cfg();
+        cfg.battery_file = Some("nowhere/release-checks.sh".into());
+        let files = parity_tree(doc_all, &full, &[])
+            .into_iter()
+            .filter(|(p, _)| p != "scripts/release-checks.sh")
+            .collect::<Vec<_>>();
+        let got = audit_rule_with("reg-nobattery", &files, "FRAPPE-TEST-REGISTERED", &cfg);
+        assert!(
+            got.iter().any(|v| v.severity == Severity::Warning
+                && v.message.contains("cannot be proven registered")),
+            "{got:?}"
+        );
     }
 
     /// The healthy pair is silent: the document and the battery describe one set.
