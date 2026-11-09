@@ -820,7 +820,10 @@ fn sh(dir: &Path, args: &[&str]) -> bool {
 fn build_repo(v: Variant) -> Option<(PathBuf, PathBuf)> {
     let base = std::env::temp_dir().join(format!("stenio-pre-{}-{}", std::process::id(), v as u8));
     let _ = fs::remove_dir_all(&base);
-    let (work, origin) = (base.join("work"), base.join("origin.git"));
+    // Nested two levels deep on purpose: the frappe battery/release discovery searches the ancestors of a
+    // fixture root to a bounded depth, and a shallow `work/scripts/release-checks.sh` in the shared temp
+    // dir leaked into unrelated parallel tests (FRAPPE-TEST-REGISTERED "no battery" case).
+    let (work, origin) = (base.join("iso/iso/work"), base.join("origin.git"));
     fs::create_dir_all(&work).ok()?;
     fs::create_dir_all(&origin).ok()?;
     let mut ok = sh(&origin, &["init", "-q", "--bare", "-b", "main"])

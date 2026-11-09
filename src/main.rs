@@ -21,6 +21,7 @@ mod entrypoints;
 mod explain;
 mod frappe;
 mod frappe_drift;
+mod frappe_whitelist;
 mod frontend;
 mod gaming;
 mod gov;
@@ -505,6 +506,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
         .chain(frappe_drift::self_test_cases())
+        .chain(frappe_whitelist::self_test_cases())
         .chain(release_order::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
