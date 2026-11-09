@@ -464,6 +464,8 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
     // 5c. compose parity, keys only: a key that exists on one side and not the other is a value
     //     the deploy silently drops (or a container that silently loses an attribute).
     out.push(check_compose_parity(t, &c, o));
+    // 5d. compose content: the keys can match while a healthcheck, command or image differs (GB-229).
+    out.push(check_compose_hash(t, &c, o));
 
     // 6. image tags
     if let Some(img) = &o.image {
@@ -1034,6 +1036,72 @@ fn check_compose_parity(t: &dyn Transport, c: &Ctx, o: &Opts) -> Check {
     )
 }
 
+/// First 12 hex chars of the SHA-256 of `bytes`.
+fn short_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    hex[..12].to_string()
+}
+
+/// `compose-hash`: the SHA-256 of the repository compose must equal the host's. BYTE-EXACT on
+/// purpose: no trimming, no line-ending or whitespace normalisation, because the deploy copies the
+/// file as it is (release.sh step 9 hashes the same bytes) and a file that differs only in a trailing
+/// newline is still not the file that was released. The host side is the content the engine already
+/// reads with the allowlisted `cat` (no new remote command). WARN, never silent, when a side cannot
+/// be read; `compose-parity` keeps comparing env keys independently (GB-096, GB-229).
+fn check_compose_hash(t: &dyn Transport, c: &Ctx, o: &Opts) -> Check {
+    let repo_file = match resolve_repo_compose(o) {
+        Ok(p) => p,
+        Err(e) => return check(Status::Warn, "compose-hash", e),
+    };
+    let repo = match std::fs::read(&repo_file) {
+        Ok(b) => b,
+        Err(e) => {
+            return check(
+                Status::Warn,
+                "compose-hash",
+                format!("{}: {e}: skipped", repo_file.display()),
+            );
+        }
+    };
+    let host = match t.run(&Cmd::ComposeFile(o.host_compose.clone()), c) {
+        Ok(r) if r.code == 0 && !r.stdout.is_empty() => r.stdout,
+        Ok(_) => {
+            return check(
+                Status::Warn,
+                "compose-hash",
+                format!("{} not readable on the host: skipped", o.host_compose),
+            );
+        }
+        Err(e) => {
+            return check(
+                Status::Warn,
+                "compose-hash",
+                format!("{} on the host: {e}", o.host_compose),
+            );
+        }
+    };
+    let (rh, hh) = (short_sha256(&repo), short_sha256(host.as_bytes()));
+    if rh == hh {
+        check(
+            Status::Pass,
+            "compose-hash",
+            format!("repo sha256 {rh} == host sha256 {hh} (byte-exact)"),
+        )
+    } else {
+        check(
+            Status::Fail,
+            "compose-hash",
+            format!(
+                "repo sha256 {rh} != host sha256 {hh}: the host compose is not the released file"
+            ),
+        )
+    }
+}
+
 fn parse_protected(raw: &[String]) -> Result<Vec<(String, String, String)>, String> {
     raw.iter()
         .map(|s| {
@@ -1290,7 +1358,10 @@ fn good_fake(o: &Opts) -> BTreeMap<Cmd, (i32, String)> {
     );
     m.insert(Cmd::RemoteNow, ok("4600"));
     m.insert(Cmd::SiteConfig, ok(SITE_PUBLIC));
-    m.insert(Cmd::ComposeFile("compose.yml".into()), ok(HOST_COMPOSE));
+    m.insert(
+        Cmd::ComposeFile("compose.yml".into()),
+        (0, HOST_COMPOSE.to_string()),
+    );
     let _ = o;
     m
 }
@@ -1347,6 +1418,7 @@ fn self_test_cases_inner() -> Vec<(String, bool)> {
         "backup-age",
         "host-name",
         "compose-parity",
+        "compose-hash",
     ];
     vec![
         ("verify-release good".to_string(), all_pass),
@@ -1471,7 +1543,39 @@ fn self_test_cases_inner() -> Vec<(String, bool)> {
                 }
             },
         ),
+        (
+            "verify-release compose-hash differs on one byte, names both hashes, warns when unreadable"
+                .to_string(),
+            compose_hash_scenarios(&o),
+        ),
     ]
+}
+
+/// Shared by the self-test and the unit tests: equal, one byte apart, host unreadable.
+fn compose_hash_scenarios(o: &Opts) -> bool {
+    let find = |m: BTreeMap<Cmd, (i32, String)>| {
+        run_checks(&Fake(m), o)
+            .into_iter()
+            .find(|c| c.name == "compose-hash")
+    };
+    let equal = find(good_fake(o));
+    let mut one = good_fake(o);
+    one.insert(
+        Cmd::ComposeFile("compose.yml".into()),
+        (0, format!("{HOST_COMPOSE}\n")),
+    );
+    let differ = find(one);
+    let mut gone = good_fake(o);
+    gone.insert(Cmd::ComposeFile("compose.yml".into()), (1, String::new()));
+    let unreadable = find(gone);
+    let (r, h) = (
+        short_sha256(REPO_COMPOSE.as_bytes()),
+        short_sha256(format!("{HOST_COMPOSE}\n").as_bytes()),
+    );
+    matches!(&equal, Some(c) if c.status == Status::Pass && c.detail.contains(&r))
+        && matches!(&differ, Some(c) if c.status == Status::Fail
+            && c.detail.contains(&r) && c.detail.contains(&h) && r != h)
+        && matches!(&unreadable, Some(c) if c.status == Status::Warn)
 }
 
 /// Simulated poll: read number `pass_at` (1-based) is the first healthy one, `None` never converges.
@@ -1544,6 +1648,16 @@ mod tests {
             (0, "backend unless-stopped\nmigrate no\n".to_string()),
         );
         assert_eq!(check_services_waiting(&Fake(m), &c, 0).status, Status::Pass);
+    }
+
+    #[test]
+    fn compose_hash_equal_differ_unreadable() {
+        assert!(compose_hash_scenarios(&fixture_opts()));
+    }
+
+    #[test]
+    fn compose_hash_is_byte_exact_on_line_endings() {
+        assert_ne!(short_sha256(b"a: 1\n"), short_sha256(b"a: 1\r\n"));
     }
 
     #[test]
