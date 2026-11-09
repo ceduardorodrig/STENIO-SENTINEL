@@ -1130,7 +1130,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "JSON Changed Without Newer modified",
         severity: "ERROR",
         tag: "frappe",
-        summary: "In stenio pre-release --prev: a DocType, Sidebar, Workspace, Number Card, Dashboard Chart or fixture JSON changed since the previous tag but its modified timestamp is not newer.",
+        summary: "In stenio pre-release --prev (and stenio preflight --prev <tag>, which also judges uncommitted working-tree edits before any tag exists): a DocType, Sidebar, Workspace, Number Card, Dashboard Chart or fixture JSON changed since the previous tag but its modified timestamp is not newer.",
         rationale: "Frappe imports a JSON on migrate only when its modified is newer than the stored one; an edit without a bump is silently ignored in production although it works on a fresh site. Fixtures a patch force-reloads can be listed in [frappe] modified_allowlist (path substrings).",
         bad_example: "git diff prev..HEAD: part.json changed, modified still 2026-01-01 00:00:00.000000",
         good_example: "modified bumped to 2026-02-02 00:00:00.000000 in the same commit",

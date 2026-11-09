@@ -52,7 +52,7 @@ struct PreArgs {
     tagged: bool,
     #[arg(
         long,
-        help = "Static only: scope checks and engine self-tests; no tag, git, Docker or site"
+        help = "Static only: scope checks and engine self-tests (plus FRAPPE-JSON-MODIFIED-BUMP against the working tree when --prev is given); no tag, Docker or site"
     )]
     static_only: bool,
     #[arg(
@@ -329,25 +329,22 @@ fn entry_key(v: &serde_json::Value) -> String {
 }
 
 /// `FRAPPE-JSON-MODIFIED-BUMP`: Frappe imports a JSON only when its `modified` is newer.
+/// `worktree` compares `prev` with the working tree (committed and uncommitted edits, the
+/// `preflight --prev` mode before any tag); otherwise `prev..HEAD`.
 pub fn modified_problems(
     repo: &Path,
     app: &str,
     prev: &str,
     allow: &[String],
+    worktree: bool,
 ) -> Result<Vec<String>, String> {
-    let names = git(
-        repo,
-        &[
-            "diff",
-            "--name-only",
-            "--diff-filter=M",
-            prev,
-            "HEAD",
-            "--",
-            &format!("{app}/"),
-        ],
-    )
-    .ok_or("git diff failed")?;
+    let pathspec = format!("{app}/");
+    let mut args = vec!["diff", "--name-only", "--diff-filter=M", prev];
+    if !worktree {
+        args.push("HEAD");
+    }
+    args.extend(["--", pathspec.as_str()]);
+    let names = git(repo, &args).ok_or("git diff failed")?;
     let kinds = [
         "/doctype/",
         "/sidebar/",
@@ -416,7 +413,7 @@ fn check_modified(o: &Opts, app: &str) -> Check {
         return mk(Status::Warn, "json-modified", "no --prev: skipped");
     };
     let allow = o.fc.modified_allowlist.clone().unwrap_or_default();
-    match modified_problems(&o.repo, app, prev, &allow) {
+    match modified_problems(&o.repo, app, prev, &allow, o.static_only) {
         Ok(p) if p.is_empty() => mk(
             Status::Pass,
             "json-modified",
@@ -637,6 +634,11 @@ fn static_checks(o: &Opts, engine_self_test: impl FnOnce() -> Check + Send) -> V
         } else {
             Vec::new()
         };
+        if o.prev.is_some()
+            && let Some(app) = app_of(o)
+        {
+            out.push(check_modified(o, &app));
+        }
         out.push(
             engine
                 .join()
@@ -678,6 +680,9 @@ fn remedy(name: &str) -> &'static str {
     match name {
         "scope-frappe" => {
             "run `stenio --scope frappe --path <repo>`: every violation carries its own suggestion"
+        }
+        "json-modified" => {
+            "bump `modified` (now, UTC) in each listed JSON, or list it in [frappe] modified_allowlist: `stenio --explain FRAPPE-JSON-MODIFIED-BUMP`"
         }
         "scope-fork" => "run `stenio --scope fork --path <repo>` and fix the listed violations",
         "custom-rules" => {
@@ -943,6 +948,10 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             preflight_static_case(),
         ),
         ("preflight remedy line".to_string(), preflight_remedy_case()),
+        (
+            "preflight --prev sees uncommitted unbumped JSON".to_string(),
+            preflight_prev_case(),
+        ),
     ]
 }
 
@@ -989,6 +998,37 @@ fn preflight_static_case() -> bool {
     .any(|c| c.name == "version" && c.status == Status::Fail);
     let _ = fs::remove_dir_all(&root);
     !leaked && names == ["self-test"] && judged
+}
+
+/// `preflight --prev`: FRAPPE-JSON-MODIFIED-BUMP judges committed and uncommitted edits; no tag needed.
+fn preflight_prev_case() -> bool {
+    let verdict = |v: Variant, edit: Option<&str>| -> Option<Status> {
+        let (base, work) = build_repo(v)?;
+        if let Some(m) = edit {
+            let part = work.join("demoapp/demo/doctype/part/part.json");
+            let t = fs::read_to_string(&part).ok()?;
+            let re = Regex::new(r#""modified":"[^"]*""#).ok()?;
+            fs::write(
+                &part,
+                re.replace(&t, format!("\"modified\":\"{m}\"")).to_string(),
+            )
+            .ok()?;
+        }
+        let o = Opts {
+            static_only: true,
+            tag: String::new(),
+            ..opts_for(&work)
+        };
+        let r = static_checks(&o, || mk(Status::Pass, "self-test", "stub"));
+        let _ = fs::remove_dir_all(&base);
+        r.iter()
+            .find(|c| c.name == "json-modified")
+            .map(|c| c.status)
+    };
+    verdict(Variant::Clean, None) == Some(Status::Pass)
+        && verdict(Variant::Clean, Some("2026-01-01 00:00:00.000000")) == Some(Status::Fail)
+        && verdict(Variant::StaleModified, None) == Some(Status::Fail)
+        && verdict(Variant::StaleModified, Some("2026-03-03 00:00:00.000000")) == Some(Status::Pass)
 }
 
 /// Every blocking check must leave one runnable remedy behind.
