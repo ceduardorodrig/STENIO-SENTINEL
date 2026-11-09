@@ -20,6 +20,7 @@ mod engine;
 mod entrypoints;
 mod explain;
 mod frappe;
+mod frappe_drift;
 mod frontend;
 mod gaming;
 mod gov;
@@ -502,6 +503,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(infra::compose_restart_cases())
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
+        .chain(frappe_drift::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(opportunity::self_test_cases())
@@ -1839,6 +1841,7 @@ fn main() -> Result<()> {
     match argv.get(1).map(String::as_str) {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
+        Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
         Some("release-engine") => std::process::exit(release_engine::run_cli(&argv[1..])),
         Some("opportunity") => {
