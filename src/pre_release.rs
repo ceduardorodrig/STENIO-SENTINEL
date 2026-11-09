@@ -756,6 +756,12 @@ pub fn run_cli(argv: &[String]) -> i32 {
             Status::Warn => "WARN",
         };
         println!("{l} {:<18} {}", r.name, r.detail);
+        // GB-230: the failing rule id on a line of its own, so a wrapper script can show it.
+        if r.status == Status::Fail {
+            if let Some((_, first)) = r.detail.split_once(", first ") {
+                println!("RULE {:<18} {first}", r.name);
+            }
+        }
         // `preflight` stops at the first blocking error and leaves one line saying what to run.
         if o.static_only && r.status == Status::Fail {
             println!("REMEDY {:<16} {}", r.name, remedy(r.name));

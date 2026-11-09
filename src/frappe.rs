@@ -3631,6 +3631,11 @@ fn read_battery(root: &Path, path: &Path) -> Option<Battery> {
 /// The app root and up to `n` ancestors, nearest first. The filesystem root is never included:
 /// it is not a repository neighbourhood, and walking it would be both slow and meaningless.
 fn ancestors(root: &Path, n: usize) -> Vec<PathBuf> {
+    // GB-230: `.` and `../x` have no usable `parent()` (`Path::new(".").parent()` is `""`, which
+    // has no file name), so a relative `--repo` never reached the sibling repository an absolute
+    // one did and the verdict depended on the spelling. Resolve to the real path first.
+    let real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = real.as_path();
     let mut out = vec![root.to_path_buf()];
     let mut cur = root;
     for _ in 0..n {
@@ -4755,7 +4760,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     for r in [&good, &bad].into_iter().flatten() {
         let _ = fs::remove_dir_all(r);
     }
-    RULES
+    let mut cases: Vec<(String, bool)> = RULES
         .iter()
         .map(|(id, _, _)| {
             let silent = g
@@ -4768,7 +4773,59 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 .unwrap_or(false);
             (id.to_string(), silent && fires)
         })
-        .collect()
+        .collect();
+    cases.push((
+        "FRAPPE-TEST-PARITY-SPELLING".to_string(),
+        parity_spelling_agrees(),
+    ));
+    cases
+}
+
+/// GB-230: the same tree audited through an absolute and a relative spelling of its root (the
+/// battery lives in a sibling repository) must give the same findings, and the sibling battery
+/// must really have been seen (an error, not the inert warning). The relative spelling is built
+/// from the current directory with `..` hops, so no process-wide `chdir` is needed.
+pub(crate) fn parity_spelling_agrees() -> bool {
+    let files: Vec<(String, String)> = vec![
+        (
+            "app-repo/AGENTS.md".into(),
+            "## 2. Tests\nThe pure ones (`alpha`, `beta`) also run without a site.\n".into(),
+        ),
+        ("app-repo/app/__init__.py".into(), "__version__ = \"0.1.0\"\n".into()),
+        ("app-repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+        ("app-repo/app/tests/alpha.py".into(), "def run():\n    pass\n".into()),
+        ("app-repo/app/tests/beta.py".into(), "def run():\n    pass\n".into()),
+        (
+            "infra/compose/frappe/scripts/release-checks.sh".into(),
+            "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
+        ),
+    ];
+    let Some(base) = write_fixture("parity-spelling/x", &files) else {
+        return false;
+    };
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let abs = base.join("app-repo");
+    let hops = std::env::current_dir()
+        .map(|d| d.components().count().saturating_sub(1))
+        .unwrap_or(0);
+    let mut rel = PathBuf::new();
+    for _ in 0..hops {
+        rel.push("..");
+    }
+    rel.push(abs.strip_prefix("/").unwrap_or(&abs));
+    let key = |r: Result<Vec<Violation>, String>| -> Vec<String> {
+        r.unwrap_or_default()
+            .into_iter()
+            .filter(|v| v.rule_id == "FRAPPE-TEST-PARITY")
+            .map(|v| format!("{:?}|{}|{}|{}", v.severity, v.file_path, v.line_number, v.message))
+            .collect()
+    };
+    let (a, r) = (key(audit(&abs, &cfg)), key(audit(&rel, &cfg)));
+    let _ = fs::remove_dir_all(&base);
+    !a.is_empty() && a.iter().any(|m| m.starts_with("Error")) && a == r
 }
 
 #[cfg(test)]
@@ -4782,6 +4839,12 @@ mod tests {
             "{:?}",
             self_test_cases()
         );
+    }
+
+    /// GB-230: absolute and relative spellings of the same repository root give one verdict.
+    #[test]
+    fn test_parity_verdict_is_independent_of_the_root_spelling() {
+        assert!(parity_spelling_agrees());
     }
 
     #[test]
