@@ -5678,11 +5678,18 @@ mod tests {
         rule: &str,
         cfg: &FrappeConfig,
     ) -> Vec<Violation> {
-        let Some(root) = write_fixture(tag, files) else {
+        // The tree lives in `ws/` under a private directory: the sibling-repository search climbs to the audit
+        // root's parent, and with the fixture directly under /tmp that parent held the fixtures of tests running
+        // in parallel (a stray release-checks.sh of another test made `reg-nobattery` find a battery, 7 runs in 8).
+        let nested: Vec<(String, String)> = files
+            .iter()
+            .map(|(p, t)| (format!("ws/{p}"), t.clone()))
+            .collect();
+        let Some(base) = write_fixture(tag, &nested) else {
             return Vec::new();
         };
-        let got = audit(&root, cfg).unwrap_or_default();
-        let _ = fs::remove_dir_all(&root);
+        let got = audit(&base.join("ws"), cfg).unwrap_or_default();
+        let _ = fs::remove_dir_all(&base);
         got.into_iter().filter(|v| v.rule_id == rule).collect()
     }
 
