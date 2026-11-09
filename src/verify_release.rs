@@ -49,6 +49,12 @@ struct VerifyArgs {
     timeout_secs: u64,
     #[arg(
         long,
+        default_value_t = DEFAULT_WAIT_SECS,
+        help = "Seconds the services check may poll while the stack converges after `compose up -d` (0 = one single read)"
+    )]
+    wait_secs: u64,
+    #[arg(
+        long,
         help = "Public entry point the site must advertise (default: MIRACENA_PUBLIC_URL in <project-dir>/.env)"
     )]
     public_url: Option<String>,
@@ -279,6 +285,8 @@ pub struct Opts {
     pub previous_tag: Option<String>,
     pub protected: Vec<(String, String, String)>,
     pub max_backup_age_hours: u64,
+    /// Deadline in seconds of the bounded poll of the services check (0 = single read).
+    pub wait_secs: u64,
     pub fc: FrappeConfig,
     pub site: String,
     pub dir: String,
@@ -429,7 +437,7 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
     }
 
     // 4. services
-    out.push(check_services(t, &c));
+    out.push(check_services_waiting(t, &c, o.wait_secs));
 
     // 5. ping
     match &o.fc.ping_url {
@@ -566,6 +574,47 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
     // 11. scheduled (timer-driven) dump age: the real health signal, independent of a manual backup
     out.push(check_scheduled_backup(t, &c, &o.fc));
     out
+}
+
+/// Default deadline of the services poll: a compose stack with a migrating backend converges in
+/// well under two minutes (rc82 incident, GB-045).
+pub const DEFAULT_WAIT_SECS: u64 = 120;
+/// Seconds between two reads of the container states while polling.
+pub const POLL_INTERVAL_SECS: u64 = 5;
+
+/// Bounded poll around a single read: re-reads until PASS or until `wait_secs` elapsed, and the
+/// verdict is the LAST read. `read`, `sleep` and `elapsed` are injected so tests never really wait.
+fn poll_services(
+    read: &mut dyn FnMut() -> Check,
+    sleep: &mut dyn FnMut(u64),
+    elapsed: &dyn Fn() -> u64,
+    wait_secs: u64,
+) -> Check {
+    let mut last = read();
+    while last.status != Status::Pass && elapsed() < wait_secs {
+        sleep(POLL_INTERVAL_SECS.min(wait_secs - elapsed()));
+        last = read();
+    }
+    let waited = elapsed();
+    if wait_secs == 0 {
+        return last;
+    }
+    if last.status == Status::Pass {
+        last.detail = format!("{} (waited {waited}s)", last.detail);
+    } else {
+        last.detail = format!("{} (not converged after {waited}s)", last.detail);
+    }
+    last
+}
+
+fn check_services_waiting(t: &dyn Transport, c: &Ctx, wait_secs: u64) -> Check {
+    let start = std::time::Instant::now();
+    poll_services(
+        &mut || check_services(t, c),
+        &mut |s| std::thread::park_timeout(Duration::from_secs(s)),
+        &|| start.elapsed().as_secs(),
+        wait_secs,
+    )
 }
 
 fn check_services(t: &dyn Transport, c: &Ctx) -> Check {
@@ -1080,6 +1129,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         previous_tag: a.previous_tag.clone(),
         protected,
         max_backup_age_hours: a.max_backup_age_hours,
+        wait_secs: a.wait_secs,
         site: fc.site.clone().unwrap_or_else(|| "frontend".into()),
         dir: a.project_dir.clone(),
         repo: a.repo.clone(),
@@ -1170,6 +1220,7 @@ fn fixture_opts() -> Opts {
             "2026-01-01 10:00:00.000000".into(),
         )],
         max_backup_age_hours: 30,
+        wait_secs: 0,
         site: "frontend".into(),
         dir: "/srv/acme".into(),
         repo: std::env::temp_dir().join(format!("stenio-vr-{}", std::process::id())),
@@ -1333,6 +1384,34 @@ fn self_test_cases_inner() -> Vec<(String, bool)> {
                     && st("backup-age-scheduled") == Some(Status::Fail)
             },
         ),
+        (
+            "verify-release services poll converges at read 3, FAIL names the service at the deadline"
+                .to_string(),
+            {
+                let (ok, reads) = poll_scenario(Some(3), 120);
+                let (bad, _) = poll_scenario(None, 20);
+                ok.status == Status::Pass
+                    && reads == 3
+                    && ok.detail.contains("waited 10s")
+                    && bad.status == Status::Fail
+                    && bad.detail.contains("backend")
+                    && bad.detail.contains("not converged after 20s")
+            },
+        ),
+        (
+            "verify-release services poll converges at read 3, FAIL names the service at the deadline"
+                .to_string(),
+            {
+                let (ok, reads) = poll_scenario(Some(3), 120);
+                let (bad, _) = poll_scenario(None, 20);
+                ok.status == Status::Pass
+                    && reads == 3
+                    && ok.detail.contains("waited 10s")
+                    && bad.status == Status::Fail
+                    && bad.detail.contains("backend")
+                    && bad.detail.contains("not converged after 20s")
+            },
+        ),
         ("verify-release host-name names both values".to_string(), {
             let mut tailnet = good_fake(&o);
             tailnet.insert(Cmd::SiteConfig, (0, SITE_TAILNET.into()));
@@ -1395,9 +1474,77 @@ fn self_test_cases_inner() -> Vec<(String, bool)> {
     ]
 }
 
+/// Simulated poll: read number `pass_at` (1-based) is the first healthy one, `None` never converges.
+/// The clock is virtual (sum of the injected sleeps), so nothing really waits. Returns the verdict
+/// and the number of reads.
+fn poll_scenario(pass_at: Option<usize>, wait_secs: u64) -> (Check, usize) {
+    let reads = std::cell::Cell::new(0usize);
+    let clock = std::cell::Cell::new(0u64);
+    let verdict = poll_services(
+        &mut || {
+            reads.set(reads.get() + 1);
+            if pass_at.is_some_and(|p| reads.get() >= p) {
+                check(Status::Pass, "services", "3 services healthy")
+            } else {
+                check(Status::Fail, "services", "backend: restarting/")
+            }
+        },
+        &mut |s| clock.set(clock.get() + s),
+        &|| clock.get(),
+        wait_secs,
+    );
+    (verdict, reads.get())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn services_poll_converges_at_read_three() {
+        let (v, reads) = poll_scenario(Some(3), 120);
+        assert_eq!((v.status, reads), (Status::Pass, 3));
+        assert!(v.detail.contains("waited 10s"), "{}", v.detail);
+    }
+
+    #[test]
+    fn services_poll_never_converges_fails_naming_services() {
+        let (v, reads) = poll_scenario(None, 20);
+        assert_eq!(v.status, Status::Fail);
+        assert_eq!(reads, 5);
+        assert!(v.detail.contains("backend: restarting/"), "{}", v.detail);
+        assert!(v.detail.contains("not converged after 20s"), "{}", v.detail);
+    }
+
+    #[test]
+    fn services_poll_already_healthy_reads_once() {
+        let (v, reads) = poll_scenario(Some(1), 120);
+        assert_eq!((v.status, reads), (Status::Pass, 1));
+        assert!(v.detail.contains("waited 0s"), "{}", v.detail);
+    }
+
+    #[test]
+    fn services_poll_zero_wait_is_a_single_read() {
+        let (v, reads) = poll_scenario(Some(3), 0);
+        assert_eq!((v.status, reads), (Status::Fail, 1));
+        assert!(!v.detail.contains("not converged"), "{}", v.detail);
+    }
+
+    #[test]
+    fn services_one_shot_exited_zero_still_counts_as_ok() {
+        let c = Ctx {
+            dir: "/d".into(),
+            site: "s".into(),
+        };
+        let ps = "{\"Service\":\"backend\",\"State\":\"running\",\"Health\":\"healthy\",\"ExitCode\":0}\n{\"Service\":\"migrate\",\"State\":\"exited\",\"Health\":\"\",\"ExitCode\":0}\n";
+        let mut m = BTreeMap::new();
+        m.insert(Cmd::ComposeServices, (0, ps.to_string()));
+        m.insert(
+            Cmd::RestartPolicies,
+            (0, "backend unless-stopped\nmigrate no\n".to_string()),
+        );
+        assert_eq!(check_services_waiting(&Fake(m), &c, 0).status, Status::Pass);
+    }
 
     #[test]
     fn offline_checks() {
