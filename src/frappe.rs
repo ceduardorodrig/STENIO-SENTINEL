@@ -5051,7 +5051,11 @@ pub(crate) fn parity_spelling_agrees() -> bool {
             "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
         ),
     ];
-    let Some(base) = write_fixture("parity-spelling/x", &files) else {
+    // One directory per call: the self-test case and its unit test run in one process, in parallel,
+    // and `write_fixture` keys the directory by tag and pid only.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Some(base) = write_fixture(&format!("parity-spelling-{n}"), &files) else {
         return false;
     };
     let cfg = FrappeConfig {
