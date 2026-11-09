@@ -145,6 +145,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-REHEARSAL-VERDICT",
+        "Rehearsal Verdict Not Derived From A Positive Signal",
+        Severity::Error,
+    ),
+    (
         "FRAPPE-CURRENCY-THRESHOLD-UNSET",
         "Currency Threshold Decided Without An Empty Branch",
         Severity::Error,
@@ -925,7 +930,11 @@ fn hook_strings(hooks: &str, name: &str) -> Vec<String> {
 fn desk_js_files(c: &Ctx) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for s in hook_strings(&read(&c.pkg.join("hooks.py")), "app_include_js") {
-        let url = s.split(['?', '#']).next().unwrap_or("").trim_start_matches('/');
+        let url = s
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('/');
         if !(url.ends_with(".js") || url.ends_with(".mjs")) {
             continue;
         }
@@ -4183,6 +4192,177 @@ fn rule_test_parity(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-REHEARSAL-VERDICT ───────────────────────────────────────────────
+// Why it exists (GB-055): the rehearsal's per-module verdict was "no `Traceback`/`FAIL` in the
+// output", so a QA module that printed a failure and exited 0 produced a green rehearsal (12 of
+// 18 modules did). A gate must pass on a POSITIVE signal, never on the absence of a negative one
+// (agent-global-rules.md §12). The contract the engine verifies by parsing the script:
+//   1. the modules are iterated from ONE array (`for t in "${TESTS[@]}"`);
+//   2. each iteration captures the module's exit status (`|| rc=$?`);
+//   3. ONE `if` line passes the module only when the status is zero AND the output's last line
+//      carries an explicit success marker (`=~ (OK|PASS)$`);
+//   4. a failure is counted and the script exits non-zero after the loop when the count is set;
+//   5. no total is typed: every `N of M` comes from `${#TESTS[@]}` (§12.3).
+
+/// The rehearsal script: `STENIO_FRAPPE_REHEARSAL`, `[frappe] rehearsal_file`, the two documented
+/// repo positions, then a bounded search from the app root and its parent.
+fn rehearsal_script(c: &Ctx) -> Option<PathBuf> {
+    let configured = std::env::var("STENIO_FRAPPE_REHEARSAL")
+        .ok()
+        .into_iter()
+        .chain(c.cfg.rehearsal_file.clone());
+    let mut candidates: Vec<PathBuf> = configured
+        .map(|f| {
+            let p = Path::new(&f);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                c.root.join(p)
+            }
+        })
+        .collect();
+    candidates.push(c.root.join("scripts/rehearse.sh"));
+    candidates.push(c.root.join("compose/frappe/scripts/rehearse.sh"));
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    let accept = |p: &Path| read(p).contains("for ");
+    ancestors(&c.root, 1)
+        .into_iter()
+        .find_map(|a| find_in(&a, "rehearse.sh", 4, &accept))
+}
+
+/// Problems with how a rehearsal script derives its per-module verdict, as `(line, message)`.
+fn rehearsal_problems(text: &str) -> Vec<(usize, String)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let code = |l: &str| !l.trim_start().starts_with('#');
+    let (Ok(for_re), Ok(status_re), Ok(count_re), Ok(marker_re), Ok(typed_re), Ok(exit_re)) = (
+        Regex::new(r#"^\s*for\s+\w+\s+in\s+"?\$\{(\w+)\[@\]\}"?\s*;\s*do\b"#),
+        Regex::new(r"\b(\w+)=\$\?"),
+        Regex::new(r"\b(\w+)=\$\(\(\s*(\w+)\s*\+\s*1\s*\)\)|\(\(\s*(\w+)\s*(?:\+\+|\+=\s*1)"),
+        Regex::new(r"(?:=~|\bgrep\b).*\b(?:OK|PASS|PASSED)\b"),
+        Regex::new(r"\b\d+\s+(?:of\s+\d+|modules?\b)|\bof\s+\d+\b"),
+        Regex::new(r#"\bexit\s+(?:[1-9]|"?\$)"#),
+    ) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(usize, String)> = Vec::new();
+    // 5. a typed total anywhere in a message.
+    for (i, l) in lines.iter().enumerate() {
+        let says = l.contains("echo") || l.contains("printf") || l.contains("note ");
+        if code(l) && says && typed_re.is_match(l) && !l.contains("${#") {
+            out.push((i + 1, format!("`{}` types a module count: derive it from `${{#ARRAY[@]}}`, the list the loop iterates (§12.3).", l.trim())));
+        }
+    }
+    let Some((start, array)) = lines.iter().enumerate().find_map(|(i, l)| {
+        for_re
+            .captures(l)
+            .and_then(|c| c.get(1))
+            .map(|m| (i, m.as_str().to_string()))
+    }) else {
+        out.push((1, "No loop over a module array (`for t in \"${TESTS[@]}\"; do`): the per-module verdict cannot be derived from the list that was iterated.".into()));
+        return out;
+    };
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let end = (start + 1..lines.len())
+        .find(|&j| lines[j].trim() == "done" && indent(lines[j]) == indent(lines[start]))
+        .unwrap_or(lines.len());
+    let body = &lines[start + 1..end];
+    let status = body
+        .iter()
+        .filter(|l| code(l))
+        .find_map(|l| status_re.captures(l).map(|c| c[1].to_string()));
+    let Some(status) = status else {
+        out.push((start + 1, "The loop never captures the module's exit status (`... || rc=$?`): a module that fails loudly and exits non-zero is invisible to the verdict.".into()));
+        return out;
+    };
+    let zero_re = Regex::new(&format!(r#"\$?\{{?{status}\}}?"?\s*(?:==|-eq)\s*0\b"#)).ok();
+    let gates: Vec<(usize, &str)> = body
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| {
+            let t = l.trim_start();
+            code(l) && (t.starts_with("if ") || t.starts_with("elif "))
+        })
+        .map(|(i, l)| (start + 2 + i, *l))
+        .collect();
+    let passes = |l: &str| zero_re.as_ref().is_some_and(|z| z.is_match(l)) && marker_re.is_match(l);
+    if !gates.iter().any(|(_, l)| passes(l)) {
+        let negative = body.iter().any(|l| {
+            code(l) && l.contains("grep") && (l.contains("Traceback") || l.contains("FAIL"))
+        });
+        let at = gates.first().map(|g| g.0).unwrap_or(start + 1);
+        let why = if negative {
+            "the verdict is the absence of failure text (`Traceback`/`FAIL`), so a module that prints a failure and exits 0 is green"
+        } else if gates
+            .iter()
+            .any(|(_, l)| zero_re.as_ref().is_some_and(|z| z.is_match(l)))
+        {
+            "the verdict reads the exit status only, so a module that prints a failure and exits 0 is green"
+        } else {
+            "no `if` line passes a module on a zero exit status AND an explicit success marker"
+        };
+        out.push((at, format!("Per-module verdict is not positive: {why}. Pass only on `((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]`.")));
+    }
+    let counter = body.iter().filter(|l| code(l)).find_map(|l| {
+        count_re
+            .captures(l)
+            .and_then(|c| c.get(2).or_else(|| c.get(3)))
+            .map(|m| m.as_str().to_string())
+    });
+    let tail = &lines[end.min(lines.len())..];
+    match counter {
+        None => out.push((start + 1, "A failing module is never counted (`FAILS=$((FAILS + 1))`): the script cannot end red.".into())),
+        Some(n) => {
+            let exits = tail.iter().enumerate().any(|(j, l)| {
+                code(l) && l.contains(n.as_str()) && {
+                    let w = tail[j..tail.len().min(j + 4)].join(" ");
+                    exit_re.is_match(&w)
+                }
+            });
+            if !exits {
+                out.push((end + 1, format!("The failure counter `{n}` never leads to a non-zero exit after the loop: the script can exit 0 with failed modules.")));
+            }
+        }
+    }
+    let total = format!("${{#{array}[@]}}");
+    if !tail.iter().any(|l| code(l) && l.contains(&total)) {
+        out.push((end + 1, format!("The final line never prints the total from `{total}`: the number of modules run is not derived from the iterated list (§12.3).")));
+    }
+    out
+}
+
+fn rule_rehearsal_verdict(c: &Ctx) -> Vec<Violation> {
+    const ID: &str = "FRAPPE-REHEARSAL-VERDICT";
+    let Some(path) = rehearsal_script(c) else {
+        return vec![viol_as(
+            ID,
+            Severity::Warning,
+            "rehearse.sh",
+            1,
+            "rehearse.sh",
+            "No rehearsal script was found: how its per-module verdict is derived is unverified for this tree (isolated repo or partial checkout).".to_string(),
+            "Declare `[frappe] rehearsal_file` (or STENIO_FRAPPE_REHEARSAL).",
+        )];
+    };
+    let label = rel(&c.root, &path);
+    let text = read(&path);
+    rehearsal_problems(&text)
+        .into_iter()
+        .map(|(line, msg)| {
+            let snip = text.lines().nth(line.saturating_sub(1)).unwrap_or("");
+            viol(
+                ID,
+                &label,
+                line,
+                snip.trim(),
+                msg,
+                "Capture the status, pass on `rc == 0` AND a success marker on the module's last line, count failures, exit non-zero, print `${#TESTS[@]}`.",
+            )
+        })
+        .collect()
+}
+
 // ── FRAPPE-CURRENCY-THRESHOLD-UNSET ────────────────────────────────────────
 // Why it exists (GB-123, GB-133): a Decision without an amount was approved with zero votes.
 // Frappe stores an unfilled Currency as 0.0, so `(amount or 0) >= STRATEGIC_AMOUNT` answers
@@ -4620,6 +4800,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_desk_web_only_api,
         rule_tests,
         rule_test_parity,
+        rule_rehearsal_verdict,
         rule_sidebar,
         rule_roles,
         rule_select_case,
@@ -4649,6 +4830,11 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 }
 
 // ── self-test fixtures ─────────────────────────────────────────────────────
+/// A rehearsal battery that passes on a positive signal: exit status AND the module's own marker.
+const REHEARSE_GOOD: &str = "TESTS=(alpha beta)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  rc=0\n  run \"$t\" >\"$log\" 2>&1 || rc=$?\n  verdict=$(awk 'NF{last=$0} END{print last}' \"$log\")\n  if ((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]; then\n    echo \"PASS $t\"\n  else\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  fi\ndone\nif ((FAILS)); then echo \"RESULT: FAIL ($FAILS of ${#TESTS[@]})\"; exit 1; fi\necho \"RESULT: PASS (${#TESTS[@]} of ${#TESTS[@]})\"\n";
+/// The defect: a module is green unless its output says `Traceback`/`FAIL`, and the total is typed.
+const REHEARSE_BAD: &str = "TESTS=(alpha beta)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  run \"$t\" >\"$log\" 2>&1 || true\n  if grep -qE 'Traceback|FAIL' \"$log\"; then\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  else\n    echo \"PASS $t\"\n  fi\ndone\necho \"2 module(s) green\"\n";
+
 const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"kind","fieldtype":"Select","options":"KINDS"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}EXTRA],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
 const TEAM_MEMBER_GOOD: &str = r#"{"doctype":"DocType","name":"Team Member","istable":1,"fields":[{"fieldname":"member","fieldtype":"Link","options":"Part"},{"fieldname":"role","fieldtype":"Data","fetch_from":"member.role","fetch_if_empty":1}],"permissions":[]}"#;
@@ -4729,7 +4915,8 @@ const PRICING_BAD: &str = "from frappe.utils import flt\n\nLIMIT = 250000\n\n\nd
 /// read at import of `execute()` and written into a Single's long-text field, with the hash guard
 /// the real fix carries.
 /// JS-DESK-WEB-ONLY-API: the rc124 call, and its rc125 replacement plus the guarded form.
-const DESK_JS_BAD: &str = "(function () {\n\tfrappe.ready(function () {\n\t\tinit();\n\t});\n})();\n";
+const DESK_JS_BAD: &str =
+    "(function () {\n\tfrappe.ready(function () {\n\t\tinit();\n\t});\n})();\n";
 const DESK_JS_GOOD: &str = "// frappe.ready is web-only (website.js)\n(function () {\n\t$(document).on(\"startup\", init);\n\tif (window.frappe && frappe.ready) frappe.ready(init);\n})();\n";
 const PUBLISHER_PY: &str = "import hashlib\nfrom pathlib import Path\n\nDOCS = Path(__file__).resolve().parents[1] / \"docs\"\n\n\ndef same_content(stored, desired):\n\treturn hashlib.sha256(stored.encode()).hexdigest() == hashlib.sha256(desired.encode()).hexdigest()\n\n\ndef execute():\n\timport frappe\n\n\tbody = (DOCS / \"manual.html\").read_text(encoding=\"utf-8\")\n\tstored = frappe.db.get_single_value(\"Handbook\", \"content\")\n\tif same_content(stored or \"\", body):\n\t\treturn\n\tif frappe.db.exists(\"Handbook\", \"Handbook\"):\n\t\tfrappe.db.set_single_value(\"Handbook\", \"content\", body)\n\telse:\n\t\tfrappe.get_doc({\"doctype\": \"Handbook\", \"title\": \"Manual\", \"content\": body}).insert(ignore_permissions=True)\n";
 
@@ -4918,6 +5105,11 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
                 "#!/usr/bin/env bash\n# release gates that need no site\nnames=(alpha)\ncmds=(\n  \"python3 -I demoapp/tests/alpha.py\"\n)\n"
             },
         ),
+        // FRAPPE-REHEARSAL-VERDICT: the bad tree passes a module when its output has no failure text.
+        f(
+            "scripts/rehearse.sh",
+            if bad { REHEARSE_BAD } else { REHEARSE_GOOD },
+        ),
         f(
             "demoapp/pricing.py",
             if bad { PRICING_BAD } else { PRICING_GOOD },
@@ -5042,10 +5234,22 @@ pub(crate) fn parity_spelling_agrees() -> bool {
             "app-repo/AGENTS.md".into(),
             "## 2. Tests\nThe pure ones (`alpha`, `beta`) also run without a site.\n".into(),
         ),
-        ("app-repo/app/__init__.py".into(), "__version__ = \"0.1.0\"\n".into()),
-        ("app-repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
-        ("app-repo/app/tests/alpha.py".into(), "def run():\n    pass\n".into()),
-        ("app-repo/app/tests/beta.py".into(), "def run():\n    pass\n".into()),
+        (
+            "app-repo/app/__init__.py".into(),
+            "__version__ = \"0.1.0\"\n".into(),
+        ),
+        (
+            "app-repo/app/hooks.py".into(),
+            "app_name = \"app\"\n".into(),
+        ),
+        (
+            "app-repo/app/tests/alpha.py".into(),
+            "def run():\n    pass\n".into(),
+        ),
+        (
+            "app-repo/app/tests/beta.py".into(),
+            "def run():\n    pass\n".into(),
+        ),
         (
             "infra/compose/frappe/scripts/release-checks.sh".into(),
             "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
@@ -5075,7 +5279,12 @@ pub(crate) fn parity_spelling_agrees() -> bool {
         r.unwrap_or_default()
             .into_iter()
             .filter(|v| v.rule_id == "FRAPPE-TEST-PARITY")
-            .map(|v| format!("{:?}|{}|{}|{}", v.severity, v.file_path, v.line_number, v.message))
+            .map(|v| {
+                format!(
+                    "{:?}|{}|{}|{}",
+                    v.severity, v.file_path, v.line_number, v.message
+                )
+            })
             .collect()
     };
     let (a, r) = (key(audit(&abs, &cfg)), key(audit(&rel, &cfg)));
@@ -5648,6 +5857,135 @@ mod tests {
         );
     }
 
+    // ── FRAPPE-REHEARSAL-VERDICT ───────────────────────────────────────────
+    // Every test mutates ONE thing of the healthy `REHEARSE_GOOD` and expects the matching finding.
+
+    fn reh(script: &str) -> Vec<(usize, String)> {
+        rehearsal_problems(script)
+    }
+
+    #[test]
+    fn rehearsal_verdict_is_silent_on_the_positive_contract() {
+        assert!(reh(REHEARSE_GOOD).is_empty(), "{:?}", reh(REHEARSE_GOOD));
+    }
+
+    /// The GB-055 defect: no failure text means green; the status is swallowed and the total typed.
+    #[test]
+    fn rehearsal_verdict_refuses_the_absence_of_failure_text() {
+        let got = reh(REHEARSE_BAD);
+        assert!(
+            got.iter().any(|p| p.1.contains("never captures")),
+            "{got:?}"
+        );
+        assert!(
+            got.iter().any(|p| p.1.contains("types a module count")),
+            "{got:?}"
+        );
+        let swallowed = REHEARSE_GOOD.replace("|| rc=$?", "|| true");
+        assert!(
+            reh(&swallowed)
+                .iter()
+                .any(|p| p.1.contains("never captures"))
+        );
+    }
+
+    #[test]
+    fn rehearsal_verdict_refuses_a_status_only_or_marker_only_gate() {
+        let status_only =
+            REHEARSE_GOOD.replace(" && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]", "");
+        let got = reh(&status_only);
+        assert!(
+            got.iter().any(|p| p.1.contains("exit status only")),
+            "{got:?}"
+        );
+        let marker_only = REHEARSE_GOOD.replace("((rc == 0)) && ", "");
+        let got = reh(&marker_only);
+        assert!(got.iter().any(|p| p.1.contains("not positive")), "{got:?}");
+        let negative = REHEARSE_GOOD.replace(
+            "if ((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]; then",
+            "if ! grep -qE 'Traceback|FAIL' \"$log\" && ((rc == 0)); then",
+        );
+        let got = reh(&negative);
+        assert!(
+            got.iter().any(|p| p.1.contains("absence of failure text")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn rehearsal_verdict_refuses_an_uncounted_failure_and_a_zero_exit() {
+        let uncounted = REHEARSE_GOOD.replace("FAILS=$((FAILS + 1))", "true");
+        assert!(
+            reh(&uncounted)
+                .iter()
+                .any(|p| p.1.contains("never counted"))
+        );
+        let zero = REHEARSE_GOOD.replace("; exit 1; fi", "; fi");
+        assert!(
+            reh(&zero)
+                .iter()
+                .any(|p| p.1.contains("exit 0 with failed")),
+            "{:?}",
+            reh(&zero)
+        );
+    }
+
+    #[test]
+    fn rehearsal_verdict_refuses_a_total_not_derived_from_the_list() {
+        let typed = REHEARSE_GOOD.replace("${#TESTS[@]}", "2");
+        let got = reh(&typed);
+        assert!(
+            got.iter().any(|p| p.1.contains("types a module count")),
+            "{got:?}"
+        );
+        assert!(
+            got.iter().any(|p| p.1.contains("never prints the total")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn rehearsal_verdict_resolves_the_script_and_is_inert_without_one() {
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            rehearsal_file: Some("ops/rehearse.sh".into()),
+            ..FrappeConfig::default()
+        };
+        let tree = |s: &str| app_tree(vec![("ops/rehearse.sh", s.to_string())]);
+        let good = audit_rule_with(
+            "reh-good",
+            &tree(REHEARSE_GOOD),
+            "FRAPPE-REHEARSAL-VERDICT",
+            &cfg,
+        );
+        assert!(good.is_empty(), "{good:?}");
+        let bad = audit_rule_with(
+            "reh-bad",
+            &tree(REHEARSE_BAD),
+            "FRAPPE-REHEARSAL-VERDICT",
+            &cfg,
+        );
+        assert!(
+            bad.iter()
+                .all(|v| v.severity == Severity::Error && v.file_path == "ops/rehearse.sh"),
+            "{bad:?}"
+        );
+        assert!(!bad.is_empty());
+        let none = audit_rule_with(
+            "reh/inert",
+            &app_tree(vec![]),
+            "FRAPPE-REHEARSAL-VERDICT",
+            &FrappeConfig {
+                app: Some("app".into()),
+                ..FrappeConfig::default()
+            },
+        );
+        assert!(
+            none.iter().all(|v| v.severity == Severity::Warning) && !none.is_empty(),
+            "{none:?}"
+        );
+    }
+
     // ── FRAPPE-CURRENCY-THRESHOLD-UNSET ────────────────────────────────────
     // `Thing.price` is the only Currency of the tree; `code` is Data and `value` is a local
     // parameter, so the rule has to resolve the name against the DocType JSON to stay quiet.
@@ -6204,17 +6542,21 @@ mod tests {
     /// An app whose hooks load `desk.js` in the Desk and `login.js` on the website only.
     fn desk_app(hooks_js: &str, desk: &str, login: &str) -> Vec<(String, String)> {
         vec![
-            ("app/__init__.py".to_string(), "__version__ = \"0.1.0\"\n".to_string()),
+            (
+                "app/__init__.py".to_string(),
+                "__version__ = \"0.1.0\"\n".to_string(),
+            ),
             (
                 "app/hooks.py".to_string(),
-                format!("app_name = \"app\"\n_v = 1\n{hooks_js}web_include_js = \"/assets/app/js/login.js\"\n"),
+                format!(
+                    "app_name = \"app\"\n_v = 1\n{hooks_js}web_include_js = \"/assets/app/js/login.js\"\n"
+                ),
             ),
             ("app/public/js/desk.js".to_string(), desk.to_string()),
             ("app/public/js/login.js".to_string(), login.to_string()),
         ]
     }
-    const HOOKS_DESK: &str =
-        "app_include_js = [\n\tf\"/assets/app/js/desk.js?v={_v}\",\n]\n";
+    const HOOKS_DESK: &str = "app_include_js = [\n\tf\"/assets/app/js/desk.js?v={_v}\",\n]\n";
     const RC124: &str = "frappe.ready(function () {\n\twrap();\n});\n";
 
     /// (a) The rc124 incident: an unguarded `frappe.ready(` in a file `app_include_js` loads.
@@ -6225,8 +6567,15 @@ mod tests {
         assert_eq!(got[0].file_path, "app/public/js/desk.js");
         assert_eq!(got[0].line_number, 1);
         assert_eq!(got[0].severity, Severity::Error);
-        assert!(got[0].message.contains("`frappe.ready`"), "{}", got[0].message);
-        for api in ["frappe.ready_events.push(f);", "frappe.web_form.on(\"x\", f);"] {
+        assert!(
+            got[0].message.contains("`frappe.ready`"),
+            "{}",
+            got[0].message
+        );
+        for api in [
+            "frappe.ready_events.push(f);",
+            "frappe.web_form.on(\"x\", f);",
+        ] {
             let got = audit_rule("jsdesk-a2", &desk_app(HOOKS_DESK, api, ""), RULE_JS);
             assert_eq!(got.len(), 1, "{api}: {got:?}");
         }
@@ -6237,16 +6586,35 @@ mod tests {
     #[test]
     fn desk_web_only_api_is_silent_when_guarded_or_in_a_comment() {
         for (tag, src) in [
-            ("g1", "if (window.frappe && frappe.ready) frappe.ready(wrap);\n"),
-            ("g2", "if (typeof frappe.ready === \"function\") {\n\tfrappe.ready(wrap);\n}\n"),
-            ("g3", "// frappe.ready(wrap) is web-only\n/* frappe.web_form.on(x) */\n$(document).on(\"startup\", wrap);\n"),
-            ("g4", "if (!frappe.web_form) return;\nfrappe.web_form.on(\"x\", f);\n"),
+            (
+                "g1",
+                "if (window.frappe && frappe.ready) frappe.ready(wrap);\n",
+            ),
+            (
+                "g2",
+                "if (typeof frappe.ready === \"function\") {\n\tfrappe.ready(wrap);\n}\n",
+            ),
+            (
+                "g3",
+                "// frappe.ready(wrap) is web-only\n/* frappe.web_form.on(x) */\n$(document).on(\"startup\", wrap);\n",
+            ),
+            (
+                "g4",
+                "if (!frappe.web_form) return;\nfrappe.web_form.on(\"x\", f);\n",
+            ),
         ] {
             let got = audit_rule(tag, &desk_app(HOOKS_DESK, src, ""), RULE_JS);
             assert!(got.is_empty(), "{tag}: {got:?}");
         }
         let one = "app_include_js = \"/assets/app/js/desk.js\"\n";
-        assert!(audit_rule("jsdesk-b-str", &desk_app(one, "if (frappe.ready) frappe.ready(f);\n", ""), RULE_JS).is_empty());
+        assert!(
+            audit_rule(
+                "jsdesk-b-str",
+                &desk_app(one, "if (frappe.ready) frappe.ready(f);\n", ""),
+                RULE_JS
+            )
+            .is_empty()
+        );
     }
 
     /// (c) Only files `app_include_js` loads are in scope: the same unguarded call in a
@@ -6254,7 +6622,11 @@ mod tests {
     /// commented `app_include_js` registers nothing.
     #[test]
     fn desk_web_only_api_ignores_files_the_desk_does_not_load() {
-        let got = audit_rule("jsdesk-c", &desk_app(HOOKS_DESK, "init();\n", RC124), RULE_JS);
+        let got = audit_rule(
+            "jsdesk-c",
+            &desk_app(HOOKS_DESK, "init();\n", RC124),
+            RULE_JS,
+        );
         assert!(got.is_empty(), "{got:?}");
         let commented = "# app_include_js = [\"/assets/app/js/desk.js\"]\n";
         let got = audit_rule("jsdesk-c2", &desk_app(commented, RC124, ""), RULE_JS);
@@ -6264,9 +6636,18 @@ mod tests {
     #[test]
     fn web_only_api_uses_reads_lines_and_guard_distance() {
         let far = "if (frappe.ready) {}\n\n\n\n\n\n\nfrappe.ready(f);\n";
-        assert_eq!(web_only_api_uses(far).len(), 1, "a guard 7 lines up is not a guard");
+        assert_eq!(
+            web_only_api_uses(far).len(),
+            1,
+            "a guard 7 lines up is not a guard"
+        );
         assert_eq!(web_only_api_uses(far)[0].0, 8);
         assert!(web_only_api_uses("frappe.ready = function () {};\n").is_empty());
-        assert!(blank_js_comments("a // b\nc /* d\ne */ f\n").lines().count() == 3);
+        assert!(
+            blank_js_comments("a // b\nc /* d\ne */ f\n")
+                .lines()
+                .count()
+                == 3
+        );
     }
 }

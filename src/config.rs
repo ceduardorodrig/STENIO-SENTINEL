@@ -105,6 +105,10 @@ pub struct FrappeConfig {
     /// relative to the app root). Absent, the engine looks for `scripts/release-checks.sh` next
     /// to the app and then for the nearest one above it; env `STENIO_FRAPPE_BATTERY` wins.
     pub battery_file: Option<String>,
+    /// Rehearsal script whose per-module verdict `FRAPPE-REHEARSAL-VERDICT` reads (absolute, or
+    /// relative to the app root). Absent, the engine looks for `scripts/rehearse.sh` and then for
+    /// the nearest one above the app; env `STENIO_FRAPPE_REHEARSAL` wins.
+    pub rehearsal_file: Option<String>,
     /// File listing DocTypes that need no sidebar entry (`Name | reason` per line).
     pub sidebar_allowlist: Option<String>,
     /// Roles that exist without a fixture (added to the built-in Frappe core list).
