@@ -137,6 +137,19 @@ pub struct FrappeConfig {
     pub label_allowlist: Option<Vec<String>>,
     /// JSON files (path substrings) a patch force-reloads, exempt from the `modified` bump rule.
     pub modified_allowlist: Option<Vec<String>>,
+    /// `FRAPPE-FETCH-PARITY` (GB-241): child DocTypes whose `field` must declare `fetch_from`.
+    pub fetch_parity: Option<Vec<FetchParity>>,
+}
+
+/// One `[[frappe.fetch_parity]]` entry: every child DocType whose snake_case name matches
+/// `doctype_pattern` (`*` wildcard, e.g. `*_member`) must declare `field` with
+/// `fetch_from = fetch_from` and, unless `fetch_if_empty = false`, `fetch_if_empty: 1`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct FetchParity {
+    pub doctype_pattern: String,
+    pub field: String,
+    pub fetch_from: String,
+    pub fetch_if_empty: Option<bool>,
 }
 
 /// One managed file: `repo` is the source of truth, `path` its place on `host`.
