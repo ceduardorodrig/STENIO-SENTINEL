@@ -160,6 +160,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-REHEARSAL-PARITY",
+        "Rehearsal Module List Out Of Step With The Declared Tests",
+        REHEARSAL_PARITY_SEVERITY,
+    ),
+    (
         "FRAPPE-CURRENCY-THRESHOLD-UNSET",
         "Currency Threshold Decided Without An Empty Branch",
         Severity::Error,
@@ -4470,6 +4475,171 @@ fn rule_rehearsal_verdict(c: &Ctx) -> Vec<Violation> {
         .collect()
 }
 
+// ── FRAPPE-REHEARSAL-PARITY ────────────────────────────────────────────────
+// Why it exists (GB-137, GB-218): the Miracena tests are described by THREE lists: the declaration
+// (AGENTS.md section 2: the pure ones, plus a `site-only` line), the offline battery
+// (`release-checks.sh`) and the rehearsal list (`TESTS=(...)` of `rehearse.sh`, run on a real site).
+// FRAPPE-TEST-PARITY compares the first two only, so a module declared site-only could be dropped
+// from the rehearsal and run NOWHERE, a typo in the rehearsal list ran nothing, and a module could
+// run only in the rehearsal with no document naming it (agent-global-rules.md 12.4).
+
+/// Severity of the findings: ERROR, because the real Miracena trees are clean (measured 2026-11-09:
+/// 0 findings on clones of miracena and miracena-infra), so there is no rollout debt to carry.
+const REHEARSAL_PARITY_SEVERITY: Severity = Severity::Error;
+
+/// The words of the rehearsal's module array with the line each is written on. The array is the
+/// one the verdict loop iterates (`for t in "${NAME[@]}"`), `TESTS` when no loop names one. Only
+/// plain identifiers count: `$VAR` and flags are not modules.
+fn rehearsal_modules(text: &str) -> Option<Vec<(String, usize)>> {
+    let array = Regex::new(r#"(?m)^\s*for\s+\w+\s+in\s+"?\$\{(\w+)\[@\]\}"?\s*;\s*do\b"#)
+        .ok()
+        .and_then(|re| re.captures(text).map(|c| c[1].to_string()))
+        .unwrap_or_else(|| "TESTS".to_string());
+    let (words, first) = shell_words(text, &array)?;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cursor = first.saturating_sub(1);
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for w in words
+        .into_iter()
+        .filter(|w| !w.is_empty() && w.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+    {
+        // each word sits on or after the line of the previous one
+        let at = (cursor..lines.len())
+            .find(|&i| {
+                lines[i]
+                    .split('#')
+                    .next()
+                    .unwrap_or("")
+                    .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                    .any(|t| t == w)
+            })
+            .unwrap_or(cursor);
+        cursor = at;
+        out.push((w, at + 1));
+    }
+    Some(out)
+}
+
+fn rule_rehearsal_parity(c: &Ctx) -> Vec<Violation> {
+    const ID: &str = "FRAPPE-REHEARSAL-PARITY";
+    let Some(script) = rehearsal_script(c) else {
+        return vec![viol_as(
+            ID,
+            Severity::Warning,
+            "rehearse.sh",
+            1,
+            "rehearse.sh",
+            "No rehearsal script was found: the parity of its module list with the declaration and the battery is unverified for this tree (isolated repo or partial checkout).".to_string(),
+            "Declare `[frappe] rehearsal_file` (or STENIO_FRAPPE_REHEARSAL).",
+        )];
+    };
+    let label = rel(&c.root, &script);
+    let Some(modules) = rehearsal_modules(&read(&script)) else {
+        return vec![viol(
+            ID,
+            &label,
+            1,
+            "TESTS=(",
+            format!(
+                "`{label}` has no module array (`TESTS=(a b c)`): the modules it runs on a site cannot be compared with the declaration."
+            ),
+            "Keep the modules in one bash array that the verdict loop iterates.",
+        )];
+    };
+    let tests = c.pkg.join("tests");
+    let mut out: Vec<Violation> = Vec::new();
+    // (b) every rehearsal module is a test file of the app: a typo silently runs nothing.
+    for (m, line) in &modules {
+        if !tests.join(format!("{m}.py")).is_file() {
+            out.push(viol_as(
+                ID,
+                REHEARSAL_PARITY_SEVERITY,
+                &label,
+                *line,
+                m,
+                format!("The rehearsal list of `{label}`:{line} names `{m}` but `tests/{m}.py` is not in the app: the module runs nothing on the site (a typo or a deleted test)."),
+                &format!("Fix the name or remove `{m}` from the list of `{label}`."),
+            ));
+        }
+    }
+    // The declaration is optional input: without it (a)/(c) cannot be decided and say so once.
+    let anchor = c
+        .cfg
+        .test_list_anchor
+        .clone()
+        .unwrap_or_else(|| "## 2.".to_string());
+    let doc = parity_doc(c);
+    let doc_text = doc.as_ref().map(|d| read(d)).unwrap_or_default();
+    let Some(sec) = section(&doc_text, &anchor) else {
+        out.push(viol_as(
+            ID,
+            Severity::Warning,
+            "AGENTS.md",
+            1,
+            &anchor,
+            format!("No test-list section `{anchor}` was found: the rehearsal list of `{label}` cannot be compared with the declaration (isolated repo or partial checkout)."),
+            "Declare `[frappe] test_list_file`/`test_list_anchor` (or STENIO_FRAPPE_TEST_LIST).",
+        ));
+        return out;
+    };
+    let doc_rel = doc.as_ref().map(|d| rel(&c.root, d)).unwrap_or_default();
+    let in_rehearsal: BTreeSet<&str> = modules.iter().map(|(m, _)| m.as_str()).collect();
+    // (a) a module declared site-only runs only in the rehearsal: dropping it there leaves it nowhere.
+    let site_only = site_only_declaration(&sec);
+    for m in &site_only {
+        if !in_rehearsal.contains(m.as_str()) {
+            let line = doc_text
+                .lines()
+                .position(|l| {
+                    let low = l.to_lowercase();
+                    l.contains(&format!("`{m}`"))
+                        && (low.contains("site-only") || low.contains("skipped"))
+                })
+                .map(|i| i + 1)
+                .unwrap_or_else(|| line_of(&doc_text, m));
+            out.push(viol_as(
+                ID,
+                REHEARSAL_PARITY_SEVERITY,
+                &doc_rel,
+                line,
+                m,
+                format!("`{m}` is declared site-only/skipped in `{doc_rel}`:{line} (section `{anchor}`) but the rehearsal list of `{label}` does not run it: the module runs nowhere."),
+                &format!("Add `{m}` to the module array of `{label}`, or stop declaring it site-only."),
+            ));
+        }
+    }
+    // (c) a rehearsal module that no list describes: neither the battery, the pure declaration,
+    // the site-only line nor any mention of the module in the section.
+    let ran: BTreeSet<String> = match parity_battery(c).and_then(|p| read_battery(&c.root, &p)) {
+        Some(b) => {
+            let re = Regex::new(r"tests/([A-Za-z0-9_]+)\.py").ok();
+            b.cmds
+                .iter()
+                .filter_map(|cmd| re.as_ref()?.captures(&cmd.text))
+                .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+                .collect()
+        }
+        None => return out, // no battery to compare with: (c) is undecidable, never guessed
+    };
+    for (m, line) in &modules {
+        let named = Regex::new(&format!(r"\b{}\b", regex::escape(m)))
+            .map(|r| r.is_match(&sec))
+            .unwrap_or(false);
+        if !named && !ran.contains(m) && !site_only.contains(m) {
+            out.push(viol_as(
+                ID,
+                REHEARSAL_PARITY_SEVERITY,
+                &label,
+                *line,
+                m,
+                format!("`{m}` runs only in the rehearsal (`{label}`:{line}): it is not in the release battery and `{doc_rel}` (section `{anchor}`) never names it, so no document says where it runs."),
+                &format!("Name `{m}` in section `{anchor}` of `{doc_rel}` (in the QA battery list or the site-only line), or add it to the release battery."),
+            ));
+        }
+    }
+    out
+}
+
 // ── FRAPPE-RELEASE-ORDER / FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL ─────────────
 // GB-165/GB-214/GB-196: the order of the calls in the release orchestrator decides whether a
 // release number is spent on an offline check. The parsing lives in `release_order.rs`.
@@ -4986,6 +5156,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_tests,
         rule_test_parity,
         rule_rehearsal_verdict,
+        rule_rehearsal_parity,
         rule_release_order,
         rule_sidebar,
         rule_roles,
@@ -5017,9 +5188,9 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 
 // ── self-test fixtures ─────────────────────────────────────────────────────
 /// A rehearsal battery that passes on a positive signal: exit status AND the module's own marker.
-const REHEARSE_GOOD: &str = "TESTS=(alpha beta)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  rc=0\n  run \"$t\" >\"$log\" 2>&1 || rc=$?\n  verdict=$(awk 'NF{last=$0} END{print last}' \"$log\")\n  if ((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]; then\n    echo \"PASS $t\"\n  else\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  fi\ndone\nif ((FAILS)); then echo \"RESULT: FAIL ($FAILS of ${#TESTS[@]})\"; exit 1; fi\necho \"RESULT: PASS (${#TESTS[@]} of ${#TESTS[@]})\"\n";
+const REHEARSE_GOOD: &str = "TESTS=(alpha)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  rc=0\n  run \"$t\" >\"$log\" 2>&1 || rc=$?\n  verdict=$(awk 'NF{last=$0} END{print last}' \"$log\")\n  if ((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]; then\n    echo \"PASS $t\"\n  else\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  fi\ndone\nif ((FAILS)); then echo \"RESULT: FAIL ($FAILS of ${#TESTS[@]})\"; exit 1; fi\necho \"RESULT: PASS (${#TESTS[@]} of ${#TESTS[@]})\"\n";
 /// The defect: a module is green unless its output says `Traceback`/`FAIL`, and the total is typed.
-const REHEARSE_BAD: &str = "TESTS=(alpha beta)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  run \"$t\" >\"$log\" 2>&1 || true\n  if grep -qE 'Traceback|FAIL' \"$log\"; then\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  else\n    echo \"PASS $t\"\n  fi\ndone\necho \"2 module(s) green\"\n";
+const REHEARSE_BAD: &str = "TESTS=(alpha beta ghost)\nFAILS=0\nfor t in \"${TESTS[@]}\"; do\n  run \"$t\" >\"$log\" 2>&1 || true\n  if grep -qE 'Traceback|FAIL' \"$log\"; then\n    echo \"FAIL $t\"; FAILS=$((FAILS + 1))\n  else\n    echo \"PASS $t\"\n  fi\ndone\necho \"2 module(s) green\"\n";
 
 const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"kind","fieldtype":"Select","options":"KINDS"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}EXTRA],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
@@ -6308,6 +6479,112 @@ mod tests {
         assert!(
             none.iter().all(|v| v.severity == Severity::Warning) && !none.is_empty(),
             "{none:?}"
+        );
+    }
+
+    // ── FRAPPE-REHEARSAL-PARITY ────────────────────────────────────────────
+    // Three lists, one set: the declaration, the battery and the rehearsal array. Each test
+    // breaks ONE side of a healthy trio.
+
+    const RP_DOC: &str = "## 2. Release rules\n\nQA battery: `alpha_pure`, `site_mod`, `solo`.\nThe pure ones (`alpha_pure`) also run without a site.\nSite-only (declared): `site_mod` imports frappe; it runs only in the rehearsal.\n## 3. Other\n";
+
+    fn rp_run(tag: &str, doc: &str, rehearsal: &str, battery_body: &str) -> Vec<Violation> {
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            test_list_file: Some("docs/AGENTS.md".into()),
+            test_list_anchor: Some("## 2. Release rules".into()),
+            battery_file: Some("scripts/release-checks.sh".into()),
+            rehearsal_file: Some("scripts/rehearse.sh".into()),
+            ..FrappeConfig::default()
+        };
+        let tree = app_tree(vec![
+            ("docs/AGENTS.md", doc.to_string()),
+            ("scripts/release-checks.sh", battery_body.to_string()),
+            ("scripts/rehearse.sh", rehearsal.to_string()),
+            ("app/tests/alpha_pure.py", "def run():\n\tpass\n".into()),
+            ("app/tests/site_mod.py", "def run():\n\tpass\n".into()),
+            ("app/tests/solo.py", "def run():\n\tpass\n".into()),
+        ]);
+        audit_rule_with(tag, &tree, "FRAPPE-REHEARSAL-PARITY", &cfg)
+    }
+
+    fn rp_rehearsal(modules: &str) -> String {
+        REHEARSE_GOOD.replace("TESTS=(alpha)", &format!("TESTS=({modules})"))
+    }
+
+    #[test]
+    fn rehearsal_parity_is_silent_on_a_reconciled_trio() {
+        let bat = battery(&["alpha_pure"], &["alpha_pure"]);
+        let got = rp_run("rp-ok", RP_DOC, &rp_rehearsal("site_mod\n  solo"), &bat);
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// (a) the site-only module dropped from the rehearsal runs nowhere.
+    #[test]
+    fn rehearsal_parity_refuses_a_site_only_module_the_rehearsal_dropped() {
+        let bat = battery(&["alpha_pure"], &["alpha_pure"]);
+        let got = rp_run("rp-a", RP_DOC, &rp_rehearsal("solo"), &bat);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].file_path == "docs/AGENTS.md"
+                && got[0].snippet == "site_mod"
+                && got[0].message.contains("runs nowhere")
+                && got[0].line_number == 5,
+            "{got:?}"
+        );
+        assert_eq!(got[0].severity, Severity::Error);
+    }
+
+    /// (b) a misspelt rehearsal module has no tests/<module>.py.
+    #[test]
+    fn rehearsal_parity_refuses_a_rehearsal_module_with_no_test_file() {
+        let bat = battery(&["alpha_pure"], &["alpha_pure"]);
+        let got = rp_run("rp-b", RP_DOC, &rp_rehearsal("site_mod solo sol0"), &bat);
+        assert_eq!(got.len(), 2, "{got:?}"); // the typo is also named nowhere
+        let typo = got.iter().find(|v| v.message.contains("tests/sol0.py"));
+        assert!(
+            typo.is_some_and(|v| v.file_path == "scripts/rehearse.sh" && v.snippet == "sol0"),
+            "{got:?}"
+        );
+    }
+
+    /// (c) a module that only the rehearsal runs and no list names.
+    #[test]
+    fn rehearsal_parity_refuses_a_rehearsal_only_module_declared_nowhere() {
+        let bat = battery(&["alpha_pure"], &["alpha_pure"]);
+        let doc = RP_DOC.replace("`site_mod`, `solo`", "`site_mod`");
+        let got = rp_run("rp-c", &doc, &rp_rehearsal("site_mod solo"), &bat);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].snippet == "solo" && got[0].message.contains("runs only in the rehearsal"),
+            "{got:?}"
+        );
+        // the same module in the battery is described by the battery: silent.
+        let both = battery(&["alpha_pure", "solo"], &["alpha_pure", "solo"]);
+        let ok = rp_run("rp-c2", &doc, &rp_rehearsal("site_mod solo"), &both);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn rehearsal_parity_is_inert_without_script_or_section() {
+        let none = audit_rule_with(
+            "rp/inert",
+            &app_tree(vec![]),
+            "FRAPPE-REHEARSAL-PARITY",
+            &FrappeConfig {
+                app: Some("app".into()),
+                ..FrappeConfig::default()
+            },
+        );
+        assert!(
+            !none.is_empty() && none.iter().all(|v| v.severity == Severity::Warning),
+            "{none:?}"
+        );
+        let bat = battery(&["alpha_pure"], &["alpha_pure"]);
+        let nosec = rp_run("rp-nosec", "# no section\n", &rp_rehearsal("solo"), &bat);
+        assert!(
+            nosec.len() == 1 && nosec[0].severity == Severity::Warning,
+            "{nosec:?}"
         );
     }
 
