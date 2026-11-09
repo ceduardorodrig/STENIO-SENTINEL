@@ -33,6 +33,12 @@ jobs:
       - name: Lint Codebase (cargo clippy)
         run: cargo clippy --all-targets
 
+      # The unit tests were never a CI step: a race between parallel tests (a sibling-repository search that
+      # found another test's fixture) failed 7 local runs in 8 and the CI stayed green (2026-11-09). Verified
+      # on a fresh clone with an empty environment before this step was added: 209 + 2 + 3 tests, 4 runs, 0 failures.
+      - name: Run Unit Tests (cargo test)
+        run: cargo test
+
       - name: Build Sentinel Release
         run: cargo build --release
 
