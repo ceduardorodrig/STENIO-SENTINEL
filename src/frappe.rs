@@ -145,6 +145,16 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-RELEASE-ORDER",
+        "Release Number Spent Before The Static Battery",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL",
+        "Release Tag Published Before The Rehearsal",
+        Severity::Warning,
+    ),
+    (
         "FRAPPE-REHEARSAL-VERDICT",
         "Rehearsal Verdict Not Derived From A Positive Signal",
         Severity::Error,
@@ -4363,6 +4373,84 @@ fn rule_rehearsal_verdict(c: &Ctx) -> Vec<Violation> {
         .collect()
 }
 
+// ── FRAPPE-RELEASE-ORDER / FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL ─────────────
+// GB-165/GB-214/GB-196: the order of the calls in the release orchestrator decides whether a
+// release number is spent on an offline check. The parsing lives in `release_order.rs`.
+
+/// The release script: `STENIO_FRAPPE_RELEASE`, `[frappe] release_file`, the two documented repo
+/// positions, then a bounded search from the app root and its parent (GB-230: real path first).
+fn release_script(c: &Ctx) -> Option<PathBuf> {
+    let configured = std::env::var("STENIO_FRAPPE_RELEASE")
+        .ok()
+        .into_iter()
+        .chain(c.cfg.release_file.clone());
+    let mut candidates: Vec<PathBuf> = configured
+        .map(|f| {
+            let p = Path::new(&f);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                c.root.join(p)
+            }
+        })
+        .collect();
+    candidates.push(c.root.join("scripts/release.sh"));
+    candidates.push(c.root.join("compose/frappe/scripts/release.sh"));
+    if let Some(p) = candidates.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    let accept = |p: &Path| read(p).contains("release-checks.sh");
+    ancestors(&c.root, 1)
+        .into_iter()
+        .find_map(|a| find_in(&a, "release.sh", 4, &accept))
+}
+
+fn rule_release_order(c: &Ctx) -> Vec<Violation> {
+    const ID: &str = "FRAPPE-RELEASE-ORDER";
+    const ID_REH: &str = "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL";
+    let Some(path) = release_script(c) else {
+        return vec![viol_as(
+            ID,
+            Severity::Warning,
+            "release.sh",
+            1,
+            "release.sh",
+            "No release script was found: the order of battery, bump, tag and rehearsal is unverified for this tree (isolated repo or partial checkout).".to_string(),
+            "Declare `[frappe] release_file` (or STENIO_FRAPPE_RELEASE).",
+        )];
+    };
+    let label = rel(&c.root, &path);
+    let text = read(&path);
+    let order = crate::release_order::analyze(&text);
+    let snip = |line: usize| {
+        text.lines()
+            .nth(line.saturating_sub(1))
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let mut out = Vec::new();
+    let hint = "Run release-checks.sh first; bump `__version__`, create and push the tag only after it is green, and push the tag only after the rehearsal.";
+    for f in order.errors {
+        out.push(viol(ID, &label, f.line, &snip(f.line), f.message, hint));
+    }
+    for f in order.rehearsal {
+        out.push(viol(ID_REH, &label, f.line, &snip(f.line), f.message, hint));
+    }
+    for f in order.inert {
+        out.push(viol_as(
+            ID,
+            Severity::Warning,
+            &label,
+            f.line,
+            &snip(f.line),
+            f.message,
+            hint,
+        ));
+    }
+    out
+}
+
 // ── FRAPPE-CURRENCY-THRESHOLD-UNSET ────────────────────────────────────────
 // Why it exists (GB-123, GB-133): a Decision without an amount was approved with zero votes.
 // Frappe stores an unfilled Currency as 0.0, so `(amount or 0) >= STRATEGIC_AMOUNT` answers
@@ -4801,6 +4889,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_tests,
         rule_test_parity,
         rule_rehearsal_verdict,
+        rule_release_order,
         rule_sidebar,
         rule_roles,
         rule_select_case,
@@ -5103,6 +5192,15 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
                 "#!/usr/bin/env bash\n# release gates that need no site\nnames=(alpha gamma)\ncmds=(\n  \"python3 -I demoapp/tests/alpha.py\"\n  \"python3 -I demoapp/tests/gamma.py\"\n)\n"
             } else {
                 "#!/usr/bin/env bash\n# release gates that need no site\nnames=(alpha)\ncmds=(\n  \"python3 -I demoapp/tests/alpha.py\"\n)\n"
+            },
+        ),
+        // FRAPPE-RELEASE-ORDER: the bad tree pushes the tag before the battery and the rehearsal.
+        f(
+            "scripts/release.sh",
+            if bad {
+                "#!/usr/bin/env bash\ngit push origin \"refs/tags/$VTAG\"\nrelease-checks.sh --no-pre \"$VTAG\"\nbash rehearse.sh \"$IMG\"\n"
+            } else {
+                "#!/usr/bin/env bash\nrelease-checks.sh --no-pre \"$VTAG\"\nbash rehearse.sh \"$IMG\"\ngit push origin \"refs/tags/$VTAG\"\n"
             },
         ),
         // FRAPPE-REHEARSAL-VERDICT: the bad tree passes a module when its output has no failure text.
@@ -5982,6 +6080,40 @@ mod tests {
         );
         assert!(
             none.iter().all(|v| v.severity == Severity::Warning) && !none.is_empty(),
+            "{none:?}"
+        );
+    }
+
+    // ── FRAPPE-RELEASE-ORDER ───────────────────────────────────────────────
+    #[test]
+    fn release_order_errors_on_battery_after_tag_and_warns_on_rehearsal() {
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            release_file: Some("ops/release.sh".into()),
+            ..FrappeConfig::default()
+        };
+        let run = |tag: &str, body: &str, rule: &str| {
+            audit_rule_with(
+                tag,
+                &app_tree(vec![("ops/release.sh", body.to_string())]),
+                rule,
+                &cfg,
+            )
+        };
+        let good = "release-checks.sh\nbash rehearse.sh\ngit push origin refs/tags/v1\n";
+        assert!(run("ro-good", good, "FRAPPE-RELEASE-ORDER").is_empty());
+        assert!(run("ro-good2", good, "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL").is_empty());
+        let bad = "git push origin refs/tags/v1\nrelease-checks.sh\nbash rehearse.sh\n";
+        let e = run("ro-bad", bad, "FRAPPE-RELEASE-ORDER");
+        assert!(
+            e.len() == 1 && e[0].severity == Severity::Error && e[0].line_number == 1,
+            "{e:?}"
+        );
+        let w = run("ro-bad2", bad, "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL");
+        assert!(w.len() == 1 && w[0].severity == Severity::Warning, "{w:?}");
+        let none = audit_rule("ro/none", &app_tree(vec![]), "FRAPPE-RELEASE-ORDER");
+        assert!(
+            !none.is_empty() && none.iter().all(|v| v.severity == Severity::Warning),
             "{none:?}"
         );
     }

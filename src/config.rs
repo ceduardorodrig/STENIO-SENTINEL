@@ -109,6 +109,11 @@ pub struct FrappeConfig {
     /// relative to the app root). Absent, the engine looks for `scripts/rehearse.sh` and then for
     /// the nearest one above the app; env `STENIO_FRAPPE_REHEARSAL` wins.
     pub rehearsal_file: Option<String>,
+    /// Release orchestrator whose step order `FRAPPE-RELEASE-ORDER` reads (absolute, or relative
+    /// to the app root). Absent, the engine looks for `scripts/release.sh`,
+    /// `compose/frappe/scripts/release.sh` and then the nearest one above the app; env
+    /// `STENIO_FRAPPE_RELEASE` wins.
+    pub release_file: Option<String>,
     /// File listing DocTypes that need no sidebar entry (`Name | reason` per line).
     pub sidebar_allowlist: Option<String>,
     /// Roles that exist without a fixture (added to the built-in Frappe core list).

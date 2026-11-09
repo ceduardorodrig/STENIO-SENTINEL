@@ -41,6 +41,7 @@ mod ports;
 mod pre_release;
 mod reconcile;
 mod release_engine;
+mod release_order;
 pub mod remote;
 mod rule;
 mod semantic;
@@ -504,6 +505,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
         .chain(frappe_drift::self_test_cases())
+        .chain(release_order::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(opportunity::self_test_cases())
