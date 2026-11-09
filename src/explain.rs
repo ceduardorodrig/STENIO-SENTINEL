@@ -1280,6 +1280,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Capture the status (`|| rc=$?`, never `|| true`), make every module end with its own `<module> OK` line, pass only on `((rc == 0)) && [[ $verdict =~ (^|[[:space:]])(OK|PASS)$ ]]`, count failures, `exit 1` when the count is set, and print totals from `${#TESTS[@]}`. Point the rule at another layout with `[frappe] rehearsal_file`.",
     },
     RuleExplanation {
+        id: "FRAPPE-REHEARSAL-PARITY",
+        name: "Rehearsal Module List Out Of Step With The Declared Tests",
+        severity: "ERROR",
+        tag: "frappe",
+        summary: "The Miracena tests are described by three lists: the declaration (section 2 of the test-list document: the pure ones plus a `site-only`/`skipped` clause), the offline battery (`names`/`cmds` of release-checks.sh) and the rehearsal list (the module array of rehearse.sh, run on a real site). The rule reconciles the third with the other two: (a) a module declared site-only/skipped that the rehearsal list does not run runs nowhere; (b) a rehearsal module with no `tests/<module>.py` in the app runs nothing (a typo is silent); (c) a rehearsal module that is neither in the battery, nor named anywhere in the section, runs only in the rehearsal and no document says so. Each finding names the script (or document), the line and the module. A missing script, document section or battery leaves the affected comparison inert with one WARNING that says why.",
+        rationale: "GB-137/GB-218: FRAPPE-TEST-PARITY compares the declaration with release-checks.sh only, so the rehearsal list (a third copy of the set) could lose a module, or gain a misspelt one, with every gate green. `validators_pure` imports frappe, so it is declared site-only and its ONLY run is the rehearsal: remove it from the rehearsal array and the test never executes anywhere while the document still promises it does. The same machinery reuses the discovery of its siblings (test-list file/anchor from [frappe], the battery reader of FRAPPE-TEST-PARITY, the rehearsal resolver of FRAPPE-REHEARSAL-VERDICT) so the three rules always read the same files (agent-global-rules.md 12.4). The real Miracena trees were clean when it was added (0 findings, 2026-11-09), so it is an ERROR from the start; only an undecidable comparison (script, section or battery not found) is an inert WARNING.",
+        bad_example: "# AGENTS.md section 2: Site-only: `validators_pure` imports frappe; `charts_pure` also runs without a site\n# rehearse.sh:\nTESTS=(validation w1_structre)\n# WARN [FRAPPE-REHEARSAL-PARITY] `validators_pure` is declared site-only but the rehearsal list does not run it\n# WARN [FRAPPE-REHEARSAL-PARITY] rehearse.sh:1 names `w1_structre` but tests/w1_structre.py is not in the app",
+        good_example: "# AGENTS.md section 2: Site-only: `validators_pure` imports frappe\n# rehearse.sh:\nTESTS=(validators_pure validation w1_structure)\n# every module exists under tests/ and each is named in section 2 or in the battery",
+        remediation: "Add the site-only module to the module array of rehearse.sh (or stop declaring it site-only), fix the misspelt name or delete the stale entry, and name every rehearsal-only module in section 2 of the test-list document. Point the rule at other layouts with `[frappe] rehearsal_file`, `test_list_file`, `test_list_anchor`.",
+    },
+    RuleExplanation {
         id: "FRAPPE-CURRENCY-THRESHOLD-UNSET",
         name: "Currency Threshold Decided Without An Empty Branch",
         severity: "ERROR",
