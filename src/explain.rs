@@ -1290,6 +1290,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "// nav_permissions.js (Desk): the event desk.js triggers when the Desk boots\n$(document).on(\"startup\", wrap);\n// miracena_login.js (web_include_js, sign-in page): guarded, and not loaded in the Desk\nif (window.frappe && frappe.ready) frappe.ready(wrap);",
         remediation: "In a Desk script use the `startup` event (`$(document).on(\"startup\", fn)`) or a route/ajax event of the Desk; keep `frappe.ready` and `frappe.web_form` for files registered in `web_include_js` or `webform_include_js`; if one file must serve both, test the API before every use (`if (window.frappe && frappe.ready) ...`).",
     },
+    RuleExplanation {
+        id: "FRAPPE-VERSION-DRIFT",
+        name: "Frappe Base-Image Pin Is Behind Or Differs From The Runtime",
+        severity: "ERROR",
+        tag: "infra",
+        summary: "`stenio frappe-drift --repo R [--runtime-frappe X] (--latest X | --latest-file F | --online)` reads `ARG BASE_IMAGE=<image>:v<X.Y.Z>` from the repository Dockerfile and prints `PASS up-to-date` or `FAIL behind: <pin> -> <latest>` (latest = highest stable release of the same major series). With `--runtime-frappe` it adds `FAIL pin-vs-runtime: <pin> != <runtime>`. Exit 1 on any FAIL, 2 when the pin or the latest cannot be determined.",
+        rationale: "GB-242: the Dockerfile pinned frappe/erpnext v16.53.0 while the running image reported frappe 16.55.1 and the Desk offered 16.55.2; nothing compared the three numbers. The check is offline by construction (--latest/--latest-file); only --online touches the GitHub releases API of frappe/frappe, so tests and mutation proofs never depend on the network. Prereleases and drafts are ignored and versions compare numerically, not as text.",
+        bad_example: "# Dockerfile: ARG BASE_IMAGE=frappe/erpnext:v16.53.0\n# stenio frappe-drift --repo . --latest v16.55.2 --runtime-frappe 16.55.1\n# FAIL behind: v16.53.0 -> v16.55.2\n# FAIL pin-vs-runtime: v16.53.0 != v16.55.1",
+        good_example: "# Dockerfile: ARG BASE_IMAGE=frappe/erpnext:v16.55.2\n# PASS up-to-date pin=v16.55.2 latest=v16.55.2",
+        remediation: "Bump `BASE_IMAGE` to the latest v16 release, rebuild, and re-run with `--runtime-frappe` taken from `bench version` of the new image; run it from a timer so drift alerts instead of waiting for a human to open the Desk.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
