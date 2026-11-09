@@ -17,25 +17,47 @@ type Ver = (u64, u64, u64);
     about = "Base-image pin vs latest release and vs the running Frappe version (read-only)"
 )]
 struct DriftArgs {
-    #[arg(long, help = "Repository directory (Dockerfile inside) or the Dockerfile itself")]
+    #[arg(
+        long,
+        help = "Repository directory (Dockerfile inside) or the Dockerfile itself"
+    )]
     repo: PathBuf,
-    #[arg(long, help = "Frappe version reported by the running image (bench version)")]
+    #[arg(
+        long,
+        help = "Frappe version reported by the running image (bench version)"
+    )]
     runtime_frappe: Option<String>,
     #[arg(long, help = "Latest release, e.g. v16.55.2")]
     latest: Option<String>,
-    #[arg(long, help = "File with a GitHub releases JSON array or one version per line")]
+    #[arg(
+        long,
+        help = "File with a GitHub releases JSON array or one version per line"
+    )]
     latest_file: Option<PathBuf>,
-    #[arg(long, help = "Fetch the latest release from the GitHub API of frappe/frappe")]
+    #[arg(
+        long,
+        help = "Fetch the latest release from the GitHub API of frappe/frappe"
+    )]
     online: bool,
 }
 
 /// Parses `v16.53.0`, `16.53.0` or `frappe/erpnext:v16.53.0` into a numeric triple.
 fn parse_ver(s: &str) -> Option<Ver> {
-    let tail = s.rsplit(':').next().unwrap_or(s).trim().trim_start_matches('v');
+    let tail = s
+        .rsplit(':')
+        .next()
+        .unwrap_or(s)
+        .trim()
+        .trim_start_matches('v');
     let mut it = tail.split('.');
     let a = it.next()?.parse().ok()?;
     let b = it.next()?.parse().ok()?;
-    let c = it.next()?.split(|ch: char| !ch.is_ascii_digit()).next()?.parse().ok()?;
+    let c = it
+        .next()?
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()?;
     Some((a, b, c))
 }
 
@@ -57,7 +79,10 @@ fn latest_in_series(text: &str, major: u64) -> Option<Ver> {
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(serde_json::Value::Array(items)) => {
             for it in items {
-                let name = it.get("tag_name").and_then(|v| v.as_str()).unwrap_or_default();
+                let name = it
+                    .get("tag_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 let pre = ["prerelease", "draft"]
                     .iter()
                     .any(|k| it.get(*k).and_then(|v| v.as_bool()).unwrap_or(false));
@@ -79,22 +104,38 @@ fn verdicts(pin: Ver, latest: Ver, runtime: Option<&str>) -> (Vec<String>, bool)
     let mut fail = false;
     if pin < latest {
         fail = true;
-        lines.push(format!("FAIL behind: {} -> {}", fmt_ver(pin), fmt_ver(latest)));
+        lines.push(format!(
+            "FAIL behind: {} -> {}",
+            fmt_ver(pin),
+            fmt_ver(latest)
+        ));
     } else {
-        lines.push(format!("PASS up-to-date pin={} latest={}", fmt_ver(pin), fmt_ver(latest)));
+        lines.push(format!(
+            "PASS up-to-date pin={} latest={}",
+            fmt_ver(pin),
+            fmt_ver(latest)
+        ));
     }
     if let Some(r) = runtime {
         match parse_ver(r) {
-            Some(rv) if rv == pin => {
-                lines.push(format!("PASS pin-vs-runtime: {} == {}", fmt_ver(pin), fmt_ver(rv)))
-            }
+            Some(rv) if rv == pin => lines.push(format!(
+                "PASS pin-vs-runtime: {} == {}",
+                fmt_ver(pin),
+                fmt_ver(rv)
+            )),
             Some(rv) => {
                 fail = true;
-                lines.push(format!("FAIL pin-vs-runtime: {} != {}", fmt_ver(pin), fmt_ver(rv)));
+                lines.push(format!(
+                    "FAIL pin-vs-runtime: {} != {}",
+                    fmt_ver(pin),
+                    fmt_ver(rv)
+                ));
             }
             None => {
                 fail = true;
-                lines.push(format!("FAIL pin-vs-runtime: unparsable runtime version '{r}'"));
+                lines.push(format!(
+                    "FAIL pin-vs-runtime: unparsable runtime version '{r}'"
+                ));
             }
         }
     }
@@ -102,7 +143,11 @@ fn verdicts(pin: Ver, latest: Ver, runtime: Option<&str>) -> (Vec<String>, bool)
 }
 
 fn dockerfile_path(repo: &Path) -> PathBuf {
-    if repo.is_dir() { repo.join("Dockerfile") } else { repo.to_path_buf() }
+    if repo.is_dir() {
+        repo.join("Dockerfile")
+    } else {
+        repo.to_path_buf()
+    }
 }
 
 fn latest_source(a: &DriftArgs, major: u64) -> Result<Ver, String> {
@@ -111,8 +156,10 @@ fn latest_source(a: &DriftArgs, major: u64) -> Result<Ver, String> {
     } else if let Some(f) = &a.latest_file {
         std::fs::read_to_string(f).map_err(|e| format!("cannot read {}: {e}", f.display()))?
     } else if a.online {
-        crate::health::http_get_body("https://api.github.com/repos/frappe/frappe/releases?per_page=100")
-            .ok_or_else(|| "GitHub releases API unreachable".to_string())?
+        crate::health::http_get_body(
+            "https://api.github.com/repos/frappe/frappe/releases?per_page=100",
+        )
+        .ok_or_else(|| "GitHub releases API unreachable".to_string())?
     } else {
         return Err("give one of --latest, --latest-file or --online".into());
     };
@@ -136,7 +183,10 @@ pub fn run_cli(argv: &[String]) -> i32 {
         }
     };
     let Some((image, pin)) = parse_pin(&text) else {
-        println!("ERROR no `ARG BASE_IMAGE=<image>:v<X.Y.Z>` pin in {}", path.display());
+        println!(
+            "ERROR no `ARG BASE_IMAGE=<image>:v<X.Y.Z>` pin in {}",
+            path.display()
+        );
         return 2;
     };
     let latest = match latest_source(&a, pin.0) {
@@ -160,13 +210,24 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let behind = verdicts((16, 53, 0), (16, 55, 2), Some("16.55.1"));
     let ok = verdicts((16, 55, 2), (16, 55, 2), Some("16.55.2"));
     vec![
-        ("frappe-drift: pin parsed from Dockerfile".into(), pin == Some((16, 53, 0))),
-        ("frappe-drift: prerelease and other majors ignored".into(), latest == Some((16, 55, 2))),
+        (
+            "frappe-drift: pin parsed from Dockerfile".into(),
+            pin == Some((16, 53, 0)),
+        ),
+        (
+            "frappe-drift: prerelease and other majors ignored".into(),
+            latest == Some((16, 55, 2)),
+        ),
         (
             "frappe-drift: older pin FAILs behind and pin-vs-runtime".into(),
-            behind.1 && behind.0[0] == "FAIL behind: v16.53.0 -> v16.55.2" && behind.0[1].starts_with("FAIL pin-vs-runtime"),
+            behind.1
+                && behind.0[0] == "FAIL behind: v16.53.0 -> v16.55.2"
+                && behind.0[1].starts_with("FAIL pin-vs-runtime"),
         ),
-        ("frappe-drift: current pin PASSes".into(), !ok.1 && ok.0[0].starts_with("PASS up-to-date")),
+        (
+            "frappe-drift: current pin PASSes".into(),
+            !ok.1 && ok.0[0].starts_with("PASS up-to-date"),
+        ),
     ]
 }
 
@@ -181,7 +242,10 @@ mod tests {
 
     #[test]
     fn plain_list_and_numeric_order() {
-        assert_eq!(latest_in_series("v16.9.0\nv16.10.1\nv15.1.1\n", 16), Some((16, 10, 1)));
+        assert_eq!(
+            latest_in_series("v16.9.0\nv16.10.1\nv15.1.1\n", 16),
+            Some((16, 10, 1))
+        );
         assert_eq!(parse_ver("frappe/erpnext:v16.53.0"), Some((16, 53, 0)));
         assert_eq!(parse_ver("nonsense"), None);
     }

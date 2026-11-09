@@ -925,7 +925,11 @@ fn hook_strings(hooks: &str, name: &str) -> Vec<String> {
 fn desk_js_files(c: &Ctx) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for s in hook_strings(&read(&c.pkg.join("hooks.py")), "app_include_js") {
-        let url = s.split(['?', '#']).next().unwrap_or("").trim_start_matches('/');
+        let url = s
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('/');
         if !(url.ends_with(".js") || url.ends_with(".mjs")) {
             continue;
         }
@@ -4729,7 +4733,8 @@ const PRICING_BAD: &str = "from frappe.utils import flt\n\nLIMIT = 250000\n\n\nd
 /// read at import of `execute()` and written into a Single's long-text field, with the hash guard
 /// the real fix carries.
 /// JS-DESK-WEB-ONLY-API: the rc124 call, and its rc125 replacement plus the guarded form.
-const DESK_JS_BAD: &str = "(function () {\n\tfrappe.ready(function () {\n\t\tinit();\n\t});\n})();\n";
+const DESK_JS_BAD: &str =
+    "(function () {\n\tfrappe.ready(function () {\n\t\tinit();\n\t});\n})();\n";
 const DESK_JS_GOOD: &str = "// frappe.ready is web-only (website.js)\n(function () {\n\t$(document).on(\"startup\", init);\n\tif (window.frappe && frappe.ready) frappe.ready(init);\n})();\n";
 const PUBLISHER_PY: &str = "import hashlib\nfrom pathlib import Path\n\nDOCS = Path(__file__).resolve().parents[1] / \"docs\"\n\n\ndef same_content(stored, desired):\n\treturn hashlib.sha256(stored.encode()).hexdigest() == hashlib.sha256(desired.encode()).hexdigest()\n\n\ndef execute():\n\timport frappe\n\n\tbody = (DOCS / \"manual.html\").read_text(encoding=\"utf-8\")\n\tstored = frappe.db.get_single_value(\"Handbook\", \"content\")\n\tif same_content(stored or \"\", body):\n\t\treturn\n\tif frappe.db.exists(\"Handbook\", \"Handbook\"):\n\t\tfrappe.db.set_single_value(\"Handbook\", \"content\", body)\n\telse:\n\t\tfrappe.get_doc({\"doctype\": \"Handbook\", \"title\": \"Manual\", \"content\": body}).insert(ignore_permissions=True)\n";
 
@@ -5042,10 +5047,22 @@ pub(crate) fn parity_spelling_agrees() -> bool {
             "app-repo/AGENTS.md".into(),
             "## 2. Tests\nThe pure ones (`alpha`, `beta`) also run without a site.\n".into(),
         ),
-        ("app-repo/app/__init__.py".into(), "__version__ = \"0.1.0\"\n".into()),
-        ("app-repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
-        ("app-repo/app/tests/alpha.py".into(), "def run():\n    pass\n".into()),
-        ("app-repo/app/tests/beta.py".into(), "def run():\n    pass\n".into()),
+        (
+            "app-repo/app/__init__.py".into(),
+            "__version__ = \"0.1.0\"\n".into(),
+        ),
+        (
+            "app-repo/app/hooks.py".into(),
+            "app_name = \"app\"\n".into(),
+        ),
+        (
+            "app-repo/app/tests/alpha.py".into(),
+            "def run():\n    pass\n".into(),
+        ),
+        (
+            "app-repo/app/tests/beta.py".into(),
+            "def run():\n    pass\n".into(),
+        ),
         (
             "infra/compose/frappe/scripts/release-checks.sh".into(),
             "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
@@ -5075,7 +5092,12 @@ pub(crate) fn parity_spelling_agrees() -> bool {
         r.unwrap_or_default()
             .into_iter()
             .filter(|v| v.rule_id == "FRAPPE-TEST-PARITY")
-            .map(|v| format!("{:?}|{}|{}|{}", v.severity, v.file_path, v.line_number, v.message))
+            .map(|v| {
+                format!(
+                    "{:?}|{}|{}|{}",
+                    v.severity, v.file_path, v.line_number, v.message
+                )
+            })
             .collect()
     };
     let (a, r) = (key(audit(&abs, &cfg)), key(audit(&rel, &cfg)));
@@ -6204,17 +6226,21 @@ mod tests {
     /// An app whose hooks load `desk.js` in the Desk and `login.js` on the website only.
     fn desk_app(hooks_js: &str, desk: &str, login: &str) -> Vec<(String, String)> {
         vec![
-            ("app/__init__.py".to_string(), "__version__ = \"0.1.0\"\n".to_string()),
+            (
+                "app/__init__.py".to_string(),
+                "__version__ = \"0.1.0\"\n".to_string(),
+            ),
             (
                 "app/hooks.py".to_string(),
-                format!("app_name = \"app\"\n_v = 1\n{hooks_js}web_include_js = \"/assets/app/js/login.js\"\n"),
+                format!(
+                    "app_name = \"app\"\n_v = 1\n{hooks_js}web_include_js = \"/assets/app/js/login.js\"\n"
+                ),
             ),
             ("app/public/js/desk.js".to_string(), desk.to_string()),
             ("app/public/js/login.js".to_string(), login.to_string()),
         ]
     }
-    const HOOKS_DESK: &str =
-        "app_include_js = [\n\tf\"/assets/app/js/desk.js?v={_v}\",\n]\n";
+    const HOOKS_DESK: &str = "app_include_js = [\n\tf\"/assets/app/js/desk.js?v={_v}\",\n]\n";
     const RC124: &str = "frappe.ready(function () {\n\twrap();\n});\n";
 
     /// (a) The rc124 incident: an unguarded `frappe.ready(` in a file `app_include_js` loads.
@@ -6225,8 +6251,15 @@ mod tests {
         assert_eq!(got[0].file_path, "app/public/js/desk.js");
         assert_eq!(got[0].line_number, 1);
         assert_eq!(got[0].severity, Severity::Error);
-        assert!(got[0].message.contains("`frappe.ready`"), "{}", got[0].message);
-        for api in ["frappe.ready_events.push(f);", "frappe.web_form.on(\"x\", f);"] {
+        assert!(
+            got[0].message.contains("`frappe.ready`"),
+            "{}",
+            got[0].message
+        );
+        for api in [
+            "frappe.ready_events.push(f);",
+            "frappe.web_form.on(\"x\", f);",
+        ] {
             let got = audit_rule("jsdesk-a2", &desk_app(HOOKS_DESK, api, ""), RULE_JS);
             assert_eq!(got.len(), 1, "{api}: {got:?}");
         }
@@ -6237,16 +6270,35 @@ mod tests {
     #[test]
     fn desk_web_only_api_is_silent_when_guarded_or_in_a_comment() {
         for (tag, src) in [
-            ("g1", "if (window.frappe && frappe.ready) frappe.ready(wrap);\n"),
-            ("g2", "if (typeof frappe.ready === \"function\") {\n\tfrappe.ready(wrap);\n}\n"),
-            ("g3", "// frappe.ready(wrap) is web-only\n/* frappe.web_form.on(x) */\n$(document).on(\"startup\", wrap);\n"),
-            ("g4", "if (!frappe.web_form) return;\nfrappe.web_form.on(\"x\", f);\n"),
+            (
+                "g1",
+                "if (window.frappe && frappe.ready) frappe.ready(wrap);\n",
+            ),
+            (
+                "g2",
+                "if (typeof frappe.ready === \"function\") {\n\tfrappe.ready(wrap);\n}\n",
+            ),
+            (
+                "g3",
+                "// frappe.ready(wrap) is web-only\n/* frappe.web_form.on(x) */\n$(document).on(\"startup\", wrap);\n",
+            ),
+            (
+                "g4",
+                "if (!frappe.web_form) return;\nfrappe.web_form.on(\"x\", f);\n",
+            ),
         ] {
             let got = audit_rule(tag, &desk_app(HOOKS_DESK, src, ""), RULE_JS);
             assert!(got.is_empty(), "{tag}: {got:?}");
         }
         let one = "app_include_js = \"/assets/app/js/desk.js\"\n";
-        assert!(audit_rule("jsdesk-b-str", &desk_app(one, "if (frappe.ready) frappe.ready(f);\n", ""), RULE_JS).is_empty());
+        assert!(
+            audit_rule(
+                "jsdesk-b-str",
+                &desk_app(one, "if (frappe.ready) frappe.ready(f);\n", ""),
+                RULE_JS
+            )
+            .is_empty()
+        );
     }
 
     /// (c) Only files `app_include_js` loads are in scope: the same unguarded call in a
@@ -6254,7 +6306,11 @@ mod tests {
     /// commented `app_include_js` registers nothing.
     #[test]
     fn desk_web_only_api_ignores_files_the_desk_does_not_load() {
-        let got = audit_rule("jsdesk-c", &desk_app(HOOKS_DESK, "init();\n", RC124), RULE_JS);
+        let got = audit_rule(
+            "jsdesk-c",
+            &desk_app(HOOKS_DESK, "init();\n", RC124),
+            RULE_JS,
+        );
         assert!(got.is_empty(), "{got:?}");
         let commented = "# app_include_js = [\"/assets/app/js/desk.js\"]\n";
         let got = audit_rule("jsdesk-c2", &desk_app(commented, RC124, ""), RULE_JS);
@@ -6264,9 +6320,18 @@ mod tests {
     #[test]
     fn web_only_api_uses_reads_lines_and_guard_distance() {
         let far = "if (frappe.ready) {}\n\n\n\n\n\n\nfrappe.ready(f);\n";
-        assert_eq!(web_only_api_uses(far).len(), 1, "a guard 7 lines up is not a guard");
+        assert_eq!(
+            web_only_api_uses(far).len(),
+            1,
+            "a guard 7 lines up is not a guard"
+        );
         assert_eq!(web_only_api_uses(far)[0].0, 8);
         assert!(web_only_api_uses("frappe.ready = function () {};\n").is_empty());
-        assert!(blank_js_comments("a // b\nc /* d\ne */ f\n").lines().count() == 3);
+        assert!(
+            blank_js_comments("a // b\nc /* d\ne */ f\n")
+                .lines()
+                .count()
+                == 3
+        );
     }
 }
