@@ -523,7 +523,7 @@ fn is_declared(
 }
 
 /// Minimal glob matcher (only `*` is special).
-fn glob_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         return pattern == text;

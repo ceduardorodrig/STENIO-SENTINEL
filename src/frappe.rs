@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::config::FrappeConfig;
+use crate::config::{FetchParity, FrappeConfig};
 use crate::engine::Violation;
 use crate::i18n;
 use crate::rule::Severity;
@@ -87,6 +87,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-ROLE-FIXTURE-PARITY",
         "Role Fixture Filter Drops A Role",
+        Severity::Error,
+    ),
+    (
+        "FRAPPE-FETCH-PARITY",
+        "Child Field Without Its Declared fetch_from",
         Severity::Error,
     ),
     (
@@ -290,6 +295,9 @@ struct Field {
     description: String,
     /// `depends_on` expression: the only structural link between two fields.
     depends_on: String,
+    /// `fetch_from` as written in the JSON (`link_field.source_field`), empty when absent.
+    fetch_from: String,
+    fetch_if_empty: bool,
 }
 
 struct DocType {
@@ -404,6 +412,8 @@ fn load_doctype(root: &Path, path: &Path) -> Option<DocType> {
                     label: str_of(f, "label"),
                     description: str_of(f, "description"),
                     depends_on: str_of(f, "depends_on"),
+                    fetch_from: str_of(f, "fetch_from"),
+                    fetch_if_empty: flag(f, "fetch_if_empty"),
                 })
                 .collect()
         })
@@ -1818,6 +1828,53 @@ fn rule_rules_coverage(c: &Ctx) -> Vec<Violation> {
                         entry.path, name, d.name
                     ),
                     "Rename it to the real fieldname or remove it.",
+                ));
+            }
+        }
+    }
+    out
+}
+
+// ── FRAPPE-FETCH-PARITY ────────────────────────────────────────────────────
+/// GB-241 (bug F-01): a child row that names a person must copy the person's role itself.
+/// `[[frappe.fetch_parity]]` says which child DocTypes (`doctype_pattern`, `*` wildcard over the
+/// snake_case name) must declare `field` with the expected `fetch_from` and `fetch_if_empty: 1`.
+/// Without a table the rule is silent: the engine hardcodes no app.
+fn rule_fetch_parity(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    let Some(entries) = c.cfg.fetch_parity.as_ref() else {
+        return out;
+    };
+    for e in entries {
+        let need_empty = e.fetch_if_empty.unwrap_or(true);
+        for d in c.doctypes.iter().filter(|d| d.is_child) {
+            let snake = d.name.to_lowercase().replace(' ', "_");
+            if !crate::reconcile::glob_match(&e.doctype_pattern, &snake) {
+                continue;
+            }
+            let problem = match d.fields.iter().find(|f| f.fieldname == e.field) {
+                None => Some(format!("declares no `{}` field", e.field)),
+                Some(f) if f.fetch_from != e.fetch_from => Some(format!(
+                    "`{}` has fetch_from `{}`, expected `{}`",
+                    e.field, f.fetch_from, e.fetch_from
+                )),
+                Some(f) if need_empty && !f.fetch_if_empty => Some(format!(
+                    "`{}` has fetch_from but not `fetch_if_empty: 1`: a value typed or imported first is overwritten, an empty one never filled",
+                    e.field
+                )),
+                Some(_) => None,
+            };
+            if let Some(p) = problem {
+                out.push(viol(
+                    "FRAPPE-FETCH-PARITY",
+                    &d.rel,
+                    line_of(&d.text, &format!("\"{}\"", e.field)),
+                    &e.field,
+                    format!(
+                        "Child DocType `{}` {}: [frappe] fetch_parity requires `{}` fetched from `{}`.",
+                        d.name, p, e.field, e.fetch_from
+                    ),
+                    "Add `\"fetch_from\": \"<link>.<field>\"` and `\"fetch_if_empty\": 1` to the field, or correct the [[frappe.fetch_parity]] entry.",
                 ));
             }
         }
@@ -4404,6 +4461,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_whitelist,
         rule_rules_coverage,
         rule_role_fixture_parity,
+        rule_fetch_parity,
         rule_currency_threshold,
         rule_permission_scope,
         rule_silent_except,
@@ -4427,6 +4485,8 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
 // ── self-test fixtures ─────────────────────────────────────────────────────
 const THING_JSON: &str = r#"{"doctype":"DocType","name":"Thing","fields":[{"fieldname":"part","fieldtype":"Link","options":"Part","label":"LBL"},{"fieldname":"state","fieldtype":"Select","options":"Open day\nClosed day"},{"fieldname":"kind","fieldtype":"Select","options":"KINDS"},{"fieldname":"code","fieldtype":"Data"},{"fieldname":"price","fieldtype":"Currency"}EXTRA],"permissions":[{"role":"ROLE"}]}"#;
 const PART_JSON_GOOD: &str = r#"{"doctype":"DocType","name":"Part","title_field":"label","show_title_field_in_link":1,"fields":[]}"#;
+const TEAM_MEMBER_GOOD: &str = r#"{"doctype":"DocType","name":"Team Member","istable":1,"fields":[{"fieldname":"member","fieldtype":"Link","options":"Part"},{"fieldname":"role","fieldtype":"Data","fetch_from":"member.role","fetch_if_empty":1}],"permissions":[]}"#;
+const TEAM_MEMBER_BAD: &str = r#"{"doctype":"DocType","name":"Team Member","istable":1,"fields":[{"fieldname":"member","fieldtype":"Link","options":"Part"},{"fieldname":"role","fieldtype":"Data"}],"permissions":[]}"#;
 const PART_JSON_BAD: &str = r#"{"doctype":"DocType","name":"Part","fields":[]}"#;
 /// `Widget` carries a Link to `User` — a record about a person. `PERM` is where the bad tree adds
 /// the broad role `FRAPPE-PERMISSION-SCOPE` refuses while `hooks.py` neither scopes nor the
@@ -4566,6 +4626,16 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         f(
             "demoapp/demo/doctype/part/part.json",
             if bad { PART_JSON_BAD } else { PART_JSON_GOOD },
+        ),
+        f("demoapp/demo/doctype/team_member/__init__.py", ""),
+        f(
+            "demoapp/demo/doctype/team_member/team_member.py",
+            "class TeamMember:\n    pass\n",
+        ),
+        // FRAPPE-FETCH-PARITY: the bad tree drops `fetch_from` from the child row's `role`.
+        f(
+            "demoapp/demo/doctype/team_member/team_member.json",
+            if bad { TEAM_MEMBER_BAD } else { TEAM_MEMBER_GOOD },
         ),
         f("demoapp/demo/doctype/thing/__init__.py", ""),
         f(
@@ -4734,6 +4804,12 @@ pub fn fixture_config() -> FrappeConfig {
         app: Some("demoapp".into()),
         test_list_file: Some("AGENTS.md".into()),
         test_list_anchor: Some("## 2. Tests".into()),
+        fetch_parity: Some(vec![FetchParity {
+            doctype_pattern: "*_member".into(),
+            field: "role".into(),
+            fetch_from: "member.role".into(),
+            fetch_if_empty: None,
+        }]),
         ..FrappeConfig::default()
     }
 }
@@ -4886,6 +4962,8 @@ mod tests {
             label: "Gender".into(),
             description: String::new(),
             depends_on: String::new(),
+            fetch_from: String::new(),
+            fetch_if_empty: false,
         };
         let companion = Field {
             fieldname: "gender_other".into(),
@@ -4895,6 +4973,8 @@ mod tests {
             label: "How do you describe your gender?".into(),
             description: String::new(),
             depends_on: "eval:doc.gender=='Other'".into(),
+            fetch_from: String::new(),
+            fetch_if_empty: false,
         };
         assert!(cites_field(&companion, &select));
         let unrelated = Field {
@@ -4905,6 +4985,8 @@ mod tests {
             label: "Notes".into(),
             description: String::new(),
             depends_on: String::new(),
+            fetch_from: String::new(),
+            fetch_if_empty: false,
         };
         assert!(!cites_field(&unrelated, &select));
     }
@@ -5849,5 +5931,92 @@ mod tests {
             after_migrate_paths("after_migrate_backup = [\"a.b\"]\n").is_empty(),
             "a different hook name is not the hook"
         );
+    }
+
+    // ── FRAPPE-FETCH-PARITY (GB-241) ───────────────────────────────────────
+    fn member_json(role: &str) -> String {
+        format!(
+            "{{\"doctype\":\"DocType\",\"name\":\"Squad Member\",\"istable\":1,\"fields\":[{{\"fieldname\":\"member\",\"fieldtype\":\"Link\",\"options\":\"Member\"}},{role}],\"permissions\":[]}}"
+        )
+    }
+
+    fn fetch_audit(tag: &str, json: &str, entry: FetchParity) -> Vec<Violation> {
+        let files = app_tree(vec![(
+            "app/m/doctype/squad_member/squad_member.json",
+            json.to_string(),
+        )]);
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            fetch_parity: Some(vec![entry]),
+            ..FrappeConfig::default()
+        };
+        audit_rule_with(tag, &files, "FRAPPE-FETCH-PARITY", &cfg)
+    }
+
+    fn role_entry() -> FetchParity {
+        FetchParity {
+            doctype_pattern: "*_member".into(),
+            field: "role".into(),
+            fetch_from: "member.role".into(),
+            fetch_if_empty: None,
+        }
+    }
+
+    #[test]
+    fn fetch_parity_green_and_red() {
+        let ok = "{\"fieldname\":\"role\",\"fieldtype\":\"Data\",\"fetch_from\":\"member.role\",\"fetch_if_empty\":1}";
+        assert!(fetch_audit("fp-ok", &member_json(ok), role_entry()).is_empty());
+        let no_fetch = "{\"fieldname\":\"role\",\"fieldtype\":\"Data\",\"fetch_if_empty\":1}";
+        assert_eq!(
+            fetch_audit("fp-nf", &member_json(no_fetch), role_entry()).len(),
+            1
+        );
+        let no_empty =
+            "{\"fieldname\":\"role\",\"fieldtype\":\"Data\",\"fetch_from\":\"member.role\"}";
+        assert_eq!(
+            fetch_audit("fp-ne", &member_json(no_empty), role_entry()).len(),
+            1
+        );
+        let wrong = "{\"fieldname\":\"role\",\"fieldtype\":\"Data\",\"fetch_from\":\"member.title\",\"fetch_if_empty\":1}";
+        assert_eq!(
+            fetch_audit("fp-w", &member_json(wrong), role_entry()).len(),
+            1
+        );
+        let missing = "{\"fieldname\":\"note\",\"fieldtype\":\"Data\"}";
+        assert_eq!(
+            fetch_audit("fp-m", &member_json(missing), role_entry()).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn fetch_parity_is_config_driven() {
+        let no_empty =
+            "{\"fieldname\":\"role\",\"fieldtype\":\"Data\",\"fetch_from\":\"member.role\"}";
+        // fetch_if_empty = false in the entry relaxes only that requirement
+        let relaxed = FetchParity {
+            fetch_if_empty: Some(false),
+            ..role_entry()
+        };
+        assert!(fetch_audit("fp-r", &member_json(no_empty), relaxed).is_empty());
+        // a pattern that does not match the DocType leaves it alone
+        let other = FetchParity {
+            doctype_pattern: "*_seat".into(),
+            ..role_entry()
+        };
+        assert!(
+            fetch_audit(
+                "fp-o",
+                &member_json("{\"fieldname\":\"x\",\"fieldtype\":\"Data\"}"),
+                other
+            )
+            .is_empty()
+        );
+        // no [[frappe.fetch_parity]] table at all: silent
+        let files = app_tree(vec![(
+            "app/m/doctype/squad_member/squad_member.json",
+            member_json("{\"fieldname\":\"x\",\"fieldtype\":\"Data\"}"),
+        )]);
+        assert!(audit_rule("fp-none", &files, "FRAPPE-FETCH-PARITY").is_empty());
     }
 }

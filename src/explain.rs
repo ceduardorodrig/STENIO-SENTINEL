@@ -1060,6 +1060,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the role to the `in` list of the Role fixture filter in hooks.py (or drop it from the fixture).",
     },
     RuleExplanation {
+        id: "FRAPPE-FETCH-PARITY",
+        name: "Child Field Without Its Declared fetch_from",
+        severity: "ERROR",
+        tag: "frappe",
+        summary: "Every child DocType (istable) whose snake_case name matches `doctype_pattern` of a `[[frappe.fetch_parity]]` entry of steniocheck.toml must declare `field` with `fetch_from` equal to the entry and, unless the entry sets `fetch_if_empty = false`, `fetch_if_empty: 1`. No table, no check.",
+        rationale: "Bug F-01 of the Miracena app: a child row naming a member must copy that member's role, and the three *_member tables (squad, guild, cabal) were verified only by reading their JSONs by hand. A field without fetch_from stays empty; one without fetch_if_empty overwrites what the user or an import typed first. The expected value is data in the [frappe] table, so the engine hardcodes no app and the same rule guards any `*_row` that must mirror its parent link.",
+        bad_example: "# steniocheck.toml\n[[frappe.fetch_parity]]\ndoctype_pattern = \"*_member\"\nfield = \"role\"\nfetch_from = \"member.role\"\n# squad_member.json: {\"fieldname\": \"role\", \"fieldtype\": \"Data\"}",
+        good_example: "{\"fieldname\": \"role\", \"fieldtype\": \"Data\", \"fetch_from\": \"member.role\", \"fetch_if_empty\": 1}",
+        remediation: "Add fetch_from and fetch_if_empty: 1 to the field, or correct the [[frappe.fetch_parity]] entry.",
+    },
+    RuleExplanation {
         id: "FRAPPE-SILENT-EXCEPT",
         name: "Exception Swallowed Without A Record",
         severity: "ERROR",
