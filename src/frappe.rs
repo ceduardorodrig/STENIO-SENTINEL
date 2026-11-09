@@ -145,6 +145,21 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-WHITELIST-METHODS",
+        "State-Changing Endpoint Without A Methods List",
+        Severity::Warning,
+    ),
+    (
+        "FRAPPE-WHITELIST-WRITE-POST",
+        "State-Changing Endpoint Reachable By A Verb Other Than POST",
+        Severity::Warning,
+    ),
+    (
+        "FRAPPE-WHITELIST-NO-CALLER",
+        "Whitelisted Endpoint Nobody Calls",
+        Severity::Warning,
+    ),
+    (
         "FRAPPE-RELEASE-ORDER",
         "Release Number Spent Before The Static Battery",
         Severity::Error,
@@ -1843,6 +1858,113 @@ fn rule_whitelist(c: &Ctx) -> Vec<Violation> {
                     "Check the caller's permission inside the function; whitelisted means callable by any logged-in user."));
             }
             i = k.max(i + 1);
+        }
+    }
+    out
+}
+
+// ── FRAPPE-WHITELIST-METHODS / -WRITE-POST / -NO-CALLER ────────────────────
+// GB-052, GB-056, GB-054. One reader (`frappe_whitelist.rs`) for the three rules. A whitelisted
+// function with no `methods=` accepts GET, POST, PUT and DELETE (frappe/__init__.py:453-454), so
+// a writer there is reachable by a link or an <img> tag; `FRAPPE-WHITELIST-PERMISSION` does not
+// see it because it only looks for a permission marker in the body.
+
+/// Whitelisted functions of the app's production Python files: (file, package-relative path, endpoint).
+fn whitelisted_functions(c: &Ctx) -> Vec<(PathBuf, String, crate::frappe_whitelist::Endpoint)> {
+    let mut out = Vec::new();
+    for p in c.files.iter().filter(|p| {
+        p.extension().map(|e| e == "py").unwrap_or(false)
+            && !rel(&c.pkg, p)
+                .split('/')
+                .any(|s| s == "tests" || s == "patches")
+    }) {
+        let text = read(p);
+        if !text.contains("whitelist") {
+            continue;
+        }
+        for e in crate::frappe_whitelist::extract(&text) {
+            out.push((p.clone(), rel(&c.pkg, p), e));
+        }
+    }
+    out
+}
+
+fn first_write(e: &crate::frappe_whitelist::Endpoint) -> String {
+    e.writes
+        .first()
+        .map(|(l, w)| format!("`{w}()` at line {l}"))
+        .unwrap_or_default()
+}
+
+fn rule_whitelist_methods(c: &Ctx) -> Vec<Violation> {
+    use crate::frappe_whitelist::Methods;
+    whitelisted_functions(c)
+        .into_iter()
+        .filter(|(_, _, e)| e.methods == Methods::Absent && !e.writes.is_empty())
+        .map(|(p, _, e)| {
+            viol("FRAPPE-WHITELIST-METHODS", &rel(&c.root, &p), e.decorator_line, &format!("def {}", e.name),
+                format!("Whitelisted function `{}` changes state ({}) but declares no `methods`: Frappe then accepts GET, PUT and DELETE as well as POST.", e.name, first_write(&e)),
+                "Declare `@frappe.whitelist(methods=[\"POST\"])`; a GET must never change state (link prefetch, <img> tag, CSRF-by-navigation).")
+        })
+        .collect()
+}
+
+fn rule_whitelist_write_post(c: &Ctx) -> Vec<Violation> {
+    use crate::frappe_whitelist::Methods;
+    whitelisted_functions(c)
+        .into_iter()
+        .filter(|(_, _, e)| {
+            !e.writes.is_empty()
+                && matches!(&e.methods, Methods::List(v) if v.iter().any(|m| m != "POST"))
+        })
+        .map(|(p, _, e)| {
+            let declared = match &e.methods {
+                Methods::List(v) => v.join(", "),
+                _ => String::new(),
+            };
+            viol("FRAPPE-WHITELIST-WRITE-POST", &rel(&c.root, &p), e.decorator_line, &format!("def {}", e.name),
+                format!("Whitelisted function `{}` changes state ({}) and declares methods [{declared}], not POST only.", e.name, first_write(&e)),
+                "Reduce the list to `methods=[\"POST\"]`; split a read half into its own GET function.")
+        })
+        .collect()
+}
+
+fn rule_whitelist_no_caller(c: &Ctx) -> Vec<Violation> {
+    let fns = whitelisted_functions(c);
+    if fns.is_empty() {
+        return Vec::new();
+    }
+    let external = c.cfg.whitelist_external.clone().unwrap_or_default();
+    let corpus: Vec<(PathBuf, String)> = c
+        .files
+        .iter()
+        .filter(|p| {
+            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+            ["js", "html", "json", "py", "jinja", "txt"].contains(&ext)
+                && !rel(&c.pkg, p).split('/').any(|s| s == "tests")
+        })
+        .map(|p| {
+            (
+                p.clone(),
+                crate::frappe_whitelist::without_comment_lines(&read(p)),
+            )
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (p, rp, e) in fns {
+        let module = crate::frappe_whitelist::module_path(&c.app, &rp);
+        let dotted = format!("{module}.{}", e.name);
+        if external.iter().any(|x| *x == dotted || *x == e.name) {
+            continue;
+        }
+        let called = corpus
+            .iter()
+            .filter(|(q, _)| *q != p)
+            .any(|(_, t)| crate::frappe_whitelist::is_caller(t, &module, &e.name));
+        if !called {
+            out.push(viol("FRAPPE-WHITELIST-NO-CALLER", &rel(&c.root, &p), e.decorator_line, &format!("def {}", e.name),
+                format!("Whitelisted `{dotted}` is named by no .js, .html, .json (report, number card, chart) or other app code: an endpoint without a screen."),
+                "Wire it to a screen or card, remove the decorator, or list it under `[frappe] whitelist_external` when an outside client calls it."));
         }
     }
     out
@@ -4992,6 +5114,9 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         rule_select_case,
         rule_labels,
         rule_whitelist,
+        rule_whitelist_methods,
+        rule_whitelist_write_post,
+        rule_whitelist_no_caller,
         rule_rules_coverage,
         rule_role_fixture_parity,
         rule_fetch_parity,
@@ -5305,12 +5430,26 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             "scripts/rehearse.sh",
             if bad { REHEARSE_BAD } else { REHEARSE_GOOD },
         ),
+        // FRAPPE-WHITELIST-METHODS / -WRITE-POST / -NO-CALLER: the bad tree has a writer without
+        // methods, a writer open to GET and an endpoint no screen calls; the good tree fixes all three.
+        f(
+            "demoapp/endpoints.py",
+            if bad {
+                "import frappe\n\n\n@frappe.whitelist()\ndef off(m):\n    frappe.only_for(\"System Manager\")\n    frappe.get_doc(\"M\", m).save()\n\n\n@frappe.whitelist(methods=[\"GET\", \"POST\"])\ndef wide(m):\n    frappe.only_for(\"System Manager\")\n    frappe.get_doc(\"M\", m).delete()\n"
+            } else {
+                "import frappe\n\n\n@frappe.whitelist(methods=[\"POST\"])\ndef off(m):\n    frappe.only_for(\"System Manager\")\n    frappe.get_doc(\"M\", m).save()\n\n\n@frappe.whitelist(methods=[\"POST\"])\ndef wide(m):\n    frappe.only_for(\"System Manager\")\n    frappe.get_doc(\"M\", m).delete()\n"
+            },
+        ),
         f(
             "demoapp/pricing.py",
             if bad { PRICING_BAD } else { PRICING_GOOD },
         ),
     ];
     if !bad {
+        v.push(f(
+            "demoapp/public/js/endpoints.js",
+            "frappe.call({ method: \"demoapp.endpoints.off\" });\nfrappe.call({ method: \"demoapp.endpoints.wide\" });\nfrappe.call({ method: \"demoapp.api.ping\" });\n",
+        ));
         v.push(f(
             "demoapp/demo/doctype/thing/thing.py",
             "class Thing:\n    pass\n",
@@ -6302,6 +6441,72 @@ mod tests {
             none.iter().all(|v| v.severity == Severity::Warning) && !none.is_empty(),
             "{none:?}"
         );
+    }
+
+    // ── FRAPPE-WHITELIST-METHODS / -WRITE-POST / -NO-CALLER ────────────────
+    // MUTATION: the writer without `methods` turns METHODS red; `methods=["POST"]` turns it green;
+    // `["GET","POST"]` turns WRITE-POST red.
+    #[test]
+    fn whitelist_methods_and_write_post_mutations() {
+        let tree = |decorator: &str| {
+            app_tree(vec![(
+                "app/off.py",
+                format!(
+                    "{decorator}\ndef off(m):\n    doc = frappe.get_doc('M', m)\n    doc.save()\n"
+                ),
+            )])
+        };
+        let red = audit_rule(
+            "wl-m-red",
+            &tree("@frappe.whitelist()"),
+            "FRAPPE-WHITELIST-METHODS",
+        );
+        assert!(red.len() == 1 && red[0].line_number == 1, "{red:?}");
+        let green = tree("@frappe.whitelist(methods=[\"POST\"])");
+        assert!(audit_rule("wl-m-green", &green, "FRAPPE-WHITELIST-METHODS").is_empty());
+        assert!(audit_rule("wl-w-green", &green, "FRAPPE-WHITELIST-WRITE-POST").is_empty());
+        let wide = tree("@frappe.whitelist(methods=[\"GET\", \"POST\"])");
+        assert_eq!(
+            audit_rule("wl-w-red", &wide, "FRAPPE-WHITELIST-WRITE-POST").len(),
+            1
+        );
+        assert!(audit_rule("wl-w-m", &wide, "FRAPPE-WHITELIST-METHODS").is_empty());
+        let reader = app_tree(vec![(
+            "app/rd.py",
+            "@frappe.whitelist()\ndef rd():\n    return frappe.get_all('M')\n".to_string(),
+        )]);
+        assert!(audit_rule("wl-reader", &reader, "FRAPPE-WHITELIST-METHODS").is_empty());
+    }
+
+    #[test]
+    fn whitelist_no_caller_reads_screens_cards_and_helpers() {
+        let py = (
+            "app/ranking.py",
+            "@frappe.whitelist()\ndef close_it():\n    return 1\n\n@frappe.whitelist()\ndef orphan():\n    return 1\n".to_string(),
+        );
+        let js = (
+            "app/public/js/r.js",
+            "// orphan is documented here: app.ranking orphan\nfrappe.call({ method: `app.ranking.${m}` }); go('close_it');\n".to_string(),
+        );
+        let red = audit_rule(
+            "wl-c-red",
+            &app_tree(vec![py.clone(), js.clone()]),
+            "FRAPPE-WHITELIST-NO-CALLER",
+        );
+        assert!(
+            red.len() == 1 && red[0].snippet.contains("orphan"),
+            "{red:?}"
+        );
+        let card = (
+            "app/desk/number_card.json",
+            "{\"method\": \"app.ranking.orphan\"}".to_string(),
+        );
+        let green = audit_rule(
+            "wl-c-green",
+            &app_tree(vec![py, js, card]),
+            "FRAPPE-WHITELIST-NO-CALLER",
+        );
+        assert!(green.is_empty(), "{green:?}");
     }
 
     // ── FRAPPE-RELEASE-ORDER ───────────────────────────────────────────────

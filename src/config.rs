@@ -122,6 +122,8 @@ pub struct FrappeConfig {
     pub link_allowlist: Option<Vec<String>>,
     /// Extra substrings that count as a permission check in a whitelisted function.
     pub permission_markers: Option<Vec<String>>,
+    /// Whitelisted endpoints called by an outside client (dotted path or function name); exempt from `FRAPPE-WHITELIST-NO-CALLER`.
+    pub whitelist_external: Option<Vec<String>>,
     /// Catalogue used by the sidebar and Select rules, relative to the package.
     pub locale_file: Option<String>,
     /// Docker image repository (verify-release).
