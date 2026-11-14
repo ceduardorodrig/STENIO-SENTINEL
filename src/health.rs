@@ -33,6 +33,9 @@ pub fn run_system_health() -> Result<()> {
         "── ⚡ Graphics Acceleration & VRAM ─────────────────────────────────────".dimmed()
     );
     check_gpu_health();
+    if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+        crate::gaming::check_focused_booster_health();
+    }
     println!();
 
     // 4. Services & Local Connectivity

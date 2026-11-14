@@ -171,18 +171,8 @@ fn check_dmemcg_stack(_session: &str) {
         "MISSING — kernel without CONFIG_CGROUP_DMEM",
     );
 
-    // b) VRAM stack services
-    let sys_boost = service_active(true, "dmemcg-booster-system");
-    let user_boost = service_active(false, "dmemcg-booster-user");
-    let hlf_boost = service_active(false, "hyprland-focused-booster");
-    check_status("dmemcg-booster-system", sys_boost, "active", "INACTIVE");
-    check_status("dmemcg-booster-user", user_boost, "active", "INACTIVE");
-    check_status(
-        "hyprland-focused-booster",
-        hlf_boost,
-        "active (focused window boost)",
-        "INACTIVE",
-    );
+    // b) VRAM stack services + journal IPC health (GB-258)
+    check_focused_booster_health();
 
     // c) functional test: focused window with high dmem.low (8G), backgrounds 0
     let functional = Command::new("sh")
@@ -216,6 +206,85 @@ fn check_dmemcg_stack(_session: &str) {
         &ok_msg,
         &fail_msg,
     );
+}
+
+/// Verifies `dmemcg-booster` + `hyprland-focused-booster` services and inspects
+/// `journalctl` since the current activation for silent IPC/deserialization errors (GB-258).
+pub(crate) fn check_focused_booster_health() {
+    let sys_boost = service_active(true, "dmemcg-booster-system");
+    let user_boost = service_active(false, "dmemcg-booster-user");
+    let hlf_boost = service_active(false, "hyprland-focused-booster");
+    check_status("dmemcg-booster-system", sys_boost, "active", "INACTIVE");
+    check_status("dmemcg-booster-user", user_boost, "active", "INACTIVE");
+    check_status(
+        "hyprland-focused-booster",
+        hlf_boost,
+        "active (focused window boost)",
+        "INACTIVE",
+    );
+
+    let err_line = focused_booster_journal_error();
+    let ipc_ok = hlf_boost && err_line.is_none();
+    let fail_msg = match err_line {
+        Some(line) => format!("FAIL (IPC error in journal: {})", line),
+        None => "INACTIVE (service not running)".to_string(),
+    };
+    check_status(
+        "hyprland-focused-booster (IPC health)",
+        ipc_ok,
+        "0 IPC/deserialization errors since activation",
+        &fail_msg,
+    );
+}
+
+fn focused_booster_journal_error() -> Option<String> {
+    let since_out = Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            "-p",
+            "ActiveEnterTimestamp",
+            "--value",
+            "hyprland-focused-booster.service",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok();
+    let since = since_out
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let mut args = vec![
+        "--user",
+        "-u",
+        "hyprland-focused-booster",
+        "-n",
+        "50",
+        "--no-pager",
+        "-o",
+        "cat",
+    ];
+    if !since.is_empty() && since != "n/a" {
+        args.push("--since");
+        args.push(&since);
+    }
+
+    let out = Command::new("journalctl")
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .rev()
+        .find(|line| {
+            line.contains("WorkspaceAddedV2")
+                || line.contains("missing field")
+                || line.contains("Failed to get active window")
+                || line.contains("panicked at")
+                || line.contains("Failed to start event listener")
+        })
+        .map(|line| line.trim().to_string())
 }
 
 fn check_hyprland_scanout() {

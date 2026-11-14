@@ -492,20 +492,17 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                 .to_string_lossy()
                 .to_string();
 
-            // The short title is a substring of the earlier long one
-            // ("... & Deterministic Governance"), so READMEs that still carry the long
-            // form remain valid and no fleet-wide rewrite is forced.
+            const CANONICAL_DISCLAIMER: &str = "<div align=\"center\">\n\n### 🛡️ Human-in-the-Loop Agentic Engineering\n\nDeveloped by [Carlos Eduardo Rodrigues](https://github.com/ceduardorodrig) with AI coding agents.\nEvery change is verified by the deterministic quality gate [StenioSentinel](https://github.com/ceduardorodrig/STENIO-SENTINEL).\n\n</div>";
+
+            let has_canonical_block = content.contains(CANONICAL_DISCLAIMER);
             let has_modern_title = content.contains("Human-in-the-Loop Agentic Engineering");
             let has_legacy_vibe = content.contains("**Yes... This is a Vibe Coded project**")
                 || content.contains("Yes... This is a Vibe Coded project")
                 || content.contains("Vibe Coded with StenioSentinel")
                 || content.contains("vibe-coded")
                 || content.contains("badge/vibe-coded");
-            let has_gov = content.contains("StenioSentinel");
-            let has_author =
-                content.contains("Carlos Eduardo Rodrigues") || content.contains("ceduardorodrig");
 
-            let is_valid = has_modern_title && !has_legacy_vibe && has_gov && has_author;
+            let is_valid = has_canonical_block && !has_legacy_vibe;
 
             if !is_valid {
                 let (reason, suggestion) = if has_legacy_vibe {
@@ -520,8 +517,8 @@ pub fn audit_documentation(repo_root: &Path) -> DocAuditResult {
                     )
                 } else {
                     (
-                        "Incomplete disclaimer (missing author Carlos Eduardo Rodrigues or StenioSentinel reference).",
-                        "Ensure the governance block contains full references to StenioSentinel and the author.",
+                        "Disclaimer formatting/text drifts from the canonical <div align=\"center\"> block (links, heading, or wrapper mismatch).",
+                        "Replace the existing disclaimer with the exact canonical centered HTML block.",
                     )
                 };
 
