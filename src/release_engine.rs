@@ -765,6 +765,52 @@ fn check_retag(r: &dyn Runner, a: &RelArgs, version: &str, old: &str) -> Line {
     }
 }
 
+/// GB-274: after the whole run, the rollback the release promises must exist: the local
+/// `stenio.prev-<old>` copy and, when the retag step ran, the kuaray `prev-<old>` image tag. The
+/// number of artifacts checked is what was iterated, never a typed total (rule 12.3).
+fn check_rollback(r: &dyn Runner, a: &RelArgs, version: &str, old: &str, retag_ran: bool) -> Line {
+    if old == version {
+        return skip(
+            "rollback-kept",
+            format!("installed binary already was {version}: no rollback claimed by this run"),
+        );
+    }
+    let dir = match install_dir(a) {
+        Ok(d) => d,
+        Err(e) => return fail("rollback-kept", e),
+    };
+    let mut expected: Vec<(String, bool)> = Vec::new();
+    let local = dir.join(format!("stenio.prev-{old}"));
+    expected.push((local.display().to_string(), local.is_file()));
+    if retag_ran {
+        let tag = format!("stenio-sentinel:prev-{old}");
+        let script = format!("docker image inspect -f '{{{{.Id}}}}' {tag}");
+        let present = remote(r, a, &script, Duration::from_secs(60)).is_ok_and(|o| out_ok(&o));
+        expected.push((tag, present));
+    }
+    let missing: Vec<&str> = expected
+        .iter()
+        .filter(|(_, ok)| !ok)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if missing.is_empty() {
+        pass(
+            "rollback-kept",
+            format!("{n}/{n} rollback artifact(s) present", n = expected.len()),
+        )
+    } else {
+        fail(
+            "rollback-kept",
+            format!(
+                "{}/{} rollback artifact(s) present, missing: {}",
+                expected.len() - missing.len(),
+                expected.len(),
+                missing.join(", ")
+            ),
+        )
+    }
+}
+
 fn check_pull(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
     let image = format!("{}:{version}", a.image_repo);
     let target = format!("{}:{}", a.image_repo, tag_major(version));
@@ -899,10 +945,13 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     if !install_ok {
         return out;
     }
-    out.push(check_retag(r, a, &version, &old));
+    let retag = check_retag(r, a, &version, &old);
+    let retag_ran = retag.status == Status::Pass;
+    out.push(retag);
     out.push(check_pull(r, a, &version));
     out.push(check_up(r, a));
     out.push(check_remote_version(r, a, &version));
+    out.push(check_rollback(r, a, &version, &old, retag_ran));
     out.push(check_self_test(r, a));
     let vault = crate::opportunity::vault_root(None);
     out.push(check_scope(r, a, "vault", &vault));
@@ -937,11 +986,12 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("binary-version", format!("{}/target/release/stenio --version == {version}", a.repo.display())),
         ("plan-parity", format!("{}/target/release/stenio release-engine --tag {} --dry-run (step names vs this engine)", a.repo.display(), a.tag)),
         ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
-        ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
+        ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>; FAIL when an existing binary reports no version)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
         ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
         ("kuaray-version", format!("ssh {} docker exec {} stenio --version", a.host, a.container)),
+        ("rollback-kept", format!("test -f <install-dir>/stenio.prev-<previous> && ssh {} docker image inspect stenio-sentinel:prev-<previous> (FAIL if either is missing)", a.host)),
         ("self-test", "~/.cargo/bin/stenio --self-test".to_string()),
         ("scope-vault", "~/.cargo/bin/stenio --scope vault".to_string()),
         ("scope-homelab", "~/.cargo/bin/stenio --scope homelab".to_string()),
@@ -1162,6 +1212,10 @@ fn scripted(
         ok(""),
     );
     m.insert(
+        ssh("docker image inspect -f '{{.Id}}' stenio-sentinel:prev-4.17.0"),
+        ok("sha256:abc"),
+    );
+    m.insert(
         ssh("cd /srv/data/miracena && docker compose up -d stenio"),
         ok(""),
     );
@@ -1282,6 +1336,36 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         .as_ref()
         .is_some_and(|d| fd_prev_count(d) == 0);
     let _ = std::fs::remove_dir_all(&tree11);
+    // GB-274 (c): the closing step verifies the rollback exists. Removing the prev tag from kuaray
+    // (docker inspect fails) turns the good run red, naming the missing tag; removing the local
+    // copy does the same through a direct call. The good run counts what it iterated.
+    let (a12, tree12) = fixture_tree("4.17.0", "4.18.0");
+    let mut no_tag = scripted(&a12, "4.18.0");
+    no_tag.insert(
+        key(&[
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "kuaray",
+            "docker image inspect -f '{{.Id}}' stenio-sentinel:prev-4.17.0",
+        ]
+        .map(String::from)),
+        (1, String::new()),
+    );
+    let no_tag_run = run_steps(&Fake(no_tag), &a12);
+    let local_gone = a12
+        .install_dir
+        .as_ref()
+        .map(|d| std::fs::remove_file(d.join("stenio.prev-4.17.0")).is_ok())
+        .unwrap_or(false);
+    let no_local = check_rollback(
+        &Fake(scripted(&a12, "4.18.0")),
+        &a12,
+        "4.18.0",
+        "4.17.0",
+        true,
+    );
+    let _ = std::fs::remove_dir_all(&tree12);
     let unsafe_tag = !valid(&RelArgs {
         tag: "v1;rm".into(),
         ..a.clone()
@@ -1305,7 +1389,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 16,
+            plan(&a).len() == 17,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -1319,7 +1403,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 16,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 17,
         ),
         (
             "release-engine fails when the built binary declares another version".to_string(),
@@ -1391,6 +1475,20 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                         && l.detail.contains("already was")
                 })
                 && same_no_prev,
+        ),
+        (
+            "release-engine verifies the rollback artifacts exist after the run".to_string(),
+            good.iter().any(|l| {
+                l.name == "rollback-kept" && l.status == Status::Pass && l.detail.starts_with("2/2")
+            }) && no_tag_run.iter().any(|l| {
+                l.name == "rollback-kept"
+                    && l.status == Status::Fail
+                    && l.detail.contains("1/2")
+                    && l.detail.contains("prev-4.17.0")
+            }) && local_gone
+                && no_local.status == Status::Fail
+                && no_local.detail.contains("1/2")
+                && no_local.detail.contains("stenio.prev-4.17.0"),
         ),
         (
             "release-engine plan keeps the vault scopes last, in order".to_string(),
