@@ -290,6 +290,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Replace 'hard' with 'soft,timeo=50,retrans=2' in mount options inside /etc/fstab or systemd mount units.",
     },
     RuleExplanation {
+        id: "UWSM-APP-EXEC",
+        name: "UWSM App Scope & Environment Contract",
+        severity: "WARN",
+        tag: "homelab",
+        summary: "Requires GUI/session apps launched under UWSM-managed Hyprland to use 'uwsm app --' (and avoids redundant dbus-update-activation-environment).",
+        rationale: "Launching apps directly via hl.exec_cmd traps them inside session.slice/wayland-wm@hyprland.desktop.service instead of isolated app-*.scope units under app.slice. This disables hyprland-focused-booster VRAM prioritization (which only targets app.slice) and causes Noctalia's launch_apps_as_systemd_services to silently fall back to direct spawning.",
+        bad_example: "hl.exec_cmd(\"noctalia\")\nhl.exec_cmd(\"[workspace 1 silent] zen-browser\")",
+        good_example: "hl.exec_cmd(\"uwsm app -- noctalia\")\nhl.exec_cmd(\"[workspace 1 silent] uwsm app -- zen-browser\")",
+        remediation: "Prefix GUI/session launches in ~/.config/hypr/config/*.lua with 'uwsm app -- ', remove redundant dbus-update-activation-environment calls, and keep launch_apps_as_systemd_services = true in ~/.config/noctalia/config.toml.",
+    },
+    RuleExplanation {
         id: "HOMELAB-GPU-UNIFIED",
         name: "GPU Claim Outside the Centralized Gateway",
         severity: "WARN",
