@@ -672,6 +672,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
     for (name, ok) in guardian::self_test_cases()
         .into_iter()
         .chain(infra::self_test_cases())
+        .chain(comments::self_test_cases())
     {
         total += 1;
         if ok {

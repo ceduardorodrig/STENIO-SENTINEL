@@ -117,15 +117,11 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
         .replace("pokemon", "")
         .replace("sérgio", "");
 
-    // 2. Portuguese accented letters (strong, definitive indicator)
-    for c in cleaned.chars() {
-        if matches!(
-            c,
-            'á' | 'à' | 'â' | 'ã' | 'é' | 'ê' | 'í' | 'ó' | 'ô' | 'õ' | 'ú' | 'ç'
-        ) {
-            return true;
-        }
-    }
+    // 2. Portuguese accented words are evidence, not proof (GB-278): an English comment that only
+    //    names a place or a person (`Timezone: Brasilia is UTC-3`) is not Portuguese. They count
+    //    towards the sentence-level threshold below, with capitalised non-initial words (proper
+    //    nouns) excluded.
+    let accented_words = count_accented_pt_words(comment);
 
     // 3. Unambiguous Portuguese grammatical words & technical terms (unaccented forms)
     static UNAMBIGUOUS_PT_WORDS: &[&str] = &[
@@ -194,10 +190,13 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
         }
     }
 
-    // 4. Multiple Portuguese stop-words (>= 2)
+    // 4. Sentence-level evidence: Portuguese function words plus accented lowercase words, at
+    //    least two in the same comment. Function words that are also common English words or
+    //    identifiers (a, as, do, no, os, e, o) are deliberately absent.
     static PT_STOPWORDS: &[&str] = &[
         "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta", "esse", "essa",
-        "aquele", "aquela", "quando", "onde", "porque", "uma", "mais",
+        "aquele", "aquela", "quando", "onde", "porque", "uma", "mais", "de", "da", "dos", "das",
+        "em", "na", "nas", "nos", "um", "uns", "que", "por", "se", "ao", "aos",
     ];
 
     let sw_count = words
@@ -205,7 +204,44 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
         .filter(|w| PT_STOPWORDS.iter().any(|&sw| sw == **w))
         .count();
 
-    sw_count >= 2
+    sw_count + accented_words >= 2
+}
+
+/// Counts words with Portuguese accented letters, skipping brand names, URL/path-like tokens and
+/// capitalised words that are not the first word of the comment (proper nouns such as a city name).
+fn count_accented_pt_words(comment: &str) -> usize {
+    const BRANDS: &[&str] = &["sumænimá", "stênio", "pokémon", "sérgio"];
+    let mut count = 0;
+    let mut first = true;
+    for raw in comment.split_whitespace() {
+        let is_first = first;
+        first = false;
+        let trimmed = raw.trim_matches(|c: char| !c.is_alphanumeric());
+        if trimmed.contains("://") || trimmed.contains('/') || trimmed.contains('.') {
+            continue;
+        }
+        for word in trimmed.split(|c: char| !c.is_alphanumeric() && c != '_') {
+            let Some(initial) = word.chars().next() else {
+                continue;
+            };
+            let lowered = word.to_lowercase();
+            if BRANDS.iter().any(|b| lowered.contains(b)) {
+                continue;
+            }
+            if initial.is_uppercase() && !is_first {
+                continue;
+            }
+            if lowered.chars().any(|c| {
+                matches!(
+                    c,
+                    'á' | 'à' | 'â' | 'ã' | 'é' | 'ê' | 'í' | 'ó' | 'ô' | 'õ' | 'ú' | 'ç'
+                )
+            }) {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 #[cfg(test)]
@@ -278,6 +314,21 @@ mod tests {
         // Stopwords combination
         assert!(is_portuguese_comment("feito para rodar com docker"));
 
+        // GB-278: sentence-level evidence, the rule's own --explain example stays red
+        assert!(is_portuguese_comment(
+            "função para validar o token do usuário"
+        ));
+        assert!(is_portuguese_comment(
+            "Timezone: Brasília, mas a função não trata o fuso"
+        ));
+
+        // GB-278: an English comment with a proper noun or one accented word is not Portuguese
+        assert!(!is_portuguese_comment(
+            "Timezone: Brasília is UTC-3, handled by the caller."
+        ));
+        assert!(!is_portuguese_comment("Render the São Paulo office hours"));
+        assert!(!is_portuguese_comment("Serve the café menu from cache"));
+
         // English comments (should pass)
         assert!(!is_portuguese_comment(
             "Initialize the database connection pool"
@@ -291,4 +342,23 @@ mod tests {
             "Sumænimá Hub audio stream pipeline with Stênio kernel"
         ));
     }
+}
+
+/// GB-278 self-test cases for CODE-NO-PORTUGUESE-COMMENTS (wired into `--self-test`).
+pub fn self_test_cases() -> Vec<(&'static str, bool)> {
+    let pt = |line: &str| extract_comment("rs", line).is_some_and(is_portuguese_comment);
+    vec![
+        (
+            "pt-comment: English comment with a proper noun is not Portuguese",
+            !pt("// Timezone: Brasília is UTC-3, handled by the caller."),
+        ),
+        (
+            "pt-comment: the --explain example stays red",
+            pt("// função para validar o token do usuário"),
+        ),
+        (
+            "pt-comment: mixed comment with 2+ Portuguese function words stays red",
+            pt("// Timezone: Brasília, mas a função não trata o fuso"),
+        ),
+    ]
 }
