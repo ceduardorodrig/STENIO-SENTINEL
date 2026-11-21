@@ -453,6 +453,99 @@ fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
     dry_run(a, b).is_some()
 }
 
+/// GB-271: the tree a scope scans. A scope may descend into a conventional sub-folder of the
+/// path it was given (`mnemocine/`, `curriculum-vitae/`, `sumaenimahub/sumaenima-hub`), which is
+/// still inside that tree. The owner's local Hub checkout (`hub_fallback`) is only a default for a
+/// run with no `--path`: with an explicit `--path` it is `None` and the scan never leaves the
+/// tree that was passed (two agents had `--scope hub --path <clone>` silently scan the checkout).
+fn resolve_scan_target(
+    scope: &str,
+    path: &Path,
+    p_str: &str,
+    hub_fallback: Option<&Path>,
+) -> PathBuf {
+    let inside = |rel: &str| path.join(rel).is_dir().then(|| path.join(rel));
+    match scope {
+        "homelab" | "mnemocine" => inside("mnemocine"),
+        "hub" => {
+            if p_str.contains("sumaenima-hub") || p_str.contains("SUMAENIMA-HUB") {
+                None
+            } else {
+                inside("sumaenimahub/sumaenima-hub")
+                    .or_else(|| inside("sumaenimahub/SUMAENIMA-HUB"))
+                    .or_else(|| inside("sumaenima-hub"))
+                    .or_else(|| hub_fallback.filter(|h| h.is_dir()).map(Path::to_path_buf))
+            }
+        }
+        "cv" => inside("curriculum-vitae"),
+        _ => None,
+    }
+    .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// GB-271: findings print relative to the scanned tree, never with the host's absolute path.
+fn relativize(file_path: &str, root: &Path) -> String {
+    Path::new(file_path)
+        .strip_prefix(root)
+        .ok()
+        .filter(|r| !r.as_os_str().is_empty())
+        .map(|r| r.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.to_string())
+}
+
+/// GB-271 cases: with an explicit `--path` the scan target is that tree even when the owner's
+/// default Hub checkout exists, and findings come out relative to it.
+fn scope_path_cases() -> Vec<(String, bool)> {
+    let tree = |tag: &str, files: &[(&str, &str)]| {
+        let files: Vec<(String, String)> = files
+            .iter()
+            .map(|(p, t)| (p.to_string(), t.to_string()))
+            .collect();
+        frappe::write_fixture(tag, &files)
+    };
+    let a = tree("scope-clone-a", &[("src/main.rs", "fn main() {}\n")]);
+    let b = tree("scope-default-b", &[("src/main.rs", "fn main() {}\n")]);
+    let (Some(a), Some(b)) = (a, b) else {
+        return vec![("scope: fixtures could not be written".to_string(), false)];
+    };
+    let explicit = resolve_scan_target("hub", &a, "clone-a", None);
+    let legacy = resolve_scan_target("hub", &a, "clone-a", Some(&b));
+    let nested = tree(
+        "scope-parent",
+        &[("sumaenima-hub/src/main.rs", "fn main() {}\n")],
+    );
+    let parent = nested
+        .as_ref()
+        .map(|n| resolve_scan_target("hub", n, "parent", None) == n.join("sumaenima-hub"));
+    let dirty_src = concat!("fn main() { let x: Option<u8> = None; x.", "unwrap(); }\n");
+    let dirty = compact_probe_scope("scope-hub-dirty", "hub", dirty_src);
+    for d in [Some(a.clone()), Some(b), nested].into_iter().flatten() {
+        let _ = std::fs::remove_dir_all(d);
+    }
+    vec![
+        (
+            "scope: explicit --path with --scope hub scans exactly that tree".to_string(),
+            explicit == a,
+        ),
+        (
+            "scope: mutation, without --path the default Hub checkout is the fallback".to_string(),
+            legacy != a,
+        ),
+        (
+            "scope: hub path that is a parent folder still resolves inside it".to_string(),
+            parent == Some(true),
+        ),
+        (
+            "scope: findings print relative to the scanned tree".to_string(),
+            relativize("/x/clone/src/a.rs", Path::new("/x/clone")) == "src/a.rs"
+                && relativize("rel/a.rs", Path::new("/x")) == "rel/a.rs"
+                && dirty
+                    .as_ref()
+                    .is_some_and(|(t, code)| *code == 1 && t.contains("[ERROR] src/main.rs:")),
+        ),
+    ]
+}
+
 /// GB-266: the one line `--compact` always ends with, so a pass differs from a run that never
 /// happened. Every number is the count of what the run actually iterated (rule 12.3); `exit=`
 /// is the status the process is about to return.
@@ -474,6 +567,11 @@ fn compact_summary(
 
 /// Runs this binary with `--compact --strict` over a one-crate tree and returns (stdout, exit).
 fn compact_probe(tag: &str, source: &str) -> Option<(String, i32)> {
+    compact_probe_scope(tag, "project", source)
+}
+
+/// Same probe under an explicit `--scope`; the scan must stay inside the fixture.
+fn compact_probe_scope(tag: &str, scope: &str, source: &str) -> Option<(String, i32)> {
     let files = vec![
         (
             "Cargo.toml".to_string(),
@@ -483,7 +581,7 @@ fn compact_probe(tag: &str, source: &str) -> Option<(String, i32)> {
     ];
     let root = frappe::write_fixture(tag, &files)?;
     let out = std::process::Command::new(std::env::current_exe().ok()?)
-        .args(["--compact", "--strict", "--path"])
+        .args(["--compact", "--strict", "--scope", scope, "--path"])
         .arg(&root)
         .output()
         .ok();
@@ -591,6 +689,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(dependabot::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(compact_cases())
+        .chain(scope_path_cases())
     {
         total += 1;
         if ok {
@@ -2435,35 +2534,18 @@ fn main() -> Result<()> {
                 .map(|s| s.eq_ignore_ascii_case("DB-MIGRATION-INTEGRITY"))
                 .unwrap_or(false));
 
-    let scan_target = if scope == "homelab" || scope == "mnemocine" {
-        if args.path.join("mnemocine").is_dir() {
-            args.path.join("mnemocine")
+    let path_explicit = std::env::args().any(|a| a == "--path" || a.starts_with("--path="));
+    let hub_default = PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub");
+    let scan_target = resolve_scan_target(
+        &scope,
+        &args.path,
+        &p_str,
+        if path_explicit {
+            None
         } else {
-            args.path.clone()
-        }
-    } else if scope == "hub" {
-        if p_str.contains("sumaenima-hub") || p_str.contains("SUMAENIMA-HUB") {
-            args.path.clone()
-        } else if args.path.join("sumaenimahub/sumaenima-hub").is_dir() {
-            args.path.join("sumaenimahub/sumaenima-hub")
-        } else if args.path.join("sumaenimahub/SUMAENIMA-HUB").is_dir() {
-            args.path.join("sumaenimahub/SUMAENIMA-HUB")
-        } else if args.path.join("sumaenima-hub").is_dir() {
-            args.path.join("sumaenima-hub")
-        } else if PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub").is_dir() {
-            PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub")
-        } else {
-            args.path.clone()
-        }
-    } else if scope == "cv" {
-        if args.path.join("curriculum-vitae").is_dir() {
-            args.path.join("curriculum-vitae")
-        } else {
-            args.path.clone()
-        }
-    } else {
-        args.path.clone()
-    };
+            Some(&hub_default)
+        },
+    );
 
     let diff_target: Option<&str> = if args.pre_commit.as_deref() == Some("check") {
         Some("staged")
@@ -2795,6 +2877,10 @@ fn main() -> Result<()> {
         }
     }
 
+    for v in &mut report.violations {
+        v.file_path = relativize(&v.file_path, &scan_target);
+    }
+
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         if args.strict && report.error_count > 0 {
@@ -2864,6 +2950,7 @@ fn main() -> Result<()> {
     );
     let badge = format!("[{:.2?}]", report.duration);
     baseline::print_banner_with_badge(&banner_title, &badge);
+    println!("Scan target: {}", scan_target.display());
 
     // Governance Audit (AGENTS.md)
     if should_audit_gov {

@@ -154,7 +154,7 @@ StenioSentinel v4.14.0 — Universal AI Governance & Static Sentinel
 Usage: stenio [OPTIONS]
 
 Options:
-      --path <PATH>          Target directory to scan [default: .]
+      --path <PATH>          Target directory to scan [default: .]; when given, every scope scans exactly this tree, prints paths relative to it and names it in the header (`Scan target:`, GB-271)
       --scope <SCOPE>        Audit scope: [hub, homelab, vault, doc, cv, all]
       --rule <RULE_ID>       Execute only a specific rule by ID
       --diff [<REF>]         Audit only files modified relative to git ref (e.g., HEAD~1 or staged)

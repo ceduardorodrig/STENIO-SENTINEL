@@ -1236,6 +1236,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the missing fieldname to field_order at the position it should render, or remove the stale entry.",
     },
     RuleExplanation {
+        id: "SCOPE-HUB-PATH-RESOLUTION",
+        name: "An Explicit --path Is The Tree That Gets Scanned",
+        severity: "INFO",
+        tag: "output",
+        summary: "With --path given, every scope scans exactly that tree (a scope may only descend into a conventional sub-folder of it: mnemocine/, curriculum-vitae/, sumaenimahub/sumaenima-hub). Findings print relative to the scanned tree and the report header names it (`Scan target: <path>`). The owner's local Hub checkout is only the default of a run with no --path.",
+        rationale: "On 2026-11-21 two agents ran `stenio --scope hub --path <fresh clone>` and the scope silently scanned /mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub instead, one of them printing a WARN with the hardcoded absolute path (GB-271). A scan of the wrong tree is a green gate that proves nothing; the header makes any redirect visible and the self-test (scope: ...) fails when the fallback overrides an explicit path.",
+        bad_example: "$ stenio --scope hub --path /tmp/clone\n(scans /mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub)",
+        good_example: "$ stenio --scope hub --path /tmp/clone\nScan target: /tmp/clone\n[ERROR] src/main.rs:1: ...",
+        remediation: "Read the `Scan target:` line; pass the repository root with --path.",
+    },
+    RuleExplanation {
         id: "STENIO-ITEM-FORMAT",
         name: "Stenio Backlog Item Format",
         severity: "ERROR",
