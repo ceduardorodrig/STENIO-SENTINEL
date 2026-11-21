@@ -203,6 +203,24 @@ pub struct DependabotConfig {
     pub exclude: Option<Vec<DependabotExclude>>,
 }
 
+/// One `[[ci.parity_exclude]]` entry: a workflow step that deliberately re-implements a Stenio
+/// rule (`CI-STEP-STENIO-PARITY`). The `reason` is mandatory; an empty one silences nothing.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct CiParityExclude {
+    /// Stenio rule id the inline step copies (e.g. `FRAPPE-LINK-TITLE`).
+    pub rule: String,
+    /// Substring of the step name; absent means every step.
+    pub step: Option<String>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// `[ci]` table: sanctioned exclusions for `CI-STEP-STENIO-PARITY`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct CiConfig {
+    pub parity_exclude: Option<Vec<CiParityExclude>>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SteniocheckConfig {
@@ -218,6 +236,7 @@ pub struct SteniocheckConfig {
     pub frappe: Option<FrappeConfig>,
     pub parity: Option<ParityConfig>,
     pub dependabot: Option<DependabotConfig>,
+    pub ci: Option<CiConfig>,
 }
 
 impl SteniocheckConfig {

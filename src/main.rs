@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 mod backlog;
 mod baseline;
+mod ci;
 mod clean;
 mod comments;
 mod config;
@@ -694,6 +695,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(hook_fixtures::self_test_cases())
+        .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
@@ -2791,6 +2793,26 @@ fn main() -> Result<()> {
             }
             report.total_violations += 1;
             report.violations.push(v);
+        }
+    }
+
+    // ── CI workflow rules (CI-STEP-STENIO-PARITY GB-262, CI-RUST-COMPILE-ON-DEPENDENCY-PR GB-272)
+    let should_audit_ci = (tag_lower.as_deref() == Some("ci") || tag_lower.is_none())
+        && only_rule
+            .map(|s| {
+                s.eq_ignore_ascii_case(ci::PARITY_ID) || s.eq_ignore_ascii_case(ci::COMPILE_ID)
+            })
+            .unwrap_or(true);
+    if should_audit_ci {
+        let ci_root = dependabot::repo_root(&args.path, &scan_target);
+        let found = ci::audit(ci_root, &SteniocheckConfig::load_from_dir(ci_root));
+        doc_messages.extend(found.messages);
+        for v in found.violations {
+            if only_rule.is_none_or(|r| r.eq_ignore_ascii_case(&v.rule_id)) {
+                report.warning_count += 1;
+                report.total_violations += 1;
+                report.violations.push(v);
+            }
         }
     }
 

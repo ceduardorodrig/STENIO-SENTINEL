@@ -1444,6 +1444,28 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "$ bash scripts/agent-hooks/test-rust-tools-guard.sh | tail -2\n11/11 cases\nMUTATION OK: mutant (EDIT-NOOP removed) fails: ...",
         remediation: "Run the script by hand, fix rust-tools-guard.sh (or the fixture that really changed) until it prints N/N cases and MUTATION OK; never edit the expected lines to match a broken guard.",
     },
+    RuleExplanation {
+        id: "CI-STEP-STENIO-PARITY",
+        name: "CI Step Duplicates A Stenio Rule",
+        severity: "WARNING",
+        tag: "ci",
+        summary: "A `run:` block of .github/workflows/*.yml whose body is a script (python, jq, rg, grep, awk, node, ruby or perl) and contains every marker group of one Stenio subject re-implements that rule: FRAPPE-LINK-TITLE (title_field + show_title_field_in_link or search_fields), FRAPPE-FIELD-ORDER (field_order + fieldname), FRAPPE-FETCH-PARITY (fetch_from + fetch_if_empty or fieldname), DEPENDABOT-LOCKFILE-COVERAGE (Cargo.lock or package-lock.json + dependabot), I18N-PO-INCOMPLETE (msgid + msgstr). A step that invokes stenio itself is never reported. A deliberate copy is declared with [[ci.parity_exclude]] (rule, optional step substring, mandatory reason) in steniocheck.toml; an exclusion without a reason silences nothing and a stale one is reported.",
+        rationale: "GB-262, 2026-11-05..09: the inline Python step 'DocType JSON is valid and every Link target has a title' in Miracenar/miracena-plataforma-frappe required title_field and show_title_field_in_link while FRAPPE-LINK-TITLE also accepts search_fields (README FRAPPE-LINK-TITLE row); CI was red on 57 of 60 runs (rc103..rc127) and the red was tolerated. Two statements of one rule drift; the workflow cannot be as well tested as the engine. The heuristic is narrow on purpose: all marker groups plus a script interpreter, so prose and echo lines never match.",
+        bad_example: "- name: Every Link target has a title\n  run: |\n    python3 - <<'PY'\n    ... t.get('title_field') and t.get('show_title_field_in_link') ...\n    PY",
+        good_example: "- name: StenioSentinel\n  run: stenio --tag miracena --strict --compact",
+        remediation: "Delete the inline script and let the engine decide (`stenio --tag <tag> --strict --compact`, or the stenio-check action); if the copy is deliberate, add [[ci.parity_exclude]] with rule and reason to steniocheck.toml.",
+    },
+    RuleExplanation {
+        id: "CI-RUST-COMPILE-ON-DEPENDENCY-PR",
+        name: "Dependabot Cargo PRs Are Never Compiled",
+        severity: "WARNING",
+        tag: "ci",
+        summary: "A repository with a Cargo.lock next to a Cargo.toml and a `cargo` update entry in .github/dependabot.yml needs at least one workflow that runs on `pull_request` (or is a reusable workflow_call / job-level `uses:`, whose body is invisible) and compiles Rust: cargo check|build|test|clippy|nextest|bench|llvm-cov|tauri build, cargo-nextest, docker build, cross, a repository script (*.sh) or Makefile/justfile target that does, or the docker/build-push-action, actions-rs/cargo and tauri-action actions. Inert without a Cargo.lock or without the cargo entry. A repository that deliberately has no compiling CI declares [[dependabot.exclude]] rule = \"cargo-compile\" with a mandatory reason in steniocheck.toml; without a reason it silences nothing, and one that matches a repo that does compile is stale.",
+        rationale: "GB-272, 2026-11-21: KURURU-TAB3LITE-LINUX ran only the Stenio Governance Audit, so Dependabot PR #5 (alacritty_terminal 0.25 -> 0.26, a 0.x minor) had green checks while nothing compiled it, and a sub-agent had to clone the PR and run cargo check --locked to decide. The Hub CI compiles and caught 11 breaking errors on its PR #62 (18 Rust bumps); MNEMOCINE-OPS has no CI at all. A bump that is never compiled is merged on trust.",
+        bad_example: "# Cargo.lock + dependabot cargo entry\n# .github/workflows/ci.yml only runs uses: .../stenio-check@v1",
+        good_example: "# .github/workflows/ci.yml\non: [pull_request]\njobs:\n  rust:\n    steps:\n      - run: cargo check --locked --workspace --all-targets",
+        remediation: "Add a pull_request job that runs `cargo check --locked --workspace --all-targets` (or build/test); for a repo without CI declare [[dependabot.exclude]] rule = \"cargo-compile\" with a reason.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
