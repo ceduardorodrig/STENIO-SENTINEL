@@ -191,12 +191,12 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
     }
 
     // 4. Sentence-level evidence: Portuguese function words plus accented lowercase words, at
-    //    least two in the same comment. Function words that are also common English words or
-    //    identifiers (a, as, do, no, os, e, o) are deliberately absent.
+    //    least two in the same comment. The word list is the pre-4.36.0 one on purpose: the
+    //    detector only got narrower (every comment it flags now was flagged before), so a repo
+    //    that was green on 4.35.0 never turns red on 4.36.0.
     static PT_STOPWORDS: &[&str] = &[
         "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta", "esse", "essa",
-        "aquele", "aquela", "quando", "onde", "porque", "uma", "mais", "de", "da", "dos", "das",
-        "em", "na", "nas", "nos", "um", "uns", "que", "por", "se", "ao", "aos",
+        "aquele", "aquela", "quando", "onde", "porque", "uma", "mais",
     ];
 
     let sw_count = words
