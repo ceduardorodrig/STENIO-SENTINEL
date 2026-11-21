@@ -785,6 +785,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "HOMELAB-NFS-SOFT",
                 "HOMELAB-FRONTMATTER",
                 "HOMELAB-TAG-ROOT",
+                "UWSM-APP-EXEC",
             ],
         ),
         (

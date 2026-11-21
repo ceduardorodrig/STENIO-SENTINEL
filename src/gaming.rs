@@ -62,10 +62,11 @@ pub fn run_gaming_health() -> Result<()> {
     // 2. Hyprland Direct Scanout (minimal latency in fullscreen)
     println!(
         "{}",
-        "── ⚡ Hyprland Direct Scanout (minimal latency in fullscreen) ─────────".dimmed()
+        "── ⚡ Hyprland Direct Scanout & UWSM Scope Isolation ─────────────────".dimmed()
     );
     if session == "Hyprland" {
         check_hyprland_scanout();
+        check_uwsm_session_isolation();
     } else {
         println!(
             "   {:<34} KWin always composes — scanout not applicable (SM natively ok)",
@@ -692,4 +693,102 @@ fn game_names_from_list() -> std::collections::HashMap<u64, String> {
         }
     }
     map
+}
+
+/// Returns unique process names inside `wayland-wm@hyprland.desktop.service` that are not core compositor/session daemons.
+pub(crate) fn find_unscoped_session_comms<'a>(
+    comms: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    const ALLOWED_SESSION_COMMS: &[&str] = &[
+        "start-hyprland",
+        "Hyprland",
+        "Xwayland",
+        "xdg-desktop-portal-hyprland",
+        "xdg-desktop-por",
+        "hyprpolkitagent",
+        "hypridle",
+        "hyprlock",
+    ];
+    let mut leaked = Vec::new();
+    for raw in comms {
+        let comm = raw.trim();
+        if comm.is_empty() || ALLOWED_SESSION_COMMS.contains(&comm) {
+            continue;
+        }
+        if !leaked.iter().any(|s| s == comm) {
+            leaked.push(comm.to_string());
+        }
+    }
+    leaked
+}
+
+/// Inspects the live `wayland-wm@hyprland.desktop.service` cgroup for apps that escaped `app.slice` (GB-273).
+pub(crate) fn check_uwsm_session_isolation() {
+    if !service_active(false, "wayland-wm@hyprland.desktop") {
+        return;
+    }
+    let cgroup_procs = std::path::Path::new(
+        "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/session.slice/wayland-wm@hyprland.desktop.service/cgroup.procs",
+    );
+    let Ok(raw_pids) = std::fs::read_to_string(cgroup_procs) else {
+        return;
+    };
+    let mut comms = Vec::new();
+    for pid in raw_pids.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let comm_path = format!("/proc/{pid}/comm");
+        if let Ok(comm) = std::fs::read_to_string(comm_path) {
+            let trimmed = comm.trim().to_string();
+            if !trimmed.is_empty() {
+                comms.push(trimmed);
+            }
+        }
+    }
+    let leaked = find_unscoped_session_comms(comms.iter().map(String::as_str));
+    let preview: Vec<&str> = leaked.iter().take(5).map(String::as_str).collect();
+    let fail_msg = if leaked.len() > 5 {
+        format!(
+            "{} unscoped app(s) in session.slice: {}, ...",
+            leaked.len(),
+            preview.join(", ")
+        )
+    } else {
+        format!(
+            "{} unscoped app(s) in session.slice: {}",
+            leaked.len(),
+            preview.join(", ")
+        )
+    };
+    check_status(
+        "UWSM app.slice isolation",
+        leaked.is_empty(),
+        "0 apps trapped in wayland-wm@hyprland.desktop.service",
+        &fail_msg,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_unscoped_session_comms;
+
+    #[test]
+    fn allows_core_compositor_and_flags_escaped_apps() {
+        let sample = [
+            "start-hyprland",
+            "Hyprland",
+            "Xwayland",
+            "xdg-desktop-por",
+            "noctalia",
+            "zen-bin",
+            "zen-bin",
+            "kitty",
+        ];
+        let leaked = find_unscoped_session_comms(sample);
+        assert_eq!(leaked, vec!["noctalia", "zen-bin", "kitty"]);
+    }
+
+    #[test]
+    fn empty_when_only_session_daemons_present() {
+        let sample = ["start-hyprland", "Hyprland", "Xwayland", "hyprpolkitagent"];
+        assert!(find_unscoped_session_comms(sample).is_empty());
+    }
 }
