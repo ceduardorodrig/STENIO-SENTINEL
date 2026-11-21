@@ -75,6 +75,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-FIELD-ORDER",
+        "DocType fields[] And field_order Disagree",
+        Severity::Error,
+    ),
+    (
         "FRAPPE-AUTONAME-COLLISION",
         "Duplicate Guard Defeated By Autoname",
         Severity::Error,
@@ -690,6 +695,76 @@ fn rule_doctype_headers(c: &Ctx) -> Vec<Violation> {
             out.push(viol("FRAPPE-DOCTYPE-HEADER-KEYS", &r, 1, stem,
                 format!("DocType `{name}` lives in the folder `{stem}`: the folder must be the name in snake_case."),
                 "Rename the folder (and its .py/__init__.py) to match the DocType name."));
+        }
+    }
+    out
+}
+
+// ── FRAPPE-FIELD-ORDER (GB-263) ────────────────────────────────────────────
+/// `fields[]` and `field_order` must name the same fieldnames. Frappe exports
+/// `field_order = [f.fieldname for f in self.fields]` (layout breaks included, they carry
+/// auto-generated fieldnames) and on import (`DocType.prepare_for_import`) puts the entries of
+/// `field_order` first and APPENDS every field it does not list at the end of the form; an entry
+/// naming no field is dropped silently. Both directions are the silent reorder of GB-263
+/// (Project.is_internal missing from field_order, Miracena 30d2d9d). A field without a
+/// `fieldname` has no position to compare and is skipped; a missing or empty `field_order` is
+/// not used by Frappe at all (`if docdict.get("field_order")`), so nothing is compared.
+/// fonte: github.com/frappe/frappe v16.60.2 frappe/core/doctype/doctype/doctype.py:878-931.
+fn rule_field_order(c: &Ctx) -> Vec<Violation> {
+    let names = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for json in c.files.iter().filter(|p| doctype_json(p)) {
+        let text = read(json);
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let order = v.get("field_order").map(&names).unwrap_or_default();
+        if order.is_empty() {
+            continue;
+        }
+        let fields: Vec<String> = v
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|f| str_of(f, "fieldname"))
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let r = rel(&c.root, json);
+        let stem = str_of(&v, "name");
+        for (list, other, msg) in [
+            (
+                &fields,
+                &order,
+                "is in fields[] but not in field_order: Frappe appends it at the end of the form",
+            ),
+            (
+                &order,
+                &fields,
+                "is in field_order but names no field in fields[]",
+            ),
+        ] {
+            for n in list.iter().filter(|n| !other.contains(n)) {
+                out.push(viol(
+                    "FRAPPE-FIELD-ORDER",
+                    &r,
+                    line_of(&text, &format!("\"{n}\"")),
+                    n,
+                    format!("DocType `{stem}`: `{n}` {msg}."),
+                    "Keep field_order equal to the fieldnames of fields[], in form order (export the DocType from a site, or add/remove the entry by hand).",
+                ));
+            }
         }
     }
     out
@@ -5268,6 +5343,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     let mut all: Vec<Violation> = Vec::new();
     for f in [
         rule_doctype_headers,
+        rule_field_order,
         rule_controller,
         rule_autoname_collision,
         rule_link_title,
@@ -5653,7 +5729,16 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
         // VIZ-PANEL-SCHEMA: a Donut over the ordinal `Deal.stage` and a Pie over `Deal.value`.
         v.push(f("demoapp/desk/dashboard_chart.json", CHART_BAD));
         v.push(f("demoapp/demo/doctype/deal/__init__.py", ""));
-        v.push(f("demoapp/demo/doctype/deal/deal.json", DEAL_JSON));
+        // FRAPPE-FIELD-ORDER: the bad tree leaves `value` out of field_order and lists a ghost.
+        let deal_order = if bad {
+            "\"field_order\":[\"stage\",\"ghost\"],"
+        } else {
+            "\"field_order\":[\"stage\",\"value\"],"
+        };
+        v.push(f(
+            "demoapp/demo/doctype/deal/deal.json",
+            &DEAL_JSON.replacen("\"fields\"", &format!("{deal_order}\"fields\""), 1),
+        ));
         v.push(f(
             "demoapp/demo/doctype/deal/deal.py",
             "class Deal:\n    pass\n",

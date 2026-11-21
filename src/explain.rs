@@ -1225,6 +1225,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Read the last line: FAIL lists the findings above it; PASS with files=0 means the path or tag scanned nothing.",
     },
     RuleExplanation {
+        id: "FRAPPE-FIELD-ORDER",
+        name: "DocType fields[] And field_order Disagree",
+        severity: "ERROR",
+        tag: "frappe",
+        summary: "In a DocType JSON, every fieldname of fields[] must appear in field_order and every field_order entry must name a field of fields[]. Fields without a fieldname are skipped; a missing or empty field_order is not compared (Frappe ignores it too).",
+        rationale: "Frappe exports field_order as the fieldnames of fields[] (layout breaks included) and on import places the listed fields first and APPENDS every unlisted field at the end of the form, while an entry naming no field is dropped silently (frappe/core/doctype/doctype/doctype.py:878-931, v16.60.2). A field added to fields[] but not to field_order therefore lands at the bottom of the form with no error: Project.is_internal in Miracena commit 30d2d9d (GB-263).",
+        bad_example: "\"field_order\": [\"title\"],\n\"fields\": [{\"fieldname\": \"title\"}, {\"fieldname\": \"is_internal\"}]",
+        good_example: "\"field_order\": [\"title\", \"is_internal\"],\n\"fields\": [{\"fieldname\": \"title\"}, {\"fieldname\": \"is_internal\"}]",
+        remediation: "Add the missing fieldname to field_order at the position it should render, or remove the stale entry.",
+    },
+    RuleExplanation {
         id: "STENIO-ITEM-FORMAT",
         name: "Stenio Backlog Item Format",
         severity: "ERROR",
