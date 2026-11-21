@@ -108,6 +108,7 @@ fn owners(r: &dyn Runner) -> Result<Vec<String>, String> {
 #[derive(Default)]
 struct Repo {
     red_runs: Vec<String>,
+    stale_branch: Vec<String>,
     red_prs: Vec<String>,
     alerts: Option<usize>,
     alerts_no_pr: Vec<String>,
@@ -125,11 +126,26 @@ impl Repo {
     }
 }
 
-fn red_runs(r: &dyn Runner, full: &str, since: &str) -> Result<Vec<String>, String> {
+/// Names of every branch and tag of the repository (a head branch outside this set is gone).
+fn live_refs(r: &dyn Runner, full: &str) -> Result<BTreeSet<String>, String> {
+    let mut refs = BTreeSet::new();
+    for kind in ["branches", "tags"] {
+        for b in gh_list(r, &format!("repos/{full}/{kind}"), None)? {
+            refs.insert(st(&b, &["name"]).to_string());
+        }
+    }
+    Ok(refs)
+}
+
+/// Latest non-success run per workflow id and ref, split into `(red, stale_branch)`; a run whose
+/// head branch or tag no longer exists can never be fixed, so it is counted apart, not failed.
+fn red_runs(r: &dyn Runner, full: &str, since: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let path = format!("repos/{full}/actions/runs?status=completed&created=>={since}");
     let runs = gh_list(r, &path, Some("workflow_runs"))?;
     let mut seen: BTreeSet<(i64, String)> = BTreeSet::new();
     let mut red = Vec::new();
+    let mut stale = Vec::new();
+    let mut refs: Option<BTreeSet<String>> = None;
     for run in &runs {
         let wf = run.get("workflow_id").and_then(Value::as_i64).unwrap_or(0);
         let branch = st(run, &["head_branch"]);
@@ -138,10 +154,18 @@ fn red_runs(r: &dyn Runner, full: &str, since: &str) -> Result<Vec<String>, Stri
         }
         let concl = st(run, &["conclusion"]);
         if !matches!(concl, "success" | "skipped" | "neutral") {
-            red.push(format!("{} on {branch}: {concl}", st(run, &["name"])));
+            if refs.is_none() {
+                refs = Some(live_refs(r, full)?);
+            }
+            let msg = format!("{} on {branch}: {concl}", st(run, &["name"]));
+            if refs.as_ref().is_some_and(|s| s.contains(branch)) {
+                red.push(msg);
+            } else {
+                stale.push(msg);
+            }
         }
     }
-    Ok(red)
+    Ok((red, stale))
 }
 
 fn bad_check(r: &dyn Runner, full: &str, pr: &Value) -> Result<Option<String>, String> {
@@ -230,7 +254,10 @@ fn lockfile_conflicts(r: &dyn Runner, full: &str, prs: &[Value]) -> Result<Vec<S
 fn sweep_repo(r: &dyn Runner, full: &str, since: &str) -> Repo {
     let mut rep = Repo::default();
     match red_runs(r, full, since) {
-        Ok(v) => rep.red_runs = v,
+        Ok((red, stale)) => {
+            rep.red_runs = red;
+            rep.stale_branch = stale;
+        }
         Err(e) => rep.errors.push(e),
     }
     let prs = match gh_list(r, &format!("repos/{full}/pulls?state=open"), None) {
@@ -312,11 +339,13 @@ pub fn sweep(r: &dyn Runner, since: &str, only: &[String]) -> (Vec<String>, bool
             .filter(|v| !st(v, &["name"]).is_empty())
             .collect();
         let mut detail = Vec::new();
-        let (mut runs, mut prs, mut alerts, mut nopr, mut conf, mut errs) = (0, 0, 0, 0, 0, 0);
+        let (mut runs, mut stale, mut prs, mut alerts, mut nopr, mut conf, mut errs) =
+            (0, 0, 0, 0, 0, 0, 0);
         for repo in &live {
             let name = st(repo, &["name"]);
             let rep = sweep_repo(r, &format!("{owner}/{name}"), since);
             runs += rep.red_runs.len();
+            stale += rep.stale_branch.len();
             prs += rep.red_prs.len();
             alerts += rep.alerts.unwrap_or(0);
             nopr += rep.alerts_no_pr.len();
@@ -326,6 +355,11 @@ pub fn sweep(r: &dyn Runner, since: &str, only: &[String]) -> (Vec<String>, bool
                 .red_runs
                 .iter()
                 .map(|m| format!("red run {m}"))
+                .chain(
+                    rep.stale_branch
+                        .iter()
+                        .map(|m| format!("ignored (branch gone) {m}")),
+                )
                 .chain(rep.red_prs.iter().map(|m| format!("red {m}")))
                 .chain(
                     rep.alerts_no_pr
@@ -347,7 +381,7 @@ pub fn sweep(r: &dyn Runner, since: &str, only: &[String]) -> (Vec<String>, bool
         }
         repos_total += live.len();
         lines.push(format!(
-            "owner={owner} repos={} red_runs={runs} red_prs={prs} alerts={alerts} alerts_no_pr={nopr} lockfile_conflicts={conf} unverified={errs}",
+            "owner={owner} repos={} red_runs={runs} stale_branch={stale} red_prs={prs} alerts={alerts} alerts_no_pr={nopr} lockfile_conflicts={conf} unverified={errs}",
             live.len()
         ));
         lines.extend(detail);
@@ -412,16 +446,20 @@ impl Runner for Canned {
 /// conflicting lockfile. `orgs`: whether `user/orgs` lists the organisation.
 fn fixture(red: bool, orgs: bool) -> Canned {
     let g = |n: &str, b: &str| (format!("gh api {n}"), b.to_string());
-    let run = |wf: i64, br: &str, c: &str| {
-        format!(r#"{{"workflow_id":{wf},"name":"ci","head_branch":"{br}","conclusion":"{c}"}}"#)
+    let named = |wf: i64, name: &str, br: &str, c: &str| {
+        format!(r#"{{"workflow_id":{wf},"name":"{name}","head_branch":"{br}","conclusion":"{c}"}}"#)
     };
+    let run = |wf: i64, br: &str, c: &str| named(wf, "ci", br, c);
     let main_c = if red { "failure" } else { "success" };
     let runs = format!(
-        r#"{{"workflow_runs":[{},{},{},{}]}}"#,
+        r#"{{"workflow_runs":[{},{},{},{},{},{},{}]}}"#,
         run(1, "main", main_c),
         run(1, "main", "success"),
         run(2, "dev", "success"),
-        run(2, "dev", "failure")
+        run(2, "dev", "failure"),
+        run(3, "gone-branch", "failure"),
+        named(4, "Updater #2", "main", "success"),
+        named(4, "Updater #1", "main", "failure")
     );
     let pr = |n: i64, sha: &str, login: &str, title: &str| {
         format!(
@@ -459,6 +497,11 @@ fn fixture(red: bool, orgs: bool) -> Canned {
         g("repos/me/p1/pulls", "[]"),
         g("repos/me/p1/dependabot/alerts", "[]"),
         g("repos/orgx/r1/actions/runs", &runs),
+        g(
+            "repos/orgx/r1/branches",
+            r#"[{"name":"main"},{"name":"dev"}]"#,
+        ),
+        g("repos/orgx/r1/tags", "[]"),
         g("repos/orgx/r1/pulls?state=open", &prs),
         g(
             "repos/orgx/r1/commits/s1/check-runs",
@@ -512,6 +555,20 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (
             "sweep skips archived repos and superseded runs".to_string(),
             red.contains("owner=orgx repos=1 red_runs=1") && !red.contains("on dev"),
+        ),
+        (
+            "sweep ignores a run on a deleted branch but counts it".to_string(),
+            red.contains("stale_branch=1")
+                && red.contains("ignored (branch gone) ci on gone-branch")
+                && !red.contains("red run ci on gone-branch"),
+        ),
+        (
+            "sweep supersedes a differently named run of the same workflow id".to_string(),
+            !red.contains("Updater"),
+        ),
+        (
+            "sweep fails on an existing branch with a red latest run".to_string(),
+            !red_ok && red.contains("red run ci on main: failure"),
         ),
         (
             "sweep flags an alert with no Dependabot PR".to_string(),
