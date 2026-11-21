@@ -1255,7 +1255,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         rationale: "Opportunities logged by many agents on many harnesses are only actionable when each one carries the incident, the wanted behaviour and the proof (backlog-method.md section 9).",
         bad_example: "| **GB-900** | **Stenio: X.** Evidence: seen. | ... |",
         good_example: "stenio opportunity add --title X --evidence '...' --desired '...' --acceptance '...' --origin 'agent, harness'",
-        remediation: "Use `stenio opportunity add`, or complete the missing fields in the row.",
+        remediation: "Use `stenio opportunity add`, or complete the missing fields in the row. `opportunity add` also refuses a semantic duplicate of an open GB row (shared title words or evidence words, GB-265) naming the candidate ids; rerun with `--duplicate-of <id>` to record a deliberate overlap as `Related:`.",
     },
     RuleExplanation {
         id: "INFRA-COMPOSE-RESTART-POLICY",

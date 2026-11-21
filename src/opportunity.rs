@@ -87,6 +87,11 @@ struct AddArgs {
     path: Option<PathBuf>,
     #[arg(long)]
     dry_run: bool,
+    #[arg(
+        long,
+        help = "GB id of an open row this one overlaps with on purpose: recorded as `Related:` and lets the add pass the similarity guard"
+    )]
+    duplicate_of: Option<String>,
 }
 
 /// Input of [`add`], independent from the clap surface so tests can drive the writer.
@@ -100,6 +105,8 @@ pub struct AddRequest {
     pub priority: String,
     /// Vault-relative document that receives `pending: [id]`.
     pub doc: String,
+    /// Open row the author knows overlaps this one (intentional override, recorded in the row).
+    pub duplicate_of: Option<String>,
 }
 
 /// State of the `pending:` link after [`add`].
@@ -146,8 +153,16 @@ fn build_row(id: &str, a: &AddRequest) -> String {
         .map_or(title.clone(), |t| t.trim().to_string());
     let origin = clean(&a.origin);
     let name = a.doc.rsplit('/').next().unwrap_or(&a.doc);
+    let related = a
+        .duplicate_of
+        .as_deref()
+        .map(clean)
+        .filter(|r| !r.is_empty())
+        .map_or(String::new(), |r| {
+            format!(" Related: {r} (overlap acknowledged).")
+        });
     format!(
-        "| **{id}** | **Stenio: {title}.** Evidence: {}. Desired behaviour: {}. Acceptance: {}. Origin: {origin}. Status: open. | [`{name}`]({name}) | {} | open | {origin} | — |",
+        "| **{id}** | **Stenio: {title}.** Evidence: {}. Desired behaviour: {}. Acceptance: {}.{related} Origin: {origin}. Status: open. | [`{name}`]({name}) | {} | open | {origin} | — |",
         clean(&a.evidence),
         clean(&a.desired),
         clean(&a.acceptance),
@@ -199,6 +214,68 @@ fn find_duplicate(content: &str, title: &str) -> Option<String> {
     })
 }
 
+const STOP: [&str; 14] = [
+    "the", "and", "for", "with", "that", "this", "from", "was", "has", "not", "are", "but", "when",
+    "stenio",
+];
+
+/// Lower-case alphanumeric tokens of at least `min` chars, stop words removed.
+fn tokens(text: &str, min: usize) -> std::collections::BTreeSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= min && !STOP.contains(t))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Shared tokens and the containment ratio (shared / smaller set).
+fn overlap(
+    a: &std::collections::BTreeSet<String>,
+    b: &std::collections::BTreeSet<String>,
+) -> (usize, f64) {
+    let shared = a.intersection(b).count();
+    let small = a.len().min(b.len());
+    let ratio = if small == 0 {
+        0.0
+    } else {
+        shared as f64 / small as f64
+    };
+    (shared, ratio)
+}
+
+/// The `Evidence:` text of a row, up to `Desired behaviour:`.
+fn row_evidence(row: &str) -> &str {
+    let rest = row.split("Evidence:").nth(1).unwrap_or("");
+    rest.split("Desired behaviour:").next().unwrap_or(rest)
+}
+
+/// Open GB rows that look like the new one (GB-265): at least two shared title tokens covering
+/// at least 60% of the shorter title, or at least six shared evidence words (5+ chars) covering
+/// at least half of the shorter evidence. Returns `(id, reason)` pairs; the archive is not read.
+fn similar_rows(content: &str, title: &str, evidence: &str) -> Vec<(String, String)> {
+    let nt = tokens(&title_key(title), 3);
+    let ne = tokens(evidence, 5);
+    let mut out = Vec::new();
+    for line in content.lines().filter(|l| l.starts_with("| **GB-")) {
+        let cells: Vec<&str> = line.split('|').collect();
+        let state = cells.get(5).map_or("", |c| c.trim());
+        if state.contains("closed") || state.contains("done") {
+            continue;
+        }
+        let Some(id) = cells.get(1).map(|c| c.trim().trim_matches('*').to_string()) else {
+            continue;
+        };
+        let (ts, tr) = overlap(&nt, &tokens(row_title(line).unwrap_or(""), 3));
+        let (es, er) = overlap(&ne, &tokens(row_evidence(line), 5));
+        if ts >= 2 && tr >= 0.6 {
+            out.push((id, format!("title shares {ts} word(s)")));
+        } else if es >= 6 && er >= 0.5 {
+            out.push((id, format!("evidence shares {es} word(s)")));
+        }
+    }
+    out
+}
+
 fn validate(req: &AddRequest) -> Result<(), String> {
     for (name, v) in [
         ("title", &req.title),
@@ -228,6 +305,34 @@ pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String
             "duplicate: {existing} already has the title \"{}\"; nothing written",
             clean(&req.title)
         ));
+    }
+    let hint = req
+        .duplicate_of
+        .as_deref()
+        .map(clean)
+        .filter(|h| !h.is_empty());
+    if let Some(h) = &hint {
+        let known = original
+            .lines()
+            .any(|l| l.starts_with(&format!("| **{h}**")));
+        if !known {
+            return Err(format!(
+                "--duplicate-of {h}: no such GB row; nothing written"
+            ));
+        }
+    } else {
+        let similar = similar_rows(&original, &req.title, &req.evidence);
+        if !similar.is_empty() {
+            let names: Vec<String> = similar
+                .iter()
+                .map(|(i, why)| format!("{i} ({why})"))
+                .collect();
+            return Err(format!(
+                "similar open row(s): {}; nothing written. If this is a distinct item rerun with --duplicate-of {} (recorded as Related:), otherwise extend that row",
+                names.join(", "),
+                similar[0].0
+            ));
+        }
     }
     let row = build_row(&id, req);
     if dry_run {
@@ -289,6 +394,7 @@ impl AddArgs {
             origin: self.origin.clone(),
             priority: self.priority.clone(),
             doc: self.doc.clone(),
+            duplicate_of: self.duplicate_of.clone(),
         }
     }
 }
@@ -356,11 +462,49 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         origin: "Claude, Code".into(),
         priority: "🟠".into(),
         doc: DEFAULT_REF.into(),
+        duplicate_of: None,
     };
     let row = build_row("GB-099", &args("Stenio: X-RULE"));
     let broken = row.replace("Acceptance:", "Accept:");
     let table = "| ID |\n| **GB-001** | a |\n| **GB-002** | b |\n\ntext\n";
+    let backlog = "| **GB-247** | **Stenio: RELEASE-ENGINE-FMT-BEFORE-TAG.** Evidence: v4.30.0 was tagged and pushed with cargo fmt --check red in the CI step Check Formatting after the release workflow finished. Desired behaviour: x. Acceptance: y. | r | 🟡 | open | o | — |\n| **GB-100** | **Stenio: OTHER-THING.** Evidence: unrelated words entirely. Desired behaviour: x. | r | 🟡 | open | o | — |\n";
+    let names = |t: &str, e: &str| -> Vec<String> {
+        similar_rows(backlog, t, e)
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect()
+    };
     vec![
+        (
+            "opportunity add flags a semantic duplicate naming the row".to_string(),
+            names("FMT-BEFORE-TAG", "cargo fmt --check before the tag") == ["GB-247"],
+        ),
+        (
+            "opportunity add accepts a distinct row".to_string(),
+            names(
+                "SWEEP-OWNERS",
+                "gh repo list covered only the personal account",
+            )
+            .is_empty(),
+        ),
+        (
+            "opportunity add flags a duplicate by shared evidence".to_string(),
+            names(
+                "CI-GATE-ORDER",
+                "tagged and pushed with cargo fmt --check red in the CI step Check Formatting after the release workflow finished",
+            ) == ["GB-247"],
+        ),
+        (
+            "opportunity add records the --duplicate-of override".to_string(),
+            build_row(
+                "GB-099",
+                &AddRequest {
+                    duplicate_of: Some("GB-247".into()),
+                    ..args("X-RULE")
+                },
+            )
+            .contains("Related: GB-247"),
+        ),
         (
             "item format accepts a built row".to_string(),
             check_format("b.md", &row, "GB-099", 3).is_empty() && !row.contains("Stenio: Stenio:"),
@@ -431,6 +575,7 @@ mod tests {
             origin: "test, harness".to_string(),
             priority: "🟡".to_string(),
             doc: "governance/area.md".to_string(),
+            duplicate_of: None,
         }
     }
 
@@ -469,6 +614,29 @@ mod tests {
         assert!(err.contains("duplicate") && err.contains("GB-002"), "{err}");
         let after = fs::read_to_string(v.0.join("governance/backlog.md")).unwrap_or_default();
         assert_eq!(after, BACKLOG);
+    }
+
+    #[test]
+    fn add_refuses_a_semantic_duplicate_unless_overridden() {
+        let v = vault("similar");
+        assert!(seed(&v, "| **GB-040** | archived |\n"));
+        let mut r = request("Stenio: OLD-RULE-EXTENDED");
+        let Err(err) = add(&v.0, &r, false) else {
+            panic!("semantic duplicate accepted");
+        };
+        assert!(
+            err.contains("GB-002") && err.contains("--duplicate-of"),
+            "{err}"
+        );
+        assert!(request("Stenio: BRAND-NEW-CHECK").duplicate_of.is_none());
+        assert!(add(&v.0, &request("Stenio: BRAND-NEW-CHECK"), true).is_ok());
+        r.duplicate_of = Some("GB-002".to_string());
+        let Ok(done) = add(&v.0, &r, false) else {
+            panic!("override refused");
+        };
+        assert!(done.row.contains("Related: GB-002"), "{}", done.row);
+        r.duplicate_of = Some("GB-777".to_string());
+        assert!(add(&v.0, &r, true).is_err());
     }
 
     #[test]
