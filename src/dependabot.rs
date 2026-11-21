@@ -23,12 +23,24 @@
 //! reason = "vendored upstream crate, updated by hand"
 //! ```
 //!
+//! CARGO WORKSPACES (GB-270, 2026-11-21): a crate that is a MEMBER of a workspace whose root
+//! directory holds a `Cargo.lock` is resolved by that root lock and needs no directory of its own
+//! (https://doc.rust-lang.org/cargo/reference/workspaces.html: "All packages share a common
+//! Cargo.lock file which resides in the workspace root"). Members are the `[workspace] members`
+//! entries (globs `*`/`?` expanded) minus `exclude`, the `path` dependencies that live inside the
+//! workspace directory (automatic members) and every crate whose `package.workspace` points at
+//! the root. Consequences: a `Cargo.lock` inside a member is an inert ORPHAN (WARNING, cargo
+//! ignores it, delete it), it is never demanded as "uncovered", and listing a member directory in
+//! `dependabot.yml` is an ERROR (Dependabot fails with `dependency_file_not_resolvable` when the
+//! member inherits fields from the root manifest, KURURU run 44873311270). A standalone crate
+//! (not a member) keeps needing its own entry.
+//!
 //! An exclusion without a `reason` is itself a finding, and an exclusion that no longer matches
 //! an uncovered lockfile is a warning, so the list cannot rot silently. The rule is inert when
 //! the repository has no Dependabot configuration at all (nothing to compare against).
 
 use ignore::WalkBuilder;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -77,7 +89,7 @@ fn normalize_dir(raw: &str) -> String {
     format!("/{t}")
 }
 
-/// `*` matches any run of characters inside one path segment.
+/// `*` matches any run of characters inside one path segment, `?` exactly one character.
 fn segment_match(pat: &str, text: &str) -> bool {
     let (p, t): (Vec<char>, Vec<char>) = (pat.chars().collect(), text.chars().collect());
     let (mut pi, mut ti) = (0usize, 0usize);
@@ -87,7 +99,7 @@ fn segment_match(pat: &str, text: &str) -> bool {
             star = Some(pi);
             mark = ti;
             pi += 1;
-        } else if pi < p.len() && p[pi] == t[ti] {
+        } else if pi < p.len() && (p[pi] == t[ti] || p[pi] == '?') {
             pi += 1;
             ti += 1;
         } else if let Some(s) = star {
@@ -161,35 +173,187 @@ pub fn parse_updates(yaml: &str) -> Result<Vec<Update>, String> {
         .collect())
 }
 
-/// Walks the repository (git-ignore aware, skipping `node_modules` and cargo build output) for
-/// lockfiles that have their manifest next to them.
-pub fn find_lockfiles(root: &Path) -> Vec<Lockfile> {
-    let walker = WalkBuilder::new(root)
+fn walk_files(root: &Path) -> impl Iterator<Item = ignore::DirEntry> {
+    WalkBuilder::new(root)
         .require_git(false)
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
             let cargo_output = name == "target" && e.path().join("CACHEDIR.TAG").exists();
             name != "node_modules" && !cargo_output
         })
-        .build();
-    let found: BTreeSet<Lockfile> = walker
+        .build()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+}
+
+fn rel_dir(root: &Path, entry: &ignore::DirEntry) -> Option<String> {
+    let parent = entry.path().parent()?;
+    Some(normalize_dir(
+        &parent.strip_prefix(root).ok()?.to_string_lossy(),
+    ))
+}
+
+/// Walks the repository (git-ignore aware, skipping `node_modules` and cargo build output) for
+/// lockfiles that have their manifest next to them.
+pub fn find_lockfiles(root: &Path) -> Vec<Lockfile> {
+    let found: BTreeSet<Lockfile> = walk_files(root)
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             let (file, manifest, ecosystem) =
                 LOCKFILES.iter().find(|(lock, _, _)| *lock == name)?;
-            let parent = e.path().parent()?;
-            parent.join(manifest).is_file().then_some(())?;
-            let rel = parent.strip_prefix(root).ok()?.to_string_lossy();
+            e.path().parent()?.join(manifest).is_file().then_some(())?;
             Some(Lockfile {
-                dir: normalize_dir(&rel),
+                dir: rel_dir(root, &e)?,
                 file,
                 ecosystem,
             })
         })
         .collect();
     found.into_iter().collect()
+}
+
+/// `base` + relative `rel` (`..` and `.` resolved), rooted; `None` when it escapes the repository.
+fn resolve_dir(base: &str, rel: &str) -> Option<String> {
+    let mut parts: Vec<&str> = segments(base);
+    for seg in rel.split('/').filter(|s| !s.is_empty() && *s != ".") {
+        if seg == ".." {
+            parts.pop()?;
+        } else {
+            parts.push(seg);
+        }
+    }
+    Some(format!("/{}", parts.join("/")))
+}
+
+fn toml_strings(v: Option<&toml::Value>) -> Vec<String> {
+    v.and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Directories of the `path` dependencies of one manifest (all dependency tables, targets included).
+fn path_deps(base: &str, manifest: &toml::Value) -> Vec<String> {
+    fn collect(m: &toml::Value) -> Vec<&toml::Value> {
+        ["dependencies", "dev-dependencies", "build-dependencies"]
+            .iter()
+            .filter_map(|key| m.get(key))
+            .collect()
+    }
+    let mut tables = collect(manifest);
+    if let Some(targets) = manifest.get("target").and_then(|t| t.as_table()) {
+        tables.extend(targets.values().flat_map(collect));
+    }
+    tables
+        .iter()
+        .filter_map(|t| t.as_table())
+        .flat_map(|t| t.values())
+        .filter_map(|d| d.get("path").and_then(|p| p.as_str()))
+        .filter_map(|p| resolve_dir(base, p))
+        .collect()
+}
+
+/// Pure decision over parsed manifests (rooted dir -> manifest) and the dirs whose `Cargo.lock`
+/// exists: which crate directories are members of a workspace whose root has a lockfile.
+pub fn workspace_members(
+    manifests: &BTreeMap<String, toml::Value>,
+    lock_dirs: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut members = BTreeSet::new();
+    for (root, manifest) in manifests {
+        let Some(ws) = manifest.get("workspace") else {
+            continue;
+        };
+        if !lock_dirs.contains(root) {
+            continue;
+        }
+        let pats = |key: &str| -> Vec<Vec<String>> {
+            toml_strings(ws.get(key))
+                .iter()
+                .filter_map(|p| resolve_dir(root, p))
+                .map(|p| segments(&p).iter().map(|s| s.to_string()).collect())
+                .collect()
+        };
+        let (include, exclude) = (pats("members"), pats("exclude"));
+        let matches = |pats: &[Vec<String>], dir: &str| {
+            let d = segments(dir);
+            pats.iter().any(|p| {
+                let p: Vec<&str> = p.iter().map(String::as_str).collect();
+                glob_match(&p, &d)
+            })
+        };
+        let excluded = |dir: &str| matches(&exclude, dir);
+        let mut found: BTreeSet<String> = manifests
+            .keys()
+            .filter(|d| *d != root && matches(&include, d) && !excluded(d))
+            .cloned()
+            .collect();
+        // `package.workspace = "<path>"` names its root explicitly.
+        for (dir, m) in manifests {
+            let target = m
+                .get("package")
+                .and_then(|p| p.get("workspace"))
+                .and_then(|w| w.as_str())
+                .and_then(|w| resolve_dir(dir, w));
+            if dir != root && target.as_deref() == Some(root.as_str()) {
+                found.insert(dir.clone());
+            }
+        }
+        // Path dependencies inside the workspace directory are automatic members (transitively).
+        let prefix = segments(root);
+        let inside = |d: &str| segments(d).starts_with(&prefix);
+        let mut queue: Vec<String> = std::iter::once(root.clone())
+            .chain(found.iter().cloned())
+            .collect();
+        while let Some(dir) = queue.pop() {
+            let Some(m) = manifests.get(&dir) else {
+                continue;
+            };
+            for dep in path_deps(&dir, m) {
+                let known = manifests.contains_key(&dep);
+                if known
+                    && inside(&dep)
+                    && dep != *root
+                    && !excluded(&dep)
+                    && found.insert(dep.clone())
+                {
+                    queue.push(dep);
+                }
+            }
+        }
+        members.extend(found);
+    }
+    members
+}
+
+/// Reads every `Cargo.toml` of the tree and returns the member crate directories.
+pub fn find_workspace_members(root: &Path) -> BTreeSet<String> {
+    let mut manifests = BTreeMap::new();
+    let mut lock_dirs = BTreeSet::new();
+    for e in walk_files(root) {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(dir) = rel_dir(root, &e) else {
+            continue;
+        };
+        match name.as_str() {
+            "Cargo.lock" => {
+                lock_dirs.insert(dir);
+            }
+            "Cargo.toml" => {
+                if let Some(v) = fs::read_to_string(e.path())
+                    .ok()
+                    .and_then(|t| t.parse::<toml::Value>().ok())
+                {
+                    manifests.insert(dir, v);
+                }
+            }
+            _ => {}
+        }
+    }
+    workspace_members(&manifests, &lock_dirs)
 }
 
 fn lock_path(lock: &Lockfile) -> String {
@@ -225,8 +389,32 @@ pub fn evaluate(
     locks: &[Lockfile],
     updates: &[Update],
     exclusions: &[DependabotExclude],
+    members: &BTreeSet<String>,
 ) -> Vec<Violation> {
     let mut out = Vec::new();
+    for dir in members {
+        let listed = updates.iter().any(|u| {
+            let probe = Lockfile {
+                dir: dir.clone(),
+                file: "Cargo.lock",
+                ecosystem: "cargo",
+            };
+            covers(u, &probe)
+        });
+        if listed {
+            out.push(violation(
+                Severity::Error,
+                ".github/dependabot.yml",
+                format!(
+                    "workspace member '{dir}' is listed as a `cargo` directory; Dependabot cannot \
+                     resolve a member alone (dependency_file_not_resolvable when it inherits \
+                     fields from the workspace root)"
+                ),
+                "Remove the member directory (or narrow the glob); list only the workspace root, \
+                 whose Cargo.lock covers every member.",
+            ));
+        }
+    }
     for ex in exclusions.iter().filter(|e| e.reason.trim().is_empty()) {
         out.push(violation(
             Severity::Error,
@@ -245,6 +433,22 @@ pub fn evaluate(
     let mut used = vec![false; valid.len()];
     for lock in locks {
         let hit = valid.iter().position(|ex| excludes(ex, lock));
+        if lock.ecosystem == "cargo" && members.contains(&lock.dir) {
+            if let Some(i) = hit {
+                used[i] = true;
+            }
+            out.push(violation(
+                Severity::Warning,
+                &lock_path(lock),
+                format!(
+                    "orphan lockfile: '{}' is a member of a Cargo workspace whose root Cargo.lock \
+                     resolves it, so cargo ignores this file",
+                    lock.dir
+                ),
+                "Delete the nested Cargo.lock; the workspace root lockfile is the only one used.",
+            ));
+            continue;
+        }
         let covered = updates.iter().any(|u| covers(u, lock));
         match (covered, hit) {
             (false, Some(i)) => used[i] = true,
@@ -324,7 +528,8 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> DependabotReport {
         .as_ref()
         .and_then(|d| d.exclude.clone())
         .unwrap_or_default();
-    report.violations = evaluate(&locks, &updates, &exclusions);
+    let members = find_workspace_members(root);
+    report.violations = evaluate(&locks, &updates, &exclusions, &members);
     report.messages.push(format!(
         "{RULE_ID}: {} lockfile(s), {} update entr(ies), {} finding(s)",
         locks.len(),
@@ -372,10 +577,107 @@ fn tree_findings(yaml: &str, tag: &str) -> Option<usize> {
     Some(found)
 }
 
+const WS_ROOT: &str = "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/solo\"]\n";
+const MEMBER: &str = "[package]\nname = \"m\"\nedition.workspace = true\n";
+const ROOT_ONLY: &str =
+    "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n";
+const LISTS_MEMBER: &str =
+    "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directories: [\"/\", \"/crates/m\"]\n";
+
+fn tree_violations(files: &[(&str, &str)], tag: &str) -> Option<Vec<Violation>> {
+    let files: Vec<(String, String)> = files
+        .iter()
+        .map(|(p, t)| (p.to_string(), t.to_string()))
+        .collect();
+    let root = crate::frappe::write_fixture(tag, &files)?;
+    let found = audit(&root, &SteniocheckConfig::default()).violations;
+    let _ = fs::remove_dir_all(&root);
+    Some(found)
+}
+
+fn count(v: &Option<Vec<Violation>>, sev: Severity, needle: &str) -> Option<usize> {
+    let v = v.as_ref()?;
+    Some(
+        v.iter()
+            .filter(|x| {
+                x.severity == sev && format!("{} {}", x.file_path, x.message).contains(needle)
+            })
+            .count(),
+    )
+}
+
+/// GB-270 cases: workspace members, nested orphan locks, listed members, standalone crates.
+fn workspace_cases() -> Vec<(String, bool)> {
+    let base = [
+        ("Cargo.toml", WS_ROOT),
+        ("Cargo.lock", "# root\n"),
+        ("crates/m/Cargo.toml", MEMBER),
+        ("crates/m/Cargo.lock", "# nested\n"),
+        (".github/dependabot.yml", ROOT_ONLY),
+    ];
+    let orphan = tree_violations(&base, "dependabot-ws-orphan");
+    let mut listed_files = base.to_vec();
+    listed_files[4] = (".github/dependabot.yml", LISTS_MEMBER);
+    let listed = tree_violations(&listed_files, "dependabot-ws-listed");
+    let mut solo_files = base.to_vec();
+    solo_files.push(("crates/solo/Cargo.toml", "[package]\nname = \"s\"\n"));
+    solo_files.push(("crates/solo/Cargo.lock", "# own\n"));
+    let solo = tree_violations(&solo_files, "dependabot-ws-solo");
+    let mut explicit = base.to_vec();
+    explicit[0] = ("Cargo.toml", "[workspace]\n");
+    explicit[2] = (
+        "crates/m/Cargo.toml",
+        "[package]\nname = \"m\"\nworkspace = \"../..\"\n",
+    );
+    let by_key = tree_violations(&explicit, "dependabot-ws-key");
+    let mut path_dep = base.to_vec();
+    path_dep[0] = (
+        "Cargo.toml",
+        "[package]\nname = \"r\"\n[dependencies]\nm = { path = \"crates/m\" }\n[workspace]\n",
+    );
+    let auto = tree_violations(&path_dep, "dependabot-ws-pathdep");
+    let mut no_root_lock = base.to_vec();
+    no_root_lock.remove(1);
+    let no_lock = tree_violations(&no_root_lock, "dependabot-ws-nolock");
+    vec![
+        (
+            "dependabot: workspace member with nested lock is an orphan WARN, not uncovered"
+                .to_string(),
+            count(&orphan, Severity::Warning, "orphan lockfile") == Some(1)
+                && orphan.as_ref().map(Vec::len) == Some(1),
+        ),
+        (
+            "dependabot: mutation, member directory listed in dependabot.yml is an ERROR"
+                .to_string(),
+            count(&listed, Severity::Error, "workspace member '/crates/m'") == Some(1),
+        ),
+        (
+            "dependabot: standalone excluded crate with its own lock still needs an entry"
+                .to_string(),
+            count(&solo, Severity::Error, "crates/solo/Cargo.lock") == Some(1)
+                && count(&solo, Severity::Warning, "orphan") == Some(1),
+        ),
+        (
+            "dependabot: member declared by package.workspace is a member".to_string(),
+            count(&by_key, Severity::Warning, "orphan lockfile") == Some(1)
+                && by_key.as_ref().map(Vec::len) == Some(1),
+        ),
+        (
+            "dependabot: path dependency inside the workspace is a member".to_string(),
+            count(&auto, Severity::Warning, "orphan lockfile") == Some(1)
+                && auto.as_ref().map(Vec::len) == Some(1),
+        ),
+        (
+            "dependabot: without a root Cargo.lock the member lock is still uncovered".to_string(),
+            count(&no_lock, Severity::Error, "crates/m/Cargo.lock") == Some(1),
+        ),
+    ]
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let locks = fixture_locks();
     let run = |yaml: &str, ex: &[DependabotExclude]| {
-        parse_updates(yaml).map(|u| evaluate(&locks, &u, ex))
+        parse_updates(yaml).map(|u| evaluate(&locks, &u, ex, &BTreeSet::new()))
     };
     let green = run(FIXTURE_COVERED, &[]).map(|v| v.is_empty());
     let red = run(FIXTURE_NO_CARGO, &[]).map(|v| v.len());
@@ -388,7 +690,8 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         v.iter()
             .any(|x| x.severity == Severity::Error && x.file_path == "steniocheck.toml")
     });
-    vec![
+    let mut cases = workspace_cases();
+    cases.extend(vec![
         (
             "dependabot: all lockfiles covered".to_string(),
             green == Ok(true),
@@ -416,7 +719,8 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "dependabot: tree mutation fires".to_string(),
             tree_findings(FIXTURE_NO_CARGO, "dependabot-bad") == Some(1),
         ),
-    ]
+    ]);
+    cases
 }
 
 #[cfg(test)]
@@ -495,7 +799,7 @@ mod tests {
             ecosystem: None,
             reason: "was vendored".to_string(),
         };
-        let v = evaluate(&[], &[], &[ex]);
+        let v = evaluate(&[], &[], &[ex], &BTreeSet::new());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].severity, Severity::Warning);
     }
@@ -507,11 +811,84 @@ mod tests {
             ecosystem: Some("npm".to_string()),
             reason: "x".to_string(),
         };
-        let v = evaluate(&[lock("/app", "cargo")], &[], &[ex]);
+        let v = evaluate(&[lock("/app", "cargo")], &[], &[ex], &BTreeSet::new());
         assert!(
             v.iter()
                 .any(|x| x.severity == Severity::Error && x.file_path == "app/Cargo.lock")
         );
+    }
+
+    fn manifests(items: &[(&str, &str)]) -> BTreeMap<String, toml::Value> {
+        items
+            .iter()
+            .map(|(d, t)| {
+                (
+                    d.to_string(),
+                    t.parse::<toml::Value>()
+                        .unwrap_or(toml::Value::Boolean(false)),
+                )
+            })
+            .collect()
+    }
+
+    fn lock_set(dirs: &[&str]) -> BTreeSet<String> {
+        dirs.iter().map(|d| d.to_string()).collect()
+    }
+
+    #[test]
+    fn members_expand_globs_and_honour_exclude() {
+        let m = manifests(&[
+            (
+                "/",
+                "[workspace]\nmembers = [\"crates/*\", \"tools/t?\"]\nexclude = [\"crates/skip\"]\n",
+            ),
+            ("/crates/a", "[package]\nname = \"a\"\n"),
+            ("/crates/skip", "[package]\nname = \"s\"\n"),
+            ("/tools/t1", "[package]\nname = \"t\"\n"),
+            ("/tools/other", "[package]\nname = \"o\"\n"),
+        ]);
+        let got = workspace_members(&m, &lock_set(&["/"]));
+        assert_eq!(got, lock_set(&["/crates/a", "/tools/t1"]));
+    }
+
+    #[test]
+    fn members_need_a_root_lockfile_and_nested_workspaces_resolve_on_their_own() {
+        let m = manifests(&[
+            ("/", "[workspace]\nmembers = [\"a\"]\n"),
+            ("/a", "[package]\nname = \"a\"\n"),
+        ]);
+        assert!(workspace_members(&m, &lock_set(&[])).is_empty());
+        let sub = manifests(&[
+            ("/ws", "[workspace]\nmembers = [\"a\"]\n"),
+            ("/ws/a", "[package]\nname = \"a\"\n"),
+            ("/other", "[package]\nname = \"o\"\n"),
+        ]);
+        assert_eq!(
+            workspace_members(&sub, &lock_set(&["/ws"])),
+            lock_set(&["/ws/a"])
+        );
+    }
+
+    #[test]
+    fn package_workspace_key_can_point_outside_the_subtree() {
+        let m = manifests(&[
+            ("/ws", "[workspace]\n"),
+            (
+                "/elsewhere/x",
+                "[package]\nname = \"x\"\nworkspace = \"../../ws\"\n",
+            ),
+        ]);
+        assert_eq!(
+            workspace_members(&m, &lock_set(&["/ws"])),
+            lock_set(&["/elsewhere/x"])
+        );
+    }
+
+    #[test]
+    fn resolve_dir_handles_dots_and_escape() {
+        assert_eq!(resolve_dir("/a/b", "../c").as_deref(), Some("/a/c"));
+        assert_eq!(resolve_dir("/", "./x").as_deref(), Some("/x"));
+        assert_eq!(resolve_dir("/a", "../.."), None);
     }
 
     #[test]
