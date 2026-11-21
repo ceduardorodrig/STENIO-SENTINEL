@@ -556,12 +556,15 @@ fn compact_summary(
     warnings: usize,
     strict: bool,
 ) -> String {
-    let fail = strict && errors > 0;
+    // The verdict follows the findings, never the exit code: without `--strict` the process
+    // still returns 0, and a "PASS ... errors=7" line would be exactly the masked failure this
+    // summary exists to expose.
+    let fail = errors > 0;
     format!(
         "stenio: {} rules={rules} files={files} violations={} errors={errors} warnings={warnings} exit={}",
         if fail { "FAIL" } else { "PASS" },
         errors + warnings,
-        i32::from(fail)
+        i32::from(fail && strict)
     )
 }
 
@@ -610,7 +613,9 @@ fn compact_cases() -> Vec<(String, bool)> {
             compact_summary(45, 503, 0, 2, true)
                 == "stenio: PASS rules=45 files=503 violations=2 errors=0 warnings=2 exit=0"
                 && compact_summary(45, 3, 1, 0, true).starts_with("stenio: FAIL")
-                && compact_summary(45, 3, 1, 0, false).ends_with("exit=0"),
+                && compact_summary(45, 3, 1, 0, false).ends_with("exit=0")
+                && compact_summary(45, 3, 7, 0, false).starts_with("stenio: FAIL")
+                && compact_summary(45, 3, 0, 0, false).starts_with("stenio: PASS"),
         ),
         (
             "compact: clean tree prints one summary line and exits 0".to_string(),
