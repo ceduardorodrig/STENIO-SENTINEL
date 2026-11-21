@@ -69,7 +69,7 @@ pub const RULE_ID: &str = "DEPENDABOT-LOCKFILE-COVERAGE";
 pub const IGNORE_MAJOR_ID: &str = "DEPENDABOT-IGNORE-MAJOR";
 const IGNORE_MAJOR_KEY: &str = "ignore-major";
 const RULE_NAME: &str = "Dependabot Lockfile Coverage";
-const CONFIG_FILES: [&str; 2] = [".github/dependabot.yml", ".github/dependabot.yaml"];
+pub(crate) const CONFIG_FILES: [&str; 2] = [".github/dependabot.yml", ".github/dependabot.yaml"];
 
 /// Lockfile name, the manifest that must sit next to it, and the Dependabot ecosystem.
 const LOCKFILES: [(&str, &str, &str); 2] = [
@@ -703,7 +703,7 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> DependabotReport {
         .unwrap_or_default();
     let exclusions: Vec<DependabotExclude> = all_exclusions
         .iter()
-        .filter(|e| !is_ignore_exclusion(e))
+        .filter(|e| !is_ignore_exclusion(e) && !crate::ci::is_compile_exclusion(e))
         .cloned()
         .collect();
     let members = find_workspace_members(root);
