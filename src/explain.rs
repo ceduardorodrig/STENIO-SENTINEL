@@ -1433,6 +1433,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "# Dockerfile: ARG BASE_IMAGE=frappe/erpnext:v16.55.2\n# PASS up-to-date pin=v16.55.2 latest=v16.55.2",
         remediation: "Bump `BASE_IMAGE` to the latest v16 release, rebuild, and re-run with `--runtime-frappe` taken from `bench version` of the new image; run it from a timer so drift alerts instead of waiting for a human to open the Desk.",
     },
+    RuleExplanation {
+        id: "GH-SWEEP-OWNERS",
+        name: "GitHub Sweep Covers The Account And Every Org",
+        severity: "ERROR",
+        tag: "infra",
+        summary: "`stenio sweep [--days N] [--owner X]...` enumerates the authenticated gh account plus every org of `gh api user/orgs`, then per non-archived repository reports the latest non-success run of each workflow on every branch and tag inside the window, open PRs with failing checks, open Dependabot alerts, alerts whose package has no open Dependabot PR (GB-264 a) and open PRs that touch the same lockfile while one of them is conflicting (GB-264 c). One `owner=` line per owner with a repo count derived from the repositories iterated, then `PASS sweep` or `FAIL sweep`; exit 1 on any red or unverified item.",
+        rationale: "GB-267 / failure-patterns pattern 10: a sweep built on `gh repo list` saw only the personal account and reported nothing red while the Miracenar org held 58 red runs. The owner list is derived from the API, the declared owner count must equal the owners iterated (rule 12.3), a failed API call is `unverified` (never green), and the self-test feeds canned gh JSON so the logic is proven without network.",
+        bad_example: "$ gh repo list --json name,... # personal account only\n(nothing red)",
+        good_example: "$ stenio sweep\nowner=Miracenar repos=9 red_runs=0 red_prs=0 alerts=0 alerts_no_pr=0 lockfile_conflicts=0 unverified=0\nPASS sweep: owners declared=2 iterated=2 repos=30 since=2026-11-14",
+        remediation: "Fix or re-run the named workflow, open or rebase the Dependabot PR for the listed package, resolve the lockfile conflict by rebasing one of the PRs; a `unverified` line means gh could not read that endpoint, so check `gh auth status` and scopes.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
@@ -1441,6 +1452,8 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
         || rule_id.eq_ignore_ascii_case("opportunity-add")
     {
         crate::opportunity::FORMAT_RULE_ID
+    } else if rule_id.eq_ignore_ascii_case("sweep") {
+        "GH-SWEEP-OWNERS"
     } else {
         rule_id
     };
