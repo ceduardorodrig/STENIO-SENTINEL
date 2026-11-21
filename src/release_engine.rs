@@ -649,7 +649,11 @@ fn installed_version(r: &dyn Runner, bin: &Path) -> String {
     }
     let argv = vec![bin.display().to_string(), "--version".to_string()];
     match r.run(None, &argv, Duration::from_secs(30)) {
-        Ok(o) if out_ok(&o) => version_of(&o),
+        // A version starts with a digit: "stenio" (an empty `--version` answer) is not one, and
+        // would otherwise name a rollback copy `stenio.prev-stenio`.
+        Ok(o) if out_ok(&o) => Some(version_of(&o))
+            .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+            .unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -666,6 +670,17 @@ fn check_install(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
         return fail(
             "install",
             format!("{} missing: run the build step first", fresh.display()),
+        );
+    }
+    // GB-274: replacing an existing binary whose version cannot be read means no rollback copy can
+    // be named. Refuse before overwriting; the operator decides, the engine does not guess.
+    if installed.is_file() && old.is_empty() {
+        return fail(
+            "install",
+            format!(
+                "{} exists but `--version` gave no version: no rollback copy can be named, refusing to overwrite it",
+                installed.display()
+            ),
         );
     }
     let mut notes = Vec::new();
@@ -692,7 +707,16 @@ fn check_install(r: &dyn Runner, a: &RelArgs, version: &str) -> Line {
         );
     }
     let now = installed_version(r, &installed);
-    if now == version {
+    if now == version && old == version {
+        // GB-274: the installed binary already was the new version (an earlier, interrupted run
+        // installed it). Nothing was kept, and the release must not claim a rollback exists.
+        skip(
+            "install",
+            format!(
+                "installed binary already was {version}: refreshed, no rollback copy made (check stenio.prev-<previous> from the earlier run)"
+            ),
+        )
+    } else if now == version {
         notes.insert(0, format!("{} -> {now}", installed.display()));
         pass("install", notes.join("; "))
     } else {
@@ -718,8 +742,17 @@ fn remote(r: &dyn Runner, a: &RelArgs, script: &str, timeout: Duration) -> Resul
 }
 
 fn check_retag(r: &dyn Runner, a: &RelArgs, version: &str, old: &str) -> Line {
-    if old.is_empty() || old == version {
-        return skip("kuaray-retag", "no previous version to keep");
+    if old.is_empty() {
+        return fail(
+            "kuaray-retag",
+            "previous version unknown: cannot name the prev tag",
+        );
+    }
+    if old == version {
+        return skip(
+            "kuaray-retag",
+            format!("installed binary already was {version}: no previous version to keep"),
+        );
     }
     let script = format!(
         "docker tag $(docker inspect -f '{{{{.Image}}}}' {}) stenio-sentinel:prev-{old}",
@@ -729,6 +762,52 @@ fn check_retag(r: &dyn Runner, a: &RelArgs, version: &str, old: &str) -> Line {
         Ok(o) if out_ok(&o) => pass("kuaray-retag", format!("stenio-sentinel:prev-{old}")),
         Ok(o) => fail("kuaray-retag", format!("docker tag exited {}", o.code)),
         Err(e) => fail("kuaray-retag", e),
+    }
+}
+
+/// GB-274: after the whole run, the rollback the release promises must exist: the local
+/// `stenio.prev-<old>` copy and, when the retag step ran, the kuaray `prev-<old>` image tag. The
+/// number of artifacts checked is what was iterated, never a typed total (rule 12.3).
+fn check_rollback(r: &dyn Runner, a: &RelArgs, version: &str, old: &str, retag_ran: bool) -> Line {
+    if old == version {
+        return skip(
+            "rollback-kept",
+            format!("installed binary already was {version}: no rollback claimed by this run"),
+        );
+    }
+    let dir = match install_dir(a) {
+        Ok(d) => d,
+        Err(e) => return fail("rollback-kept", e),
+    };
+    let mut expected: Vec<(String, bool)> = Vec::new();
+    let local = dir.join(format!("stenio.prev-{old}"));
+    expected.push((local.display().to_string(), local.is_file()));
+    if retag_ran {
+        let tag = format!("stenio-sentinel:prev-{old}");
+        let script = format!("docker image inspect -f '{{{{.Id}}}}' {tag}");
+        let present = remote(r, a, &script, Duration::from_secs(60)).is_ok_and(|o| out_ok(&o));
+        expected.push((tag, present));
+    }
+    let missing: Vec<&str> = expected
+        .iter()
+        .filter(|(_, ok)| !ok)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if missing.is_empty() {
+        pass(
+            "rollback-kept",
+            format!("{n}/{n} rollback artifact(s) present", n = expected.len()),
+        )
+    } else {
+        fail(
+            "rollback-kept",
+            format!(
+                "{}/{} rollback artifact(s) present, missing: {}",
+                expected.len() - missing.len(),
+                expected.len(),
+                missing.join(", ")
+            ),
+        )
     }
 }
 
@@ -861,15 +940,18 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
         .map(|d| installed_version(r, &d.join("stenio")))
         .unwrap_or_default();
     let install = check_install(r, a, &version);
-    let install_ok = install.status == Status::Pass;
+    let install_ok = install.status != Status::Fail;
     out.push(install);
     if !install_ok {
         return out;
     }
-    out.push(check_retag(r, a, &version, &old));
+    let retag = check_retag(r, a, &version, &old);
+    let retag_ran = retag.status == Status::Pass;
+    out.push(retag);
     out.push(check_pull(r, a, &version));
     out.push(check_up(r, a));
     out.push(check_remote_version(r, a, &version));
+    out.push(check_rollback(r, a, &version, &old, retag_ran));
     out.push(check_self_test(r, a));
     let vault = crate::opportunity::vault_root(None);
     out.push(check_scope(r, a, "vault", &vault));
@@ -904,11 +986,12 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("binary-version", format!("{}/target/release/stenio --version == {version}", a.repo.display())),
         ("plan-parity", format!("{}/target/release/stenio release-engine --tag {} --dry-run (step names vs this engine)", a.repo.display(), a.tag)),
         ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
-        ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>)".to_string()),
+        ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>; FAIL when an existing binary reports no version)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
         ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
         ("kuaray-version", format!("ssh {} docker exec {} stenio --version", a.host, a.container)),
+        ("rollback-kept", format!("test -f <install-dir>/stenio.prev-<previous> && ssh {} docker image inspect stenio-sentinel:prev-<previous> (FAIL if either is missing)", a.host)),
         ("self-test", "~/.cargo/bin/stenio --self-test".to_string()),
         ("scope-vault", "~/.cargo/bin/stenio --scope vault".to_string()),
         ("scope-homelab", "~/.cargo/bin/stenio --scope homelab".to_string()),
@@ -1003,6 +1086,17 @@ static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new
 /// One `[[package]]` block of a `Cargo.lock`, enough for [`lockfile_versions`].
 fn package_entry(name: &str, version: &str) -> String {
     format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n")
+}
+
+/// How many `stenio.prev-*` rollback copies an install directory holds.
+fn fd_prev_count(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("stenio.prev-"))
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// A throwaway repo/install tree, so the install step copies real files it owns.
@@ -1118,6 +1212,10 @@ fn scripted(
         ok(""),
     );
     m.insert(
+        ssh("docker image inspect -f '{{.Id}}' stenio-sentinel:prev-4.17.0"),
+        ok("sha256:abc"),
+    );
+    m.insert(
         ssh("cd /srv/data/miracena && docker compose up -d stenio"),
         ok(""),
     );
@@ -1213,6 +1311,61 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     );
     let broken_run = run_steps(&Fake(broken), &a9);
     let _ = std::fs::remove_dir_all(&tree9);
+    // GB-274: an existing installed binary whose `--version` yields nothing cannot be backed up under
+    // a version name. The install step must FAIL before overwriting it, and nothing after it runs.
+    let (a10, tree10) = fixture_tree("4.17.0", "4.18.0");
+    let mut unreadable = scripted(&a10, "4.18.0");
+    let bin10 = a10
+        .install_dir
+        .as_ref()
+        .map(|d| d.join("stenio"))
+        .unwrap_or_default();
+    unreadable.insert(
+        key(&[bin10.display().to_string(), "--version".to_string()]),
+        (1, String::new()),
+    );
+    let unreadable_run = run_steps(&Fake(unreadable), &a10);
+    let unreadable_untouched = std::fs::read_to_string(&bin10).is_ok_and(|s| s.trim() == "4.17.0");
+    let _ = std::fs::remove_dir_all(&tree10);
+    // GB-274: the installed binary already is the new version (an interrupted earlier run). Install
+    // and retag SKIP with that reason instead of a silent "no previous", and no rollback is claimed.
+    let (a11, tree11) = fixture_tree("4.18.0", "4.18.0");
+    let same_run = run_steps(&Fake(scripted(&a11, "4.18.0")), &a11);
+    let same_no_prev = a11
+        .install_dir
+        .as_ref()
+        .is_some_and(|d| fd_prev_count(d) == 0);
+    let _ = std::fs::remove_dir_all(&tree11);
+    // GB-274 (c): the closing step verifies the rollback exists. Removing the prev tag from kuaray
+    // (docker inspect fails) turns the good run red, naming the missing tag; removing the local
+    // copy does the same through a direct call. The good run counts what it iterated.
+    let (a12, tree12) = fixture_tree("4.17.0", "4.18.0");
+    let mut no_tag = scripted(&a12, "4.18.0");
+    no_tag.insert(
+        key(&[
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "kuaray",
+            "docker image inspect -f '{{.Id}}' stenio-sentinel:prev-4.17.0",
+        ]
+        .map(String::from)),
+        (1, String::new()),
+    );
+    let no_tag_run = run_steps(&Fake(no_tag), &a12);
+    let local_gone = a12
+        .install_dir
+        .as_ref()
+        .map(|d| std::fs::remove_file(d.join("stenio.prev-4.17.0")).is_ok())
+        .unwrap_or(false);
+    let no_local = check_rollback(
+        &Fake(scripted(&a12, "4.18.0")),
+        &a12,
+        "4.18.0",
+        "4.17.0",
+        true,
+    );
+    let _ = std::fs::remove_dir_all(&tree12);
     let unsafe_tag = !valid(&RelArgs {
         tag: "v1;rm".into(),
         ..a.clone()
@@ -1236,7 +1389,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 16,
+            plan(&a).len() == 17,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -1250,7 +1403,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 16,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 17,
         ),
         (
             "release-engine fails when the built binary declares another version".to_string(),
@@ -1300,6 +1453,42 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                     && l.status == Status::Fail
                     && l.detail.contains("unrecognized subcommand")
             }) && !broken_run.iter().any(|l| l.name == "install"),
+        ),
+        (
+            "release-engine fails before overwriting a binary whose version is unreadable"
+                .to_string(),
+            unreadable_run.last().is_some_and(|l| {
+                l.name == "install" && l.status == Status::Fail && l.detail.contains("refusing")
+            }) && unreadable_untouched,
+        ),
+        (
+            "release-engine says the installed binary already was the new version".to_string(),
+            same_run.iter().all(|l| l.status != Status::Fail)
+                && same_run.iter().any(|l| {
+                    l.name == "install"
+                        && l.status == Status::Skip
+                        && l.detail.contains("already was")
+                })
+                && same_run.iter().any(|l| {
+                    l.name == "kuaray-retag"
+                        && l.status == Status::Skip
+                        && l.detail.contains("already was")
+                })
+                && same_no_prev,
+        ),
+        (
+            "release-engine verifies the rollback artifacts exist after the run".to_string(),
+            good.iter().any(|l| {
+                l.name == "rollback-kept" && l.status == Status::Pass && l.detail.starts_with("2/2")
+            }) && no_tag_run.iter().any(|l| {
+                l.name == "rollback-kept"
+                    && l.status == Status::Fail
+                    && l.detail.contains("1/2")
+                    && l.detail.contains("prev-4.17.0")
+            }) && local_gone
+                && no_local.status == Status::Fail
+                && no_local.detail.contains("1/2")
+                && no_local.detail.contains("stenio.prev-4.17.0"),
         ),
         (
             "release-engine plan keeps the vault scopes last, in order".to_string(),
