@@ -401,7 +401,57 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
             "plain prose silent",
             !fires("n.md", "the AKIA prefix and ghp_ are token prefixes"),
         ),
+        (
+            "guardian audits the checkout the binary was built from",
+            guardian_dir_cases(),
+        ),
     ]
+}
+
+/// Canonical Stenio source checkout audited by an installed binary.
+pub const CANONICAL_STENIO_SRC: &str = "/mnt/NVME_PCI/agentic-ai/governance/stenio";
+
+/// Which source tree `--guardian` audits. An explicit `--path` wins; otherwise the checkout the
+/// binary was compiled from (so a worktree build audits itself, not another checkout) when it
+/// still holds `src/guardian.rs`; otherwise the canonical vault checkout (an installed binary
+/// whose build directory is gone keeps the historical behaviour).
+pub fn resolve_guardian_src(
+    explicit: Option<&Path>,
+    built_from: &Path,
+    canonical: &Path,
+) -> PathBuf {
+    if let Some(p) = explicit {
+        return p.to_path_buf();
+    }
+    if built_from.join("src").join("guardian.rs").is_file() {
+        return built_from.to_path_buf();
+    }
+    canonical.to_path_buf()
+}
+
+/// `--path` has the default `.`; only a different value counts as an explicit choice.
+pub fn guardian_src_for_cli(path_arg: &Path) -> PathBuf {
+    let explicit = (path_arg != Path::new(".")).then_some(path_arg);
+    resolve_guardian_src(
+        explicit,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        Path::new(CANONICAL_STENIO_SRC),
+    )
+}
+
+fn guardian_dir_cases() -> bool {
+    let files = vec![("src/guardian.rs".to_string(), "// x\n".to_string())];
+    let Some(built) = crate::frappe::write_fixture("guardsrc", &files) else {
+        return false;
+    };
+    let canon = Path::new("/nonexistent-canonical");
+    let explicit = Path::new("/explicit/tree");
+    let from_build = resolve_guardian_src(None, &built, canon) == built;
+    let explicit_wins = resolve_guardian_src(Some(explicit), &built, canon) == explicit;
+    let gone = built.join("missing-build-dir");
+    let falls_back = resolve_guardian_src(None, &gone, canon) == canon;
+    let _ = std::fs::remove_dir_all(&built);
+    from_build && explicit_wins && falls_back
 }
 
 /// True when the matched fragment carries a placeholder rather than a credential.
@@ -812,6 +862,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             "dependabot.rs",
             &["DEPENDABOT-LOCKFILE-COVERAGE", "DEPENDABOT-IGNORE-MAJOR"],
         ),
+        ("sweep.rs", &["owners declared", "unverified"]),
         (
             "frappe.rs",
             &[

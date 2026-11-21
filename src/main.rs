@@ -1838,8 +1838,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     let gov_result = audit_governance(&args.path);
     let doc_result = audit_documentation(&args.path);
     let backlog_result = audit_backlog(&args.path);
-    let guardian_report =
-        audit_stenio_integrity(&PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio"));
+    let guardian_report = audit_stenio_integrity(&guardian::guardian_src_for_cli(Path::new(".")));
 
     let mut blocker_errors = Vec::new();
 
@@ -2210,7 +2209,7 @@ fn main() -> Result<()> {
 
     // ── Guardian Anti-Tampering & Self-Preservation Mode (--guardian) ────────
     if args.guardian {
-        let stenio_src = PathBuf::from("/mnt/NVME_PCI/agentic-ai/governance/stenio");
+        let stenio_src = guardian::guardian_src_for_cli(&args.path);
         let rep = audit_stenio_integrity(&stenio_src);
         baseline::print_banner(
             "StenioSentinel — Guardian: Cryptographic Self-Defense & Anti-Tampering",
