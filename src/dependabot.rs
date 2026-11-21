@@ -39,6 +39,23 @@
 //! an uncovered lockfile is a warning, so the list cannot rot silently. The rule is inert when
 //! the repository has no Dependabot configuration at all (nothing to compare against).
 
+//! `DEPENDABOT-IGNORE-MAJOR` (GB-269): an `ignore` entry of `dependabot.yml` that lists
+//! `version-update:semver-major` in `update-types`, or a bare `dependency-name: "*"`, is a WARNING.
+//! GitHub marks `ignore` with the security-updates icon: it "also changes how Dependabot creates
+//! pull requests for security updates", so a fix that needs a major bump is suppressed silently
+//! (fonte: github/docs content/code-security/reference/supply-chain-security/
+//! dependabot-options-reference.md:24 and :387). Recommended instead: `groups` with
+//! `update-types: [minor, patch]`, so majors arrive as their own pull requests. A deliberate
+//! ignore is declared visibly in steniocheck.toml and stays reported-as-silenced by a reason:
+//!
+//! ```toml
+//! [[dependabot.exclude]]
+//! rule = "ignore-major"
+//! ecosystem = "cargo"
+//! directory = "/"
+//! reason = "major 3.x needs a rewrite, tracked in HB-123"
+//! ```
+
 use ignore::WalkBuilder;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -49,6 +66,8 @@ use crate::engine::Violation;
 use crate::rule::Severity;
 
 pub const RULE_ID: &str = "DEPENDABOT-LOCKFILE-COVERAGE";
+pub const IGNORE_MAJOR_ID: &str = "DEPENDABOT-IGNORE-MAJOR";
+const IGNORE_MAJOR_KEY: &str = "ignore-major";
 const RULE_NAME: &str = "Dependabot Lockfile Coverage";
 const CONFIG_FILES: [&str; 2] = [".github/dependabot.yml", ".github/dependabot.yaml"];
 
@@ -486,6 +505,160 @@ pub fn evaluate(
     out
 }
 
+/// One `updates:` entry that carries a risky `ignore`: its ecosystem, directories and the reason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IgnoreMajor {
+    pub ecosystem: String,
+    pub dirs: Vec<String>,
+    pub why: String,
+}
+
+/// Finds `ignore` items with `version-update:semver-major` or a bare `dependency-name: "*"`.
+pub fn parse_ignore_major(yaml: &str) -> Result<Vec<IgnoreMajor>, String> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
+    let Some(items) = doc.get("updates").and_then(|u| u.as_sequence()) else {
+        return Ok(Vec::new());
+    };
+    let strs = |v: Option<&serde_yaml::Value>| -> Vec<String> {
+        v.and_then(|s| s.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(ignores) = item.get("ignore").and_then(|i| i.as_sequence()) else {
+            continue;
+        };
+        let mut why = Vec::new();
+        for ig in ignores {
+            let name = ig.get("dependency-name").and_then(|n| n.as_str());
+            if strs(ig.get("update-types"))
+                .iter()
+                .any(|t| t == "version-update:semver-major")
+            {
+                why.push(format!(
+                    "`ignore` of version-update:semver-major{}",
+                    name.map(|n| format!(" for '{n}'")).unwrap_or_default()
+                ));
+            }
+            if name == Some("*") {
+                why.push("`ignore` with a bare dependency-name \"*\"".to_string());
+            }
+        }
+        if why.is_empty() {
+            continue;
+        }
+        let mut dirs = strs(item.get("directories"));
+        if let Some(d) = item.get("directory").and_then(|d| d.as_str()) {
+            dirs.push(d.to_string());
+        }
+        out.push(IgnoreMajor {
+            ecosystem: item
+                .get("package-ecosystem")
+                .and_then(|e| e.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            dirs,
+            why: why.join(" and "),
+        });
+    }
+    Ok(out)
+}
+
+fn ignore_violation(
+    severity: Severity,
+    file: &str,
+    message: String,
+    suggestion: &str,
+) -> Violation {
+    Violation {
+        rule_id: IGNORE_MAJOR_ID.to_string(),
+        rule_name: "Dependabot Ignore Suppresses Majors".to_string(),
+        ..violation(severity, file, message, suggestion)
+    }
+}
+
+fn is_ignore_exclusion(ex: &DependabotExclude) -> bool {
+    ex.rule
+        .as_deref()
+        .is_some_and(|r| r.eq_ignore_ascii_case(IGNORE_MAJOR_KEY))
+}
+
+fn ignore_excluded(ex: &DependabotExclude, ig: &IgnoreMajor) -> bool {
+    ex.ecosystem
+        .as_deref()
+        .is_none_or(|e| e.eq_ignore_ascii_case(&ig.ecosystem))
+        && (ig.dirs.is_empty()
+            || ig
+                .dirs
+                .iter()
+                .any(|d| normalize_dir(d) == normalize_dir(&ex.directory)))
+}
+
+/// Pure decision for GB-269. Exclusions with `rule = "ignore-major"` and a reason silence a hit.
+pub fn evaluate_ignore_major(
+    hits: &[IgnoreMajor],
+    exclusions: &[DependabotExclude],
+) -> Vec<Violation> {
+    let mine: Vec<&DependabotExclude> = exclusions
+        .iter()
+        .filter(|e| is_ignore_exclusion(e))
+        .collect();
+    let mut out = Vec::new();
+    let mut used = vec![false; mine.len()];
+    for ig in hits {
+        let pos = mine
+            .iter()
+            .position(|e| !e.reason.trim().is_empty() && ignore_excluded(e, ig));
+        if let Some(i) = pos {
+            used[i] = true;
+            continue;
+        }
+        out.push(ignore_violation(
+            Severity::Warning,
+            ".github/dependabot.yml",
+            format!(
+                "`{}` entry for {:?}: {}; options marked with the security-updates icon also \
+                 filter security-update pull requests, so a fix that needs a major is silently \
+                 suppressed (github/docs dependabot-options-reference.md lines 24 and 387)",
+                ig.ecosystem, ig.dirs, ig.why
+            ),
+            "Drop the `ignore` and use `groups` with `update-types: [minor, patch]` so majors \
+             arrive as separate pull requests; or declare [[dependabot.exclude]] with \
+             rule = \"ignore-major\" and a reason in steniocheck.toml.",
+        ));
+    }
+    for ex in mine.iter().filter(|e| e.reason.trim().is_empty()) {
+        out.push(ignore_violation(
+            Severity::Error,
+            "steniocheck.toml",
+            format!(
+                "[[dependabot.exclude]] rule=ignore-major for '{}' has no reason, so it is ignored",
+                ex.directory
+            ),
+            "Add a non-empty `reason`.",
+        ));
+    }
+    for (ex, was_used) in mine.iter().zip(used) {
+        if !was_used && !ex.reason.trim().is_empty() {
+            out.push(ignore_violation(
+                Severity::Warning,
+                "steniocheck.toml",
+                format!(
+                    "[[dependabot.exclude]] rule=ignore-major for '{}' matches no risky `ignore` (stale)",
+                    ex.directory
+                ),
+                "Remove the exclusion, or fix its ecosystem/directory.",
+            ));
+        }
+    }
+    out
+}
+
 /// The directory to audit: `path` when it holds a Dependabot config, else the scope target.
 pub fn repo_root<'a>(path: &'a Path, scan_target: &'a Path) -> &'a Path {
     if CONFIG_FILES.iter().any(|rel| path.join(rel).is_file()) {
@@ -523,13 +696,22 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> DependabotReport {
         }
     };
     let locks = find_lockfiles(root);
-    let exclusions = cfg
+    let all_exclusions = cfg
         .dependabot
         .as_ref()
         .and_then(|d| d.exclude.clone())
         .unwrap_or_default();
+    let exclusions: Vec<DependabotExclude> = all_exclusions
+        .iter()
+        .filter(|e| !is_ignore_exclusion(e))
+        .cloned()
+        .collect();
     let members = find_workspace_members(root);
     report.violations = evaluate(&locks, &updates, &exclusions, &members);
+    report.violations.extend(evaluate_ignore_major(
+        &parse_ignore_major(&text).unwrap_or_default(),
+        &all_exclusions,
+    ));
     report.messages.push(format!(
         "{RULE_ID}: {} lockfile(s), {} update entr(ies), {} finding(s)",
         locks.len(),
@@ -561,6 +743,7 @@ fn fixture_exclusion(reason: &str) -> DependabotExclude {
         directory: "app/server".to_string(),
         ecosystem: Some("cargo".to_string()),
         reason: reason.to_string(),
+        rule: None,
     }
 }
 
@@ -674,6 +857,68 @@ fn workspace_cases() -> Vec<(String, bool)> {
     ]
 }
 
+const IGNORE_MAJOR_YAML: &str = "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n    ignore:\n      - dependency-name: \"zip\"\n        update-types: [\"version-update:semver-major\"]\n";
+const IGNORE_STAR_YAML: &str = "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n    ignore:\n      - dependency-name: \"*\"\n";
+const GROUPS_YAML: &str = "version: 2\nupdates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n    groups:\n      minor-patch:\n        update-types: [\"minor\", \"patch\"]\n";
+
+/// GB-269 cases over the pure decision.
+fn ignore_major_cases() -> Vec<(String, bool)> {
+    let run = |yaml: &str, ex: &[DependabotExclude]| {
+        parse_ignore_major(yaml).map(|h| evaluate_ignore_major(&h, ex))
+    };
+    let ex = |reason: &str| DependabotExclude {
+        directory: "/".to_string(),
+        ecosystem: Some("cargo".to_string()),
+        reason: reason.to_string(),
+        rule: Some(IGNORE_MAJOR_KEY.to_string()),
+    };
+    let fires = run(IGNORE_MAJOR_YAML, &[]);
+    let star = run(IGNORE_STAR_YAML, &[]);
+    let groups = run(GROUPS_YAML, &[]);
+    let silenced = run(IGNORE_MAJOR_YAML, &[ex("major 3 needs a rewrite")]);
+    let no_reason = run(IGNORE_MAJOR_YAML, &[ex(" ")]);
+    let stale = run(GROUPS_YAML, &[ex("old")]);
+    vec![
+        (
+            "dependabot: mutation, ignore semver-major is a WARN".to_string(),
+            fires.as_ref().is_ok_and(|v| {
+                v.len() == 1
+                    && v[0].severity == Severity::Warning
+                    && v[0].rule_id == IGNORE_MAJOR_ID
+            }),
+        ),
+        (
+            "dependabot: bare dependency-name star ignore is a WARN".to_string(),
+            star.as_ref().is_ok_and(|v| v.len() == 1),
+        ),
+        (
+            "dependabot: groups update-types minor+patch without ignore is green".to_string(),
+            groups.as_ref().is_ok_and(Vec::is_empty),
+        ),
+        (
+            "dependabot: ignore-major exclusion with a reason silences visibly".to_string(),
+            silenced.as_ref().is_ok_and(Vec::is_empty),
+        ),
+        (
+            "dependabot: ignore-major exclusion without a reason does not silence".to_string(),
+            no_reason.as_ref().is_ok_and(|v| {
+                v.iter().any(|x| {
+                    x.severity == Severity::Warning && x.file_path == ".github/dependabot.yml"
+                }) && v.iter().any(|x| x.severity == Severity::Error)
+            }),
+        ),
+        (
+            "dependabot: stale ignore-major exclusion is a WARN".to_string(),
+            stale.as_ref().is_ok_and(|v| v.len() == 1),
+        ),
+        (
+            "dependabot: tree end to end fires on ignore semver-major".to_string(),
+            tree_findings(IGNORE_MAJOR_YAML, "dependabot-ign-bad") == Some(1)
+                && tree_findings(GROUPS_YAML, "dependabot-ign-good") == Some(0),
+        ),
+    ]
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let locks = fixture_locks();
     let run = |yaml: &str, ex: &[DependabotExclude]| {
@@ -691,6 +936,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             .any(|x| x.severity == Severity::Error && x.file_path == "steniocheck.toml")
     });
     let mut cases = workspace_cases();
+    cases.extend(ignore_major_cases());
     cases.extend(vec![
         (
             "dependabot: all lockfiles covered".to_string(),
@@ -798,6 +1044,7 @@ mod tests {
             directory: "/gone".to_string(),
             ecosystem: None,
             reason: "was vendored".to_string(),
+            rule: None,
         };
         let v = evaluate(&[], &[], &[ex], &BTreeSet::new());
         assert_eq!(v.len(), 1);
@@ -810,6 +1057,7 @@ mod tests {
             directory: "/app".to_string(),
             ecosystem: Some("npm".to_string()),
             reason: "x".to_string(),
+            rule: None,
         };
         let v = evaluate(&[lock("/app", "cargo")], &[], &[ex], &BTreeSet::new());
         assert!(

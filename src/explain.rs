@@ -1203,6 +1203,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the missing ecosystem and directory (or a `directories` glob) to .github/dependabot.yml; if the gap is intentional, declare it with [[dependabot.exclude]] and a reason in steniocheck.toml.",
     },
     RuleExplanation {
+        id: "DEPENDABOT-IGNORE-MAJOR",
+        name: "Dependabot Ignore Suppresses Major Updates",
+        severity: "WARNING",
+        tag: "deps",
+        summary: "An `ignore` entry of .github/dependabot.yml whose update-types contains version-update:semver-major, or whose dependency-name is a bare \"*\", is reported. Recommended: `groups` with `update-types: [minor, patch]` so majors arrive as separate pull requests.",
+        rationale: "GitHub marks `ignore` with the security-updates icon: it also changes how Dependabot creates pull requests for security updates (github/docs content/code-security/reference/supply-chain-security/dependabot-options-reference.md lines 24 and 387). A fix that needs a major bump (zip 2.x to 9.0.5 in MCMOJAVE) is therefore silently suppressed, while a breaking bump was the thing the ignore wanted to stop (GB-269, 2026-11-21). A deliberate ignore is declared in steniocheck.toml with [[dependabot.exclude]], rule = \"ignore-major\", ecosystem, directory and a mandatory reason; without a reason it stays reported (and the exclusion is an ERROR), and an exclusion matching no risky ignore is a stale WARN.",
+        bad_example: "updates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n    ignore:\n      - dependency-name: \"*\"\n        update-types: [\"version-update:semver-major\"]",
+        good_example: "updates:\n  - package-ecosystem: cargo\n    directory: \"/\"\n    groups:\n      minor-patch:\n        update-types: [\"minor\", \"patch\"]",
+        remediation: "Replace the ignore with groups update-types [minor, patch]; if the ignore is deliberate, add [[dependabot.exclude]] rule = \"ignore-major\" with a reason to steniocheck.toml.",
+    },
+    RuleExplanation {
         id: "STENIO-ITEM-FORMAT",
         name: "Stenio Backlog Item Format",
         severity: "ERROR",

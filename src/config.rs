@@ -191,6 +191,10 @@ pub struct DependabotExclude {
     /// Why Dependabot must not cover this directory.
     #[serde(default)]
     pub reason: String,
+    /// Rule the exclusion silences. Absent means `DEPENDABOT-LOCKFILE-COVERAGE`; the value
+    /// `ignore-major` silences `DEPENDABOT-IGNORE-MAJOR` for the update entry whose
+    /// `package-ecosystem` and `directory` match.
+    pub rule: Option<String>,
 }
 
 /// `[dependabot]` table: sanctioned exclusions for `DEPENDABOT-LOCKFILE-COVERAGE`.
