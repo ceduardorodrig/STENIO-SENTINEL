@@ -158,6 +158,7 @@ Options:
       --scope <SCOPE>        Audit scope: [hub, homelab, vault, doc, cv, all]
       --rule <RULE_ID>       Execute only a specific rule by ID
       --diff [<REF>]         Audit only files modified relative to git ref (e.g., HEAD~1 or staged)
+      --compact              One line per violation, then always one summary line `stenio: PASS|FAIL rules=N files=M violations=V ... exit=C` (GB-266; `--explain COMPACT-PASS-SUMMARY`)
       --fix                  Apply automatic surgical repairs to violations
       --fast                 Fast mode (skip deep cross-linking and token hash checks)
       --clean                Sanitize debug artifacts, leftover test files, and reclaim disk

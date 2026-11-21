@@ -453,6 +453,83 @@ fn dry_has_violation(a: &[&str], b: &[&str]) -> bool {
     dry_run(a, b).is_some()
 }
 
+/// GB-266: the one line `--compact` always ends with, so a pass differs from a run that never
+/// happened. Every number is the count of what the run actually iterated (rule 12.3); `exit=`
+/// is the status the process is about to return.
+fn compact_summary(
+    rules: usize,
+    files: usize,
+    errors: usize,
+    warnings: usize,
+    strict: bool,
+) -> String {
+    let fail = strict && errors > 0;
+    format!(
+        "stenio: {} rules={rules} files={files} violations={} errors={errors} warnings={warnings} exit={}",
+        if fail { "FAIL" } else { "PASS" },
+        errors + warnings,
+        i32::from(fail)
+    )
+}
+
+/// Runs this binary with `--compact --strict` over a one-crate tree and returns (stdout, exit).
+fn compact_probe(tag: &str, source: &str) -> Option<(String, i32)> {
+    let files = vec![
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"p\"\n".to_string(),
+        ),
+        ("src/main.rs".to_string(), source.to_string()),
+    ];
+    let root = frappe::write_fixture(tag, &files)?;
+    let out = std::process::Command::new(std::env::current_exe().ok()?)
+        .args(["--compact", "--strict", "--path"])
+        .arg(&root)
+        .output()
+        .ok();
+    let _ = std::fs::remove_dir_all(&root);
+    let out = out?;
+    Some((
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        out.status.code()?,
+    ))
+}
+
+/// GB-266 cases: a clean run prints the summary and exits 0; a dirty one prints the violation
+/// plus the summary with the count and exits 1; N is the number of files really scanned.
+fn compact_cases() -> Vec<(String, bool)> {
+    let clean = compact_probe("compact-clean", "fn main() {}\n");
+    let dirty_src = concat!("fn main() { let x: Option<u8> = None; x.", "unwrap(); }\n");
+    let dirty = compact_probe("compact-dirty", dirty_src);
+    let last = |o: &Option<(String, i32)>| {
+        o.as_ref()
+            .and_then(|(t, _)| t.lines().last().map(str::to_string))
+            .unwrap_or_default()
+    };
+    vec![
+        (
+            "compact: pure summary line derives every number from its inputs".to_string(),
+            compact_summary(45, 503, 0, 2, true)
+                == "stenio: PASS rules=45 files=503 violations=2 errors=0 warnings=2 exit=0"
+                && compact_summary(45, 3, 1, 0, true).starts_with("stenio: FAIL")
+                && compact_summary(45, 3, 1, 0, false).ends_with("exit=0"),
+        ),
+        (
+            "compact: clean tree prints one summary line and exits 0".to_string(),
+            clean.as_ref().is_some_and(|(t, code)| {
+                *code == 0 && t.lines().count() == 1 && last(&clean).contains("violations=0 ")
+            }) && last(&clean).contains("files=2 "),
+        ),
+        (
+            "compact: mutation, violation prints finding, summary count and exits 1".to_string(),
+            dirty.as_ref().is_some_and(|(t, code)| {
+                *code == 1 && t.contains("[ERROR]") && t.lines().count() == 2
+            }) && last(&dirty).contains("FAIL")
+                && last(&dirty).contains("violations=1 "),
+        ),
+    ]
+}
+
 fn run_self_tests(rules: &[Rule]) -> Result<()> {
     baseline::print_banner("StenioKernel — Synthetic Self-Test Suite");
 
@@ -513,6 +590,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(opportunity::self_test_cases())
+        .chain(compact_cases())
     {
         total += 1;
         if ok {
@@ -2393,6 +2471,7 @@ fn main() -> Result<()> {
         args.diff.as_deref()
     };
 
+    let rules_run = rules.len();
     let engine = Engine::new(rules, whitelist)?;
 
     // Execute repository scanning and auxiliary subsystems in parallel
@@ -2739,6 +2818,16 @@ fn main() -> Result<()> {
                 );
             }
         }
+        println!(
+            "{}",
+            compact_summary(
+                rules_run,
+                report.total_files_scanned,
+                report.error_count,
+                report.warning_count,
+                args.strict,
+            )
+        );
         if args.strict && report.error_count > 0 {
             std::process::exit(1);
         }

@@ -1214,6 +1214,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Replace the ignore with groups update-types [minor, patch]; if the ignore is deliberate, add [[dependabot.exclude]] rule = \"ignore-major\" with a reason to steniocheck.toml.",
     },
     RuleExplanation {
+        id: "COMPACT-PASS-SUMMARY",
+        name: "Compact Output Always Ends With A Summary Line",
+        severity: "INFO",
+        tag: "output",
+        summary: "With --compact the run always ends with one line: `stenio: PASS|FAIL rules=<N> files=<M> violations=<V> errors=<E> warnings=<W> exit=<code>`. A clean tree prints only that line; a tree with findings prints each finding and then the line. N, M, V come from what the run iterated, never from a typed total. The exit code is unchanged (1 only with --strict and at least one error).",
+        rationale: "On 2026-11-21 `stenio --tag miracena --strict --compact | tail -5` printed nothing on a clean tree and looked identical to a gate that never ran; a piped tail also hides the exit code (GB-266). The summary makes a pass distinguishable from a run that did not happen. The `exit=` field is the status the process returns, so a pipeline that loses the code still carries it in the text.",
+        bad_example: "$ stenio --strict --compact --path repo | tail -5\n(no output)",
+        good_example: "$ stenio --strict --compact --path repo\nstenio: PASS rules=45 files=503 violations=0 errors=0 warnings=0 exit=0",
+        remediation: "Read the last line: FAIL lists the findings above it; PASS with files=0 means the path or tag scanned nothing.",
+    },
+    RuleExplanation {
         id: "STENIO-ITEM-FORMAT",
         name: "Stenio Backlog Item Format",
         severity: "ERROR",
