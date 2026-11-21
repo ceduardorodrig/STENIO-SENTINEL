@@ -47,6 +47,7 @@ mod release_order;
 pub mod remote;
 mod rule;
 mod semantic;
+mod sweep;
 #[cfg(test)]
 mod testkit;
 mod tools;
@@ -80,7 +81,7 @@ use vault::audit_vault;
     author = "Sumænimá Platform",
     version = env!("CARGO_PKG_VERSION"),
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust",
-    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  backlog           Alias of --backlog (stenio backlog --next-id GB)\n  preflight         Alias of --pre-release --static-only"
+    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  backlog           Alias of --backlog (stenio backlog --next-id GB)\n  preflight         Alias of --pre-release --static-only"
 )]
 struct Args {
     #[arg(
@@ -693,6 +694,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(opportunity::self_test_cases())
+        .chain(sweep::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
     {
@@ -2037,6 +2039,11 @@ fn main() -> Result<()> {
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
         Some("release-engine") => std::process::exit(release_engine::run_cli(&argv[1..])),
+        Some("sweep") => {
+            let mut rest = vec!["stenio sweep".to_string()];
+            rest.extend_from_slice(&argv[2..]);
+            std::process::exit(sweep::run_cli(&rest))
+        }
         Some("opportunity") => {
             // `stenio opportunity add ...` and `stenio opportunity --help` share one parser;
             // anything else falls through to the same usage error.
