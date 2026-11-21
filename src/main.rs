@@ -11,6 +11,7 @@ mod comments;
 mod config;
 mod context;
 mod cv;
+mod dependabot;
 mod deploy;
 mod doc;
 mod docker;
@@ -510,6 +511,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(release_order::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
+        .chain(dependabot::self_test_cases())
         .chain(opportunity::self_test_cases())
     {
         total += 1;
@@ -1679,6 +1681,11 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     let i18n_result = i18n::audit_gettext(&args.path);
     collect_blocking(&mut blocker_errors, &i18n_result.violations);
 
+    // 3d. Dependabot lockfile coverage (inert without .github/dependabot.yml)
+    let dependabot_cfg = SteniocheckConfig::load_from_dir(&args.path);
+    let dependabot_result = dependabot::audit(&args.path, &dependabot_cfg);
+    collect_blocking(&mut blocker_errors, &dependabot_result.violations);
+
     // 4. Guardian anti-tampering
     for alert in &guardian_report.tamper_alerts {
         blocker_errors.push(format!("[GUARDIAN] {}", alert));
@@ -2576,6 +2583,28 @@ fn main() -> Result<()> {
     if should_audit_i18n {
         for v in i18n::audit_gettext(&args.path).violations {
             report.error_count += 1;
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Dependabot lockfile coverage (DEPENDABOT-LOCKFILE-COVERAGE, GB-264) ─
+    let should_audit_dependabot = (tag_lower.as_deref() == Some("deps") || tag_lower.is_none())
+        && only_rule
+            .map(|s| s.eq_ignore_ascii_case(dependabot::RULE_ID))
+            .unwrap_or(true);
+    if should_audit_dependabot {
+        // The path the user passed wins; the scope's resolved target only helps when `--path`
+        // is a parent folder of the repository (hub scope).
+        let dep_root = dependabot::repo_root(&args.path, &scan_target);
+        let dep = dependabot::audit(dep_root, &SteniocheckConfig::load_from_dir(dep_root));
+        doc_messages.extend(dep.messages);
+        for v in dep.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
             report.total_violations += 1;
             report.violations.push(v);
         }

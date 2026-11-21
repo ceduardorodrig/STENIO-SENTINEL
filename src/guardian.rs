@@ -800,6 +800,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             "i18n.rs",
             &["I18N-PO-INCOMPLETE", "no suppression directive"],
         ),
+        ("dependabot.rs", &["DEPENDABOT-LOCKFILE-COVERAGE"]),
         (
             "frappe.rs",
             &[

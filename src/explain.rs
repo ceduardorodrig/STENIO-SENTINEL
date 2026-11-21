@@ -1192,6 +1192,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the missing reference to the entry file with a surgical edit, or correct governance/agent-entrypoints.toml when the harness changed.",
     },
     RuleExplanation {
+        id: "DEPENDABOT-LOCKFILE-COVERAGE",
+        name: "Lockfile Directory Not Covered By Dependabot",
+        severity: "ERROR",
+        tag: "deps",
+        summary: "Every Cargo.lock (next to a Cargo.toml) and package-lock.json (next to a package.json) must sit in a directory covered by an updates: entry of .github/dependabot.yml with the matching package-ecosystem (cargo, npm). A directory is covered by a literal `directory` or by a `directories` item, globs (`*`, `**`) and the /-rooted form included.",
+        rationale: "On 2026-11-21 the Hub repository had no cargo ecosystem in dependabot.yml while seven Cargo.lock files existed, so advisories on those crates never opened a pull request and alerts sat open for weeks (GB-264). GitHub documents `directory` as a single literal path and `directories` as the list that supports globbing, so a glob written in `directory` is not coverage and is reported. The rule is offline and deterministic; open alerts and conflicting PRs need the API and are out of scope. A deliberate gap (a vendored crate, a throwaway WASM build) is declared in steniocheck.toml with [[dependabot.exclude]] and a mandatory reason: an exclusion without a reason is an ERROR, and one that no longer matches an uncovered lockfile is a WARN, so the list stays honest. The rule is inert when the repository has no .github/dependabot.yml. It runs in every scope that scans a repository (tag deps) and in the quality gate. No suppression directive exists for it.",
+        bad_example: "# .github/dependabot.yml\nupdates:\n  - package-ecosystem: npm\n    directory: \"/\"\n# but app/server/Cargo.lock exists",
+        good_example: "updates:\n  - package-ecosystem: cargo\n    directories: [\"/app/*\", \"/scripts/st-transcribe\"]\n\n# steniocheck.toml, for a deliberate gap:\n[[dependabot.exclude]]\ndirectory = \"app/dependencies/asciline/asciline-rs\"\necosystem = \"cargo\"\nreason = \"vendored upstream crate, updated by hand\"",
+        remediation: "Add the missing ecosystem and directory (or a `directories` glob) to .github/dependabot.yml; if the gap is intentional, declare it with [[dependabot.exclude]] and a reason in steniocheck.toml.",
+    },
+    RuleExplanation {
         id: "STENIO-ITEM-FORMAT",
         name: "Stenio Backlog Item Format",
         severity: "ERROR",

@@ -180,6 +180,25 @@ pub struct ParityConfig {
     pub stenio_container: Option<String>,
 }
 
+/// One `[[dependabot.exclude]]` entry: a lockfile directory that `DEPENDABOT-LOCKFILE-COVERAGE`
+/// accepts without a Dependabot entry. The `reason` is mandatory; an empty one is a finding.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DependabotExclude {
+    /// Directory of the lockfile, relative to the repository root (`/`-rooted form accepted).
+    pub directory: String,
+    /// Ecosystem the exclusion applies to (`cargo`, `npm`); absent means every ecosystem.
+    pub ecosystem: Option<String>,
+    /// Why Dependabot must not cover this directory.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// `[dependabot]` table: sanctioned exclusions for `DEPENDABOT-LOCKFILE-COVERAGE`.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DependabotConfig {
+    pub exclude: Option<Vec<DependabotExclude>>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SteniocheckConfig {
@@ -194,6 +213,7 @@ pub struct SteniocheckConfig {
     pub custom_rules: Option<Vec<CustomRuleConfig>>,
     pub frappe: Option<FrappeConfig>,
     pub parity: Option<ParityConfig>,
+    pub dependabot: Option<DependabotConfig>,
 }
 
 impl SteniocheckConfig {
