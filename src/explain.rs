@@ -1433,6 +1433,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "# Dockerfile: ARG BASE_IMAGE=frappe/erpnext:v16.55.2\n# PASS up-to-date pin=v16.55.2 latest=v16.55.2",
         remediation: "Bump `BASE_IMAGE` to the latest v16 release, rebuild, and re-run with `--runtime-frappe` taken from `bench version` of the new image; run it from a timer so drift alerts instead of waiting for a human to open the Desk.",
     },
+    RuleExplanation {
+        id: "AGENT-HOOK-FIXTURES-IN-PIPELINE",
+        name: "Agent Hook Fixture Runner Must Run And Pass",
+        severity: "WARNING",
+        tag: "agent",
+        summary: "In --scope vault and --scope homelab the engine executes scripts/agent-hooks/test-rust-tools-guard.sh from the scanned vault root and fails unless the exit code is 0, the last-but-one output line matches ^N/N cases$ (both numbers equal and non-zero) and the last line starts with MUTATION OK. N is read from the runner, never typed. Inert, with an INFO line, when the script does not exist under the scanned root (an external --path). The same verdict is the `hook-fixtures` step of `stenio release-engine` (a FAIL there).",
+        rationale: "On 2026-11-21 (GB-275) the 11-case fixture plus mutation self-check that proves the EDIT-NOOP guard of rust-tools-guard.sh existed and nothing ran it: no timer, no git hook, and agent-entrypoints.toml only checks must_reference strings. A gate that is not on an automatic path is documentation (global rule 12.1). The count comes from the runner's own output (12.3) and the mutation line is required because a runner that cannot go red proves nothing (12.2). The script is declared in governance/agent-entrypoints.toml as harness canonical-hook-fixtures so AGENT-ENTRYPOINT-RULES also notices when it disappears.",
+        bad_example: "$ bash scripts/agent-hooks/test-rust-tools-guard.sh | tail -2\n6/11 cases\nMUTATION FAIL: could not build mutant",
+        good_example: "$ bash scripts/agent-hooks/test-rust-tools-guard.sh | tail -2\n11/11 cases\nMUTATION OK: mutant (EDIT-NOOP removed) fails: ...",
+        remediation: "Run the script by hand, fix rust-tools-guard.sh (or the fixture that really changed) until it prints N/N cases and MUTATION OK; never edit the expected lines to match a broken guard.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

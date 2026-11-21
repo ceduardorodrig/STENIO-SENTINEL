@@ -31,6 +31,7 @@ mod graph;
 mod guardian;
 mod health;
 mod homelab;
+mod hook_fixtures;
 mod i18n;
 mod infra;
 mod learner;
@@ -692,6 +693,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
+        .chain(hook_fixtures::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
@@ -2735,6 +2737,22 @@ fn main() -> Result<()> {
             } else {
                 report.warning_count += 1;
             }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Agent hook fixtures (AGENT-HOOK-FIXTURES-IN-PIPELINE, GB-275) ──────
+    let should_audit_hook_fixtures = (is_vault_active || is_homelab_active)
+        && (tag_lower.is_none() || tag_lower.as_deref() == Some("agent"))
+        && only_rule
+            .map(|s| s.eq_ignore_ascii_case(hook_fixtures::RULE_ID))
+            .unwrap_or(true);
+    if should_audit_hook_fixtures {
+        let hf = hook_fixtures::audit(&args.path);
+        doc_messages.extend(hf.messages);
+        for v in hf.violations {
+            report.warning_count += 1;
             report.total_violations += 1;
             report.violations.push(v);
         }

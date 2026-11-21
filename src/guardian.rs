@@ -801,6 +801,10 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["I18N-PO-INCOMPLETE", "no suppression directive"],
         ),
         (
+            "hook_fixtures.rs",
+            &["AGENT-HOOK-FIXTURES-IN-PIPELINE", "MUTATION OK"],
+        ),
+        (
             "dependabot.rs",
             &["DEPENDABOT-LOCKFILE-COVERAGE", "DEPENDABOT-IGNORE-MAJOR"],
         ),

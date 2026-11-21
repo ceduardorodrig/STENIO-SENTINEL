@@ -816,6 +816,29 @@ fn check_scope(r: &dyn Runner, a: &RelArgs, scope: &str, vault: &Path) -> Line {
     }
 }
 
+/// GB-275: the agent-hook fixture runner must print `N/N cases` and `MUTATION OK`. The script is
+/// resolved from the vault root; without it (an external vault) the step is skipped, visibly.
+fn check_hook_fixtures(r: &dyn Runner, vault: &Path) -> Line {
+    let script = vault.join(crate::hook_fixtures::SCRIPT_REL);
+    if !script.is_file() {
+        return skip(
+            "hook-fixtures",
+            format!(
+                "{} not found under the vault root",
+                crate::hook_fixtures::SCRIPT_REL
+            ),
+        );
+    }
+    let argv = vec!["bash".to_string(), script.display().to_string()];
+    match r.run(None, &argv, Duration::from_secs(120)) {
+        Ok(o) => match crate::hook_fixtures::evaluate(o.code, &o.stdout) {
+            Ok(d) => pass("hook-fixtures", d),
+            Err(e) => fail("hook-fixtures", e),
+        },
+        Err(e) => fail("hook-fixtures", e),
+    }
+}
+
 /// The whole sequence. Stops at the first failing prerequisite (tag), at a stale lockfile (before
 /// the build), at a build that declares another version (before the install) and at a plan the
 /// running engine does not know (before the install).
@@ -872,6 +895,7 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     out.push(check_remote_version(r, a, &version));
     out.push(check_self_test(r, a));
     let vault = crate::opportunity::vault_root(None);
+    out.push(check_hook_fixtures(r, &vault));
     out.push(check_scope(r, a, "vault", &vault));
     out.push(check_scope(r, a, "homelab", &vault));
     out
@@ -910,6 +934,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
         ("kuaray-version", format!("ssh {} docker exec {} stenio --version", a.host, a.container)),
         ("self-test", "~/.cargo/bin/stenio --self-test".to_string()),
+        ("hook-fixtures", format!("bash <vault>/{} (last-but-one line N/N cases, last line MUTATION OK)", crate::hook_fixtures::SCRIPT_REL)),
         ("scope-vault", "~/.cargo/bin/stenio --scope vault".to_string()),
         ("scope-homelab", "~/.cargo/bin/stenio --scope homelab".to_string()),
     ]
@@ -1130,6 +1155,14 @@ fn scripted(
         ok("self-test ok"),
     );
     m.insert(
+        key(&[
+            "bash",
+            &format!("{vault}/{}", crate::hook_fixtures::SCRIPT_REL),
+        ]
+        .map(String::from)),
+        ok("PASS x\n11/11 cases\nMUTATION OK: mutant fails"),
+    );
+    m.insert(
         key(&[&bin, "--scope", "vault", "--path", &vault].map(String::from)),
         ok("0 error(s), 6 warning(s)"),
     );
@@ -1222,7 +1255,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     // a PR can break the vault's governance and nothing notices until a release; this plan test is
     // the engine's half — dropping or swapping either scope turns it red.
     let planned: Vec<&str> = plan(&a).iter().map(|(n, _)| *n).collect();
-    let scopes_last = planned.ends_with(&["scope-vault", "scope-homelab"]);
+    let scopes_last = planned.ends_with(&["hook-fixtures", "scope-vault", "scope-homelab"]);
     // GB-078: `plan()` (what `--dry-run` announces) and `run_steps()` are two hand-kept lists, and
     // during 4.23.0 one listed plan-parity where the other ran binary-version. The parity fixture
     // could not see it: it compares `plan()` with the plan text `plan()` produced. The good fixture
@@ -1236,7 +1269,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine plan covers every step".to_string(),
-            plan(&a).len() == 16,
+            plan(&a).len() == 17,
         ),
         (
             "release-engine refuses an unsafe tag".to_string(),
@@ -1250,7 +1283,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "release-engine good run passes every step".to_string(),
-            good.iter().all(|l| l.status != Status::Fail) && good.len() == 16,
+            good.iter().all(|l| l.status != Status::Fail) && good.len() == 17,
         ),
         (
             "release-engine fails when the built binary declares another version".to_string(),
@@ -1309,7 +1342,46 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "release-engine run order matches the dry-run plan".to_string(),
             same_sequence,
         ),
+        (
+            "release-engine hook-fixtures: green passes, mutant survives fails, no script skips"
+                .to_string(),
+            hook_fixture_step_cases(),
+        ),
     ]
+}
+
+/// GB-275 at the release step: a scripted runner answers for a temp vault that holds the script.
+fn hook_fixture_step_cases() -> bool {
+    let files = vec![(
+        crate::hook_fixtures::SCRIPT_REL.to_string(),
+        "# runner\n".to_string(),
+    )];
+    let Some(vault) = crate::frappe::write_fixture("relhook", &files) else {
+        return false;
+    };
+    let argv = vec![
+        "bash".to_string(),
+        vault
+            .join(crate::hook_fixtures::SCRIPT_REL)
+            .display()
+            .to_string(),
+    ];
+    let answer = |text: &str| {
+        Fake(std::collections::BTreeMap::from([(
+            key(&argv),
+            (0, text.to_string()),
+        )]))
+    };
+    let green = check_hook_fixtures(&answer("11/11 cases\nMUTATION OK: m\n"), &vault);
+    let mutant = check_hook_fixtures(&answer("11/11 cases\nMUTATION FAIL: survived\n"), &vault);
+    let short = check_hook_fixtures(&answer("10/11 cases\nMUTATION OK: m\n"), &vault);
+    let _ = std::fs::remove_dir_all(&vault);
+    let empty = std::env::temp_dir().join("stenio-relhook-none");
+    let absent = check_hook_fixtures(&answer(""), &empty);
+    green.status == Status::Pass
+        && mutant.status == Status::Fail
+        && short.status == Status::Fail
+        && absent.status == Status::Skip
 }
 
 #[cfg(test)]
