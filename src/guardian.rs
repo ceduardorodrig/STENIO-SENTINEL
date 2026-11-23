@@ -878,6 +878,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["DEPENDABOT-LOCKFILE-COVERAGE", "DEPENDABOT-IGNORE-MAJOR"],
         ),
         ("sweep.rs", &["owners declared", "unverified"]),
+        ("compare_engines.rs", &["gained_error", "SKIP"]),
         (
             "frappe.rs",
             &[
