@@ -103,8 +103,33 @@ pub fn extract_comment<'a>(ext: &str, line: &'a str) -> Option<&'a str> {
     None
 }
 
-/// Checks if a comment contains Portuguese natural language.
+/// Checks if a comment contains Portuguese natural language (the narrow, ERROR-grade detector:
+/// every comment it flags was already flagged by 4.36.0).
 pub fn is_portuguese_comment(comment: &str) -> bool {
+    detect_portuguese(comment, false)
+}
+
+/// GB-282(a) wide detector: the narrow one plus a second tier of Portuguese function words and
+/// prepositions. A comment only this one flags is reported as a WARNING, because stenio-check CI
+/// downloads the latest engine and a new ERROR would turn every repository red at release time
+/// (4.38.0 measurement: MNEMOCINE goes from 0 to 4 new findings on real Portuguese comments).
+pub fn is_portuguese_comment_wide(comment: &str) -> bool {
+    detect_portuguese(comment, true)
+}
+
+/// Severity of a comment under CODE-NO-PORTUGUESE-COMMENTS: ERROR for the narrow detector,
+/// WARNING for a comment only the wide recall catches, `None` for English.
+pub fn portuguese_severity(comment: &str) -> Option<crate::rule::Severity> {
+    if is_portuguese_comment(comment) {
+        Some(crate::rule::Severity::Error)
+    } else if is_portuguese_comment_wide(comment) {
+        Some(crate::rule::Severity::Warning)
+    } else {
+        None
+    }
+}
+
+fn detect_portuguese(comment: &str, wide: bool) -> bool {
     // 1. Convert to lowercase and remove permitted brand names, technical abbreviations, and proper nouns
     let lower = comment.to_lowercase();
     let cleaned = lower
@@ -194,17 +219,48 @@ pub fn is_portuguese_comment(comment: &str) -> bool {
     //    least two in the same comment. The word list is the pre-4.36.0 one on purpose: the
     //    detector only got narrower (every comment it flags now was flagged before), so a repo
     //    that was green on 4.35.0 never turns red on 4.36.0.
+    //
+    //    GB-282(a) widens the recall (`wide`): the second tier holds Portuguese function words
+    //    that are not English words (a comment such as `// arquivo que contém os dados` carried
+    //    one accented word and nothing else the old list knew). The threshold stays at two
+    //    signals per comment, so a single borrowed word or a proper noun never fires.
     static PT_STOPWORDS: &[&str] = &[
         "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta", "esse", "essa",
         "aquele", "aquela", "quando", "onde", "porque", "uma", "mais",
     ];
+    static PT_STOPWORDS_WIDE: &[&str] = &[
+        "que", "dos", "das", "seus", "suas", "mas", "sem", "sobre", "entre", "cada", "isso",
+        "aqui", "pode", "podem", "deve", "devem", "fazer", "antes", "depois", "ainda", "apenas",
+        "todos", "todas", "nosso", "nossa", "mesmo", "sempre", "nunca", "arquivo", "arquivos",
+        "ele", "ela", "eles", "elas", "pois", "seja", "foram", "estava", "tambem", "entao", "voce",
+        "sera",
+    ];
 
     let sw_count = words
         .iter()
-        .filter(|w| PT_STOPWORDS.iter().any(|&sw| sw == **w))
+        .filter(|w| {
+            PT_STOPWORDS.iter().any(|&sw| sw == **w)
+                || (wide && PT_STOPWORDS_WIDE.iter().any(|&sw| sw == **w))
+        })
         .count();
 
-    sw_count + accented_words >= 2
+    // `de`, `da` and `em` are Portuguese prepositions but also appear in English as `de-dup`,
+    // `em` (CSS) or a loanword: they count only as a standalone token followed by a lowercase
+    // word of three or more letters (`de arquivos`, `em memória`).
+    let tokens: Vec<&str> = cleaned_no_code
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric()))
+        .collect();
+    let preposition_count = tokens
+        .windows(2)
+        .filter(|w| {
+            wide && matches!(w[0], "de" | "da" | "em")
+                && w[1].chars().count() >= 3
+                && w[1].chars().all(char::is_alphabetic)
+        })
+        .count();
+
+    sw_count + preposition_count + accented_words >= 2
 }
 
 /// Counts words with Portuguese accented letters, skipping brand names, URL/path-like tokens and
@@ -347,6 +403,7 @@ mod tests {
 /// GB-278 self-test cases for CODE-NO-PORTUGUESE-COMMENTS (wired into `--self-test`).
 pub fn self_test_cases() -> Vec<(&'static str, bool)> {
     let pt = |line: &str| extract_comment("rs", line).is_some_and(is_portuguese_comment);
+    let wide = |line: &str| extract_comment("rs", line).is_some_and(is_portuguese_comment_wide);
     vec![
         (
             "pt-comment: English comment with a proper noun is not Portuguese",
@@ -355,6 +412,30 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
         (
             "pt-comment: the --explain example stays red",
             pt("// função para validar o token do usuário"),
+        ),
+        (
+            "pt-comment: GB-282 recall, function words without a single accent are red",
+            wide("// arquivo que contém os dados de entrada")
+                && wide("// isso deve ser feito antes de validar o token")
+                && wide("// lê o arquivo e guarda em memória")
+                && !pt("// arquivo que contém os dados de entrada"),
+        ),
+        (
+            "pt-comment: GB-282 English with `em`, `de-dup` or one borrowed word stays green",
+            !wide("// em dash and de-dup are handled by the formatter")
+                && !wide("// Timezone Brasília handled by the caller; que is a variable here")
+                && !wide("// Timezone: Brasília is UTC-3, handled by the caller.")
+                && !wide("// Read the file and return the parsed rows"),
+        ),
+        (
+            "pt-comment: GB-282 severity, narrow hit is ERROR, wide-only hit is WARNING, English is none",
+            {
+                use crate::rule::Severity::{Error, Warning};
+                let sev = |line: &str| extract_comment("rs", line).and_then(portuguese_severity);
+                sev("// função para validar o token do usuário") == Some(Error)
+                    && sev("// arquivo que contém os dados de entrada") == Some(Warning)
+                    && sev("// Timezone: Brasília is UTC-3, handled by the caller.").is_none()
+            },
         ),
         (
             "pt-comment: mixed comment with 2+ Portuguese function words stays red",

@@ -487,6 +487,148 @@ pub fn step_scopes(step: &Step, root: &Path, default_scope: Option<&str>) -> Vec
     out
 }
 
+/// One stenio call found in CI text: the scope and the tag it passes ("" when absent).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Call {
+    pub scope: String,
+    pub tag: String,
+}
+
+fn tag_flag_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"--tag(?:=|\s+)["']?([A-Za-z0-9_-]+)"#).ok())
+        .as_ref()
+}
+
+fn bare_call_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"\bstenio["']?\s+--"#).ok())
+        .as_ref()
+}
+
+/// Stenio calls in one piece of text, one per command segment (line, `&&`, `;`, `|`) that names
+/// stenio and passes a flag. A call without `--scope` runs the repository `[general] scope`.
+fn calls_in_text(text: &str, default_scope: Option<&str>) -> Vec<Call> {
+    if !text.contains("stenio") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for seg in text.split(|c| matches!(c, '\n' | ';' | '|' | '&')) {
+        if !seg.contains("stenio") {
+            continue;
+        }
+        let scope = scope_flag_re().and_then(|re| re.captures(seg).map(|c| c[1].to_lowercase()));
+        let tag = tag_flag_re().and_then(|re| re.captures(seg).map(|c| c[1].to_lowercase()));
+        if scope.is_none() && tag.is_none() && !bare_call_re().is_some_and(|re| re.is_match(seg)) {
+            continue;
+        }
+        out.push(Call {
+            scope: scope
+                .or_else(|| default_scope.map(str::to_lowercase))
+                .unwrap_or_default(),
+            tag: tag.unwrap_or_default(),
+        });
+    }
+    out
+}
+
+/// Stenio calls a step makes: its `run:` body, the `scope:` input of the stenio-check action and
+/// the repository scripts it calls (one level).
+pub fn step_calls(step: &Step, root: &Path, default_scope: Option<&str>) -> Vec<Call> {
+    let mut out = calls_in_text(&step.run, default_scope);
+    if step.uses.to_lowercase().contains("stenio-check") && !step.with_scope.is_empty() {
+        out.push(Call {
+            scope: step.with_scope.to_lowercase(),
+            tag: String::new(),
+        });
+    }
+    for tok in step.run.split_whitespace() {
+        let f = tok
+            .trim_matches(|c| c == '"' || c == '\'')
+            .trim_start_matches("./");
+        if f.ends_with(".sh") && !f.contains("..") && !f.starts_with('/') {
+            if let Ok(body) = fs::read_to_string(root.join(f)) {
+                out.extend(calls_in_text(&body, default_scope));
+            }
+        }
+    }
+    out
+}
+
+/// Rule id prefixes that survive a scope which drops the rest (`main.rs` retains by prefix);
+/// `None` means the scope keeps every generic rule, `Some(&[])` means it keeps no custom rule.
+fn scope_keeps(scope: &str) -> Option<&'static [&'static str]> {
+    match scope {
+        "fork" | "derived" => Some(&[
+            "SEC-",
+            "VAULT-",
+            "DOC-",
+            "GOV-LEFTOVER-TEST-ARTIFACTS",
+            "HOMELAB-",
+            "INFRA-",
+        ]),
+        "mirror" | "snapshot" | "generated" => {
+            Some(&["SEC-", "INFRA-", "GOV-LEFTOVER-TEST-ARTIFACTS"])
+        }
+        // `--scope frappe` returns before the generic scan: no custom rule runs there.
+        "frappe" => Some(&[]),
+        _ => None,
+    }
+}
+
+/// True when `call` executes the custom rule `(id, tag)`: the tag filter matches and the scope
+/// does not drop the rule.
+fn call_reaches(call: &Call, id: &str, tag: &str) -> bool {
+    if !call.tag.is_empty() && !call.tag.eq_ignore_ascii_case(tag) {
+        return false;
+    }
+    match scope_keeps(&call.scope) {
+        None => true,
+        Some(prefixes) => prefixes.iter().any(|p| id.starts_with(p)),
+    }
+}
+
+/// Pure decision for the custom-rules half of GB-283/GB-284. `rules` holds `(id, tag)` of every
+/// `[[custom_rules]]` entry; a tag none of whose rules is reached by any call of any workflow
+/// never runs in CI (scopes `fork`, `mirror` and `frappe` drop custom rules, a `--tag` run of
+/// another tag skips them). Inert without workflows and with an opaque reusable-workflow job.
+pub fn evaluate_custom_rules(
+    rules: &[(String, String)],
+    workflows: &[Workflow],
+    calls: &[Vec<Call>],
+) -> Vec<Violation> {
+    if workflows.is_empty() || workflows.iter().any(|w| w.opaque_job) {
+        return Vec::new();
+    }
+    let mut tags: Vec<&str> = rules.iter().map(|(_, t)| t.as_str()).collect();
+    tags.sort_unstable();
+    tags.dedup();
+    tags.into_iter()
+        .filter(|tag| {
+            !rules.iter().filter(|(_, t)| t == tag).any(|(id, t)| {
+                calls
+                    .iter()
+                    .flatten()
+                    .any(|c| call_reaches(c, id, t))
+            })
+        })
+        .map(|tag| {
+            let n = rules.iter().filter(|(_, t)| t == tag).count();
+            violation(
+                SCOPE_ID,
+                "Stenio Custom Rules No Workflow Invokes",
+                ".github/workflows",
+                1,
+                format!(
+                    "steniocheck.toml declares {n} custom rule(s) tagged `{tag}` but none of the {} workflow(s) runs a stenio pass that executes them: scopes fork, mirror and frappe drop custom rules and a `--tag` run of another tag skips them (GB-283/GB-284)",
+                    workflows.len()
+                ),
+                &format!("Add a pass `stenio --tag {tag} --strict --compact` (no `--scope fork`), or run `stenio --scope all`."),
+            )
+        })
+        .collect()
+}
+
 /// True when the tree carries a Frappe app: a `[frappe]` table or `doctype/<n>/<n>.json` files.
 fn has_frappe_app(root: &Path, cfg: &SteniocheckConfig) -> bool {
     cfg.frappe.is_some()
@@ -611,6 +753,29 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> CiReport {
     report
         .violations
         .extend(evaluate_scopes(&needed, &workflows, &invoked));
+    let custom: Vec<(String, String)> = cfg
+        .custom_rules
+        .iter()
+        .flatten()
+        .map(|r| {
+            (
+                r.id.clone(),
+                r.tag.clone().unwrap_or_else(|| "custom".to_string()),
+            )
+        })
+        .collect();
+    let calls: Vec<Vec<Call>> = workflows
+        .iter()
+        .map(|w| {
+            w.steps
+                .iter()
+                .flat_map(|s| step_calls(s, root, default_scope))
+                .collect()
+        })
+        .collect();
+    report
+        .violations
+        .extend(evaluate_custom_rules(&custom, &workflows, &calls));
     report.messages.push(format!(
         "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}: {} workflow(s), {} finding(s)",
         workflows.len(),
@@ -691,6 +856,9 @@ const FORK_ONLY_YML: &str = "name: ci\non: [push, pull_request]\njobs:\n  check:
 const FRAPPE_PASS_YML: &str = "name: ci\non: [push, pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n        with:\n          scope: fork\n      - run: '\"$RUNNER_TEMP/stenio/stenio\" --scope frappe --compact'\n";
 const FRAPPE_ACTION_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n        with:\n          scope: frappe\n";
 const FRAPPE_EQ_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --scope=frappe --compact\n";
+const TAG_ONLY_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --tag miracena --strict --compact\n";
+const FORK_TAG_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --scope fork --tag miracena --strict\n";
+const OTHER_TAG_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --tag gov --strict\n";
 const DOCTYPE_FILES: [(&str, &str); 2] = [
     (
         "app/app/doctype/thing/thing.json",
@@ -711,6 +879,35 @@ fn scope_count(workflow: Option<&str>, frappe: bool, tag: &str) -> Option<usize>
     }
     Some(
         tree(&files, tag, &SteniocheckConfig::default())?
+            .iter()
+            .filter(|v| v.rule_id == SCOPE_ID)
+            .count(),
+    )
+}
+
+fn custom_cfg(id: &str, tag: &str) -> SteniocheckConfig {
+    SteniocheckConfig {
+        custom_rules: Some(vec![crate::config::CustomRuleConfig {
+            id: id.to_string(),
+            tag: Some(tag.to_string()),
+            name: "n".to_string(),
+            description: "d".to_string(),
+            pattern: "x".to_string(),
+            extensions: vec!["rs".to_string()],
+            ..Default::default()
+        }]),
+        ..SteniocheckConfig::default()
+    }
+}
+
+/// Findings of the custom-rules half of GB-283 on a tree with one custom rule `id` tagged `tag`.
+fn custom_count(workflow: Option<&str>, id: &str, tag: &str, fixture: &str) -> Option<usize> {
+    let mut files: Vec<(&str, &str)> = vec![("README.md", "# repo\n")];
+    if let Some(w) = workflow {
+        files.push((".github/workflows/ci.yml", w));
+    }
+    Some(
+        tree(&files, fixture, &custom_cfg(id, tag))?
             .iter()
             .filter(|v| v.rule_id == SCOPE_ID)
             .count(),
@@ -798,6 +995,25 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "ci-scope: inert without workflows and for a repo without a Frappe app".to_string(),
             scope_count(None, true, "ci-scope-noci") == Some(0)
                 && scope_count(Some(FORK_ONLY_YML), false, "ci-scope-nofrappe") == Some(0),
+        ),
+        (
+            "ci-scope: mutation, custom rules tagged miracena and a workflow that runs only scope fork fires"
+                .to_string(),
+            custom_count(Some(FORK_ONLY_YML), "MIRACENA-X", "miracena", "ci-custom-bad-a") == Some(0)
+                && custom_count(Some(FORK_TAG_YML), "MIRACENA-X", "miracena", "ci-custom-bad-b")
+                    == Some(1)
+                && custom_count(Some(OTHER_TAG_YML), "MIRACENA-X", "miracena", "ci-custom-bad-c")
+                    == Some(1)
+                && custom_count(Some(FRAPPE_PASS_YML), "MIRACENA-X", "miracena", "ci-custom-bad-d")
+                    == Some(1),
+        ),
+        (
+            "ci-scope: a `--tag` run of the rule tag, a fork-safe SEC- rule and a repo without CI are green"
+                .to_string(),
+            custom_count(Some(TAG_ONLY_YML), "MIRACENA-X", "miracena", "ci-custom-ok-a") == Some(0)
+                && custom_count(Some(FORK_TAG_YML), "SEC-CUSTOM-X", "miracena", "ci-custom-ok-b")
+                    == Some(0)
+                && custom_count(None, "MIRACENA-X", "miracena", "ci-custom-noci") == Some(0),
         ),
         (
             "ci-compile: inert without a dependabot cargo entry".to_string(),

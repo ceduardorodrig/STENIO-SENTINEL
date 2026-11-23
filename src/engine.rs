@@ -521,14 +521,14 @@ impl Engine {
                             continue;
                         }
 
+                        // GB-282(a): the narrow detector keeps the rule's ERROR; a comment only the
+                        // wide recall catches is a WARNING (a new ERROR would turn repos red).
+                        let mut severity = severity;
                         if rule.id == "CODE-NO-PORTUGUESE-COMMENTS" {
                             let comment_opt = crate::comments::extract_comment(&ext, line);
-                            if let Some(comment) = comment_opt {
-                                if !crate::comments::is_portuguese_comment(comment) {
-                                    continue;
-                                }
-                            } else {
-                                continue;
+                            match comment_opt.and_then(crate::comments::portuguese_severity) {
+                                Some(sev) => severity = sev,
+                                None => continue,
                             }
                         }
 

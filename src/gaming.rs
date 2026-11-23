@@ -675,7 +675,7 @@ fn game_names_from_list() -> std::collections::HashMap<u64, String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
     for line in body.lines() {
-        // Formato do cmd_list: "{:<10} {:<32} ..." → appid na col 0-9, nome na col 10-41.
+        // Format of cmd_list: "{:<10} {:<32} ..." -> appid in cols 0-9, name in cols 10-41.
         if line.len() < 42 {
             continue;
         }
