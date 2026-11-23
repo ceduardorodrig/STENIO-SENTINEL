@@ -1699,6 +1699,9 @@ mod tests {
         if get_explanation("GOV-AGENT-LAWS").is_none() {
             missing.push("main.rs: GOV-AGENT-LAWS".to_string());
         }
-        assert!(missing.is_empty(), "rule ids without --explain: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "rule ids without --explain: {missing:?}"
+        );
     }
 }

@@ -192,10 +192,7 @@ pub fn compare(
         let (mut o_tot, mut n_tot, mut added) = (0, 0, Vec::new());
         let mut broken = None;
         for s in &scopes {
-            match (
-                run_engine(r, old, s, &dir),
-                run_engine(r, new, s, &dir),
-            ) {
+            match (run_engine(r, old, s, &dir), run_engine(r, new, s, &dir)) {
                 (Ok(a), Ok(b)) => {
                     let (x, y, add) = delta(&a, &b);
                     o_tot += x;
@@ -343,10 +340,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let (old, new) = (base.join("old.sh"), base.join("new.sh"));
     write_engine(&old, false);
     write_engine(&new, true);
-    let (o, n) = (
-        old.display().to_string(),
-        new.display().to_string(),
-    );
+    let (o, n) = (old.display().to_string(), new.display().to_string());
     let owners = vec!["o".to_string()];
     let w1 = base.join("w1");
     let w2 = base.join("w2");

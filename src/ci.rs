@@ -647,7 +647,9 @@ pub fn evaluate_tag_can_fail(tags: &[(String, bool, bool)], calls: &[Vec<Call>])
         if !c.strict || c.tag.is_empty() || seen.contains(&c.tag) {
             continue;
         }
-        let of_tag = tags.iter().filter(|(t, _, _)| t.eq_ignore_ascii_case(&c.tag));
+        let of_tag = tags
+            .iter()
+            .filter(|(t, _, _)| t.eq_ignore_ascii_case(&c.tag));
         let has_custom = of_tag.clone().any(|(_, _, custom)| *custom);
         let any_error = of_tag.clone().any(|(_, err, _)| *err);
         if !has_custom || any_error {
@@ -668,7 +670,6 @@ pub fn evaluate_tag_can_fail(tags: &[(String, bool, bool)], calls: &[Vec<Call>])
     }
     out
 }
-
 
 pub const LOG_EN_ID: &str = "GOV-LOG-EN-PRINT-COVERAGE";
 
