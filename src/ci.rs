@@ -65,6 +65,7 @@ pub const COMPILE_ID: &str = "CI-RUST-COMPILE-ON-DEPENDENCY-PR";
 /// `rule` value of a `[[dependabot.exclude]]` entry that silences [`COMPILE_ID`].
 pub const COMPILE_KEY: &str = "cargo-compile";
 pub const SCOPE_ID: &str = "CI-RULE-SCOPE-NEVER-INVOKED";
+pub const TAG_FAIL_ID: &str = "CI-TAG-STEP-MUST-BE-ABLE-TO-FAIL";
 /// The scope that carries the `FRAPPE-*` rules.
 const FRAPPE_SCOPE: &str = "frappe";
 
@@ -492,6 +493,8 @@ pub fn step_scopes(step: &Step, root: &Path, default_scope: Option<&str>) -> Vec
 pub struct Call {
     pub scope: String,
     pub tag: String,
+    /// The segment passes `--strict` (the exit code then follows the errors).
+    pub strict: bool,
 }
 
 fn tag_flag_re() -> Option<&'static Regex> {
@@ -527,6 +530,7 @@ fn calls_in_text(text: &str, default_scope: Option<&str>) -> Vec<Call> {
                 .or_else(|| default_scope.map(str::to_lowercase))
                 .unwrap_or_default(),
             tag: tag.unwrap_or_default(),
+            strict: seg.contains("--strict"),
         });
     }
     out
@@ -540,6 +544,7 @@ pub fn step_calls(step: &Step, root: &Path, default_scope: Option<&str>) -> Vec<
         out.push(Call {
             scope: step.with_scope.to_lowercase(),
             tag: String::new(),
+            strict: false,
         });
     }
     for tok in step.run.split_whitespace() {
@@ -627,6 +632,41 @@ pub fn evaluate_custom_rules(
             )
         })
         .collect()
+}
+
+/// Pure decision for GB-288. `tags` holds `(tag, severity_is_error, is_custom)` of every rule the
+/// engine would run (built-in and `[[custom_rules]]`). A workflow call `stenio --tag <t> --strict`
+/// can only fail when some rule of `<t>` is an error, because `--strict` exits non-zero on errors
+/// only (`main.rs`). A tag that has custom rules, all of them (and every built-in of that tag)
+/// warnings, makes the step unable to fail: reported once per tag. The subsystem audits that share a
+/// tag name (`gov`, `doc`, `db`, ...) are not rules and are out of this decision.
+pub fn evaluate_tag_can_fail(tags: &[(String, bool, bool)], calls: &[Vec<Call>]) -> Vec<Violation> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for c in calls.iter().flatten() {
+        if !c.strict || c.tag.is_empty() || seen.contains(&c.tag) {
+            continue;
+        }
+        let of_tag = tags.iter().filter(|(t, _, _)| t.eq_ignore_ascii_case(&c.tag));
+        let has_custom = of_tag.clone().any(|(_, _, custom)| *custom);
+        let any_error = of_tag.clone().any(|(_, err, _)| *err);
+        if !has_custom || any_error {
+            continue;
+        }
+        seen.push(c.tag.clone());
+        out.push(violation(
+            TAG_FAIL_ID,
+            "CI Tag Step Cannot Fail",
+            ".github/workflows",
+            1,
+            format!(
+                "a workflow step runs `stenio --tag {} --strict` but every rule of that tag is a warning and `--strict` fails on errors only, so the step can never fail (GB-288: the gov step of macrokey-driver and Miracena showed warnings=1 exit=0)",
+                c.tag
+            ),
+            &format!("Raise at least one `{}` custom rule to `severity = \"error\"` (or drop the step); prove it by planting a violation and seeing the exit code change.", c.tag),
+        ));
+    }
+    out
 }
 
 /// True when the tree carries a Frappe app: a `[frappe]` table or `doctype/<n>/<n>.json` files.
@@ -776,8 +816,21 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> CiReport {
     report
         .violations
         .extend(evaluate_custom_rules(&custom, &workflows, &calls));
+    let tag_rules: Vec<(String, bool, bool)> = crate::rule::get_rules_from_config(cfg)
+        .iter()
+        .map(|r| {
+            (
+                r.tag.clone(),
+                matches!(r.severity, Severity::Error),
+                custom.iter().any(|(id, _)| *id == r.id),
+            )
+        })
+        .collect();
+    report
+        .violations
+        .extend(evaluate_tag_can_fail(&tag_rules, &calls));
     report.messages.push(format!(
-        "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}: {} workflow(s), {} finding(s)",
+        "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}/{TAG_FAIL_ID}: {} workflow(s), {} finding(s)",
         workflows.len(),
         report.violations.len()
     ));
@@ -914,6 +967,27 @@ fn custom_count(workflow: Option<&str>, id: &str, tag: &str, fixture: &str) -> O
     )
 }
 
+/// Findings of GB-288 on a tree with one custom rule tagged `miracena` of the given severity.
+fn tag_fail_count(workflow: &str, severity: &str, fixture: &str) -> Option<usize> {
+    let mut cfg = custom_cfg("MIRACENA-X", "miracena");
+    if let Some(r) = cfg.custom_rules.as_mut().and_then(|v| v.first_mut()) {
+        r.severity = Some(severity.to_string());
+    }
+    Some(
+        tree(
+            &[
+                ("README.md", "# repo\n"),
+                (".github/workflows/ci.yml", workflow),
+            ],
+            fixture,
+            &cfg,
+        )?
+        .iter()
+        .filter(|v| v.rule_id == TAG_FAIL_ID)
+        .count(),
+    )
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let none = SteniocheckConfig::default();
     let ex = |reason: &str| CiParityExclude {
@@ -1014,6 +1088,21 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 && custom_count(Some(FORK_TAG_YML), "SEC-CUSTOM-X", "miracena", "ci-custom-ok-b")
                     == Some(0)
                 && custom_count(None, "MIRACENA-X", "miracena", "ci-custom-noci") == Some(0),
+        ),
+        (
+            "ci-tag-fail: mutation, `--tag X --strict` where every rule of X is a warning fires"
+                .to_string(),
+            tag_fail_count(TAG_ONLY_YML, "warning", "ci-tagfail-bad") == Some(1),
+        ),
+        (
+            "ci-tag-fail: raising one rule of the tag to error is green; an unstrict call is not judged"
+                .to_string(),
+            tag_fail_count(TAG_ONLY_YML, "error", "ci-tagfail-ok") == Some(0)
+                && tag_fail_count(
+                    "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --tag miracena --compact\n",
+                    "warning",
+                    "ci-tagfail-nostrict",
+                ) == Some(0),
         ),
         (
             "ci-compile: inert without a dependabot cargo entry".to_string(),

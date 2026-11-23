@@ -856,6 +856,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "CI-STEP-STENIO-PARITY",
                 "CI-RUST-COMPILE-ON-DEPENDENCY-PR",
                 "CI-RULE-SCOPE-NEVER-INVOKED",
+                "CI-TAG-STEP-MUST-BE-ABLE-TO-FAIL",
                 "Stenio Custom Rules No Workflow Invokes",
             ],
         ),

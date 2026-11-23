@@ -700,6 +700,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
+        .chain(cv::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
     {

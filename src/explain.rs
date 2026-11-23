@@ -191,6 +191,39 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Remove debugging statements or use 'stenio --fix' for automated cleanup.",
     },
     RuleExplanation {
+        id: "GOV-AGENT-LAWS",
+        name: "Governance & Agent Laws in AGENTS.md",
+        severity: "ERROR",
+        tag: "gov",
+        summary: "Audits AGENTS.md against one of three profiles chosen by content: universal vault, satellite, or engineering hub.",
+        rationale: "Profile selection is by literal text. (1) A file that mentions 'agent-conventions.md' WITHOUT 'StenioBOT'/'StênioBOT' is audited as the UNIVERSAL vault AGENTS.md and must also carry a Rust-tools section ('Ferramentas Rust' / 'Rust Tools' / 'Terminal Preferences') and mention Homelab or MEI; otherwise 'Universal AGENTS.md missing essential conventions or rules'. (2) A file mentioning 'curriculum-vitae', 'WITH-SMOOTH-MOTION' or StenioSentinel/StênioKernel (without a guidance heading or 'ABSOLUTE LAWS OF THE AGENT') is a SATELLITE and needs >= 5 rules. (3) Everything else is the engineering hub: >= 13 laws, a 'GOLDEN RULE'/'REGRA DE OURO' clause and a 'CONTEXT INHERITANCE'/'HERANCA DE CONTEXTO' clause. A repo AGENTS.md that merely links agent-conventions.md is therefore misread as the universal file.",
+        bad_example: "AGENTS.md of an application repo:\nSee governance/agent-conventions.md for the conventions.\n(no StenioBOT mention, no homelab sections)",
+        good_example: "Mention StenioBOT in the repo AGENTS.md (or avoid the literal 'agent-conventions.md'), and for a satellite keep >= 5 numbered rules; for a hub keep the Golden Rule and Context Inheritance clauses.",
+        remediation: "Read the message: it names which profile was chosen. Either add the missing clause/section, or move the profile by adding 'StenioBOT' (leaves the universal branch) or removing the literal 'agent-conventions.md'. Source: src/gov.rs evaluate_agents_md_content.",
+    },
+    RuleExplanation {
+        id: "CV-BILINGUAL-PARITY",
+        name: "CV Bilingual PT-BR / EN-US Parity",
+        severity: "ERROR",
+        tag: "cv",
+        summary: "Every curriculum-vitae file in pt-br/ must have its en-us counterpart and vice versa.",
+        rationale: "The CV repository ships each variant in both languages; a missing side means one audience receives no CV.",
+        bad_example: "pt-br/01-tech-pm-br.md exists, en-us/01-tech-pm-en.md does not",
+        good_example: "Both pt-br/01-tech-pm-br.md and en-us/01-tech-pm-en.md exist.",
+        remediation: "Create the missing counterpart by translating the existing file.",
+    },
+    RuleExplanation {
+        id: "CV-README-THREAD",
+        name: "CV README Continuous Narrative ('The Thread')",
+        severity: "WARN",
+        tag: "cv",
+        summary: "The README of a CV repository must keep the 'The Thread' / 'O Fio da Meada' section.",
+        rationale: "The README carries the continuous career narrative. Since GB-286 the check applies only to a CV repository (a pt-br/ or en-us/ directory exists); a derived or fork repository under --scope all is not bound by it and is skipped.",
+        bad_example: "curriculum-vitae README.md without any 'The Thread' heading",
+        good_example: "## The Thread\n(narrative paragraph)",
+        remediation: "Add the 'The Thread' (or 'O Fio da Meada') section to the CV README. For a non-CV repo, nothing to do: the rule no longer fires.",
+    },
+    RuleExplanation {
         id: "GOV-LEFTOVER-TEST-ARTIFACTS",
         name: "Mandatory Cleanup of Leftover Test Artifacts / Residual Scratch",
         severity: "ERROR",
@@ -1499,6 +1532,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "- run: stenio --scope frappe --compact   # added next to the fork and tag passes",
         remediation: "Add a workflow pass that runs `stenio --scope frappe --compact` (the stenio-check action leaves the verified binary in RUNNER_TEMP/stenio/stenio, or use the action with scope: frappe).",
     },
+    RuleExplanation {
+        id: "CI-TAG-STEP-MUST-BE-ABLE-TO-FAIL",
+        name: "CI Tag Step Cannot Fail",
+        severity: "WARNING",
+        tag: "ci",
+        summary: "A workflow step runs `stenio --tag <tag> --strict` but every rule of that tag (custom and built-in) has severity warning, so the step can never fail.",
+        rationale: "GB-288, 2026-11-23: the gov step added to macrokey-driver and Miracena ran `stenio --tag gov --strict` while GOV-LOG-EN was a warning; `--strict` exits non-zero on errors only, so a mutation showed warnings=1 exit=0. A gate that cannot go red is documentation (rule 12.1/12.2). The check is offline: it reads the workflows and the rule severities of steniocheck.toml (a custom rule without `severity` is an error). Calls without `--strict` are not judged, and the subsystem audits sharing a tag name (gov, doc, db) are not rules and are out of this decision.",
+        bad_example: "# steniocheck.toml: [[custom_rules]] id = \"GOV-LOG-EN\" tag = \"gov\" severity = \"warning\"\n- run: stenio --tag gov --strict --compact",
+        good_example: "# raise one rule of the tag to error (omit `severity`, or severity = \"error\")\n[[custom_rules]]\nid = \"GOV-LOG-EN\"\ntag = \"gov\"\nseverity = \"error\"",
+        remediation: "Raise at least one rule of the tag to `severity = \"error\"` or drop the step; then plant a violation and confirm the exit code changes (mutation proof).",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
@@ -1620,4 +1664,30 @@ pub fn list_all_explanations() -> String {
         "\nUse 'stenio --explain <RULE_ID>' for details, violations, and compliant examples.\n",
     );
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `rule_id: "X"` literal emitted by these modules must be explainable (GB-286).
+    #[test]
+    fn every_emitted_rule_id_has_an_explain_entry() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let re = regex::Regex::new(r#"rule_id:\s*"([A-Z][A-Z0-9-]+)""#).unwrap();
+        let mut missing = Vec::new();
+        for f in ["gov.rs", "cv.rs"] {
+            let text = std::fs::read_to_string(src.join(f)).unwrap();
+            for c in re.captures_iter(&text) {
+                if get_explanation(&c[1]).is_none() {
+                    missing.push(format!("{f}: {}", &c[1]));
+                }
+            }
+        }
+        // main.rs emits GOV-AGENT-LAWS for the AGENTS.md audit.
+        if get_explanation("GOV-AGENT-LAWS").is_none() {
+            missing.push("main.rs: GOV-AGENT-LAWS".to_string());
+        }
+        assert!(missing.is_empty(), "rule ids without --explain: {missing:?}");
+    }
 }

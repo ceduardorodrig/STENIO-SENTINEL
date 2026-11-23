@@ -131,7 +131,9 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
 
     // 2. Continuous README Narrative Validation ("The Thread")
     let readme_path = cv_root.join("README.md");
-    if readme_path.is_file() {
+    // GB-286 decision: the thread is a CV-repo contract. A derived/fork repository (no pt-br/ or
+    // en-us/ directory) under `--scope all` has a README that is not a career narrative.
+    if readme_path.is_file() && is_cv_repo(&cv_root) {
         scanned_count += 1;
         if let Ok(content) = fs::read_to_string(&readme_path) {
             let has_thread_pt =
@@ -173,4 +175,47 @@ pub fn audit_curriculum_vitae(root: &Path) -> CvReport {
         messages,
         violations,
     }
+}
+
+/// A CV repository carries the bilingual `pt-br/` or `en-us/` directories; anything else (a fork,
+/// a derived tool) is not bound by the README narrative contract (GB-286).
+fn is_cv_repo(cv_root: &Path) -> bool {
+    cv_root.join("pt-br").is_dir() || cv_root.join("en-us").is_dir()
+}
+
+fn thread_fires(root: &Path) -> bool {
+    audit_curriculum_vitae(root)
+        .violations
+        .iter()
+        .any(|v| v.rule_id == "CV-README-THREAD")
+}
+
+pub fn self_test_cases() -> Vec<(String, bool)> {
+    let base = std::env::temp_dir().join(format!("stenio-cv-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let mk = |name: &str, cv: bool, readme: &str| {
+        let d = base.join(name);
+        let _ = fs::create_dir_all(if cv { d.join("pt-br") } else { d.clone() });
+        let _ = fs::write(d.join("README.md"), readme);
+        d
+    };
+    let fork = mk("fork", false, "# driver\nNo narrative here.\n");
+    let cv_bad = mk("cv-bad", true, "# CV\nNo narrative here.\n");
+    let cv_ok = mk("cv-ok", true, "# CV\n## The Thread\nok\n");
+    let out = vec![
+        (
+            "CV-README-THREAD ignores a fork README (no pt-br/en-us)".to_string(),
+            !thread_fires(&fork),
+        ),
+        (
+            "CV-README-THREAD fires on a CV repo README without the thread".to_string(),
+            thread_fires(&cv_bad),
+        ),
+        (
+            "CV-README-THREAD is green on a CV repo with the thread".to_string(),
+            !thread_fires(&cv_ok),
+        ),
+    ];
+    let _ = fs::remove_dir_all(&base);
+    out
 }
