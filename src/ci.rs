@@ -36,6 +36,19 @@
 //!
 //! An exclusion without a reason does not silence anything (WARNING), and one that matches a repo
 //! that does compile is reported as stale (WARNING), so the list cannot rot.
+//!
+//! `CI-RULE-SCOPE-NEVER-INVOKED` (GB-283, WARNING). Stenio rules live in scopes and a scope only
+//! runs when a command asks for it: `stenio --scope fork` and `--tag miracena` never execute a
+//! `FRAPPE-*` rule, which exists only in scope `frappe` (`main.rs`: `--scope frappe` returns before
+//! the generic scan). Evidence (2026-11-21, Miracena PR #2): `FRAPPE-LINK-TITLE` and
+//! `FRAPPE-FIELD-ORDER` lived in a scope no CI pass ran while an inline Python copy was the only
+//! gate. The check is offline: a repository that carries a Frappe app (a `[frappe]` table in
+//! `steniocheck.toml`, or `doctype/<name>/<name>.json` files) needs one workflow step that invokes
+//! stenio with `--scope frappe` (also `--scope=frappe`, `stenio pre-release`, `stenio verify-release`,
+//! the stenio-check action with `scope: frappe`, a repository script such a step calls, or a
+//! `[general] scope = "frappe"` default with a bare `stenio` call). A repository without workflows
+//! is out of scope (no pass to compare), and a reusable-workflow job is opaque, so it counts as
+//! possibly covering, like in GB-272.
 
 use regex::Regex;
 use serde_yaml::Value;
@@ -51,6 +64,9 @@ pub const PARITY_ID: &str = "CI-STEP-STENIO-PARITY";
 pub const COMPILE_ID: &str = "CI-RUST-COMPILE-ON-DEPENDENCY-PR";
 /// `rule` value of a `[[dependabot.exclude]]` entry that silences [`COMPILE_ID`].
 pub const COMPILE_KEY: &str = "cargo-compile";
+pub const SCOPE_ID: &str = "CI-RULE-SCOPE-NEVER-INVOKED";
+/// The scope that carries the `FRAPPE-*` rules.
+const FRAPPE_SCOPE: &str = "frappe";
 
 /// (Stenio rule, marker groups): a step re-implements the rule when every group has at least one
 /// of its markers in the script body.
@@ -79,6 +95,8 @@ pub struct Step {
     pub name: String,
     pub run: String,
     pub uses: String,
+    /// `with: scope:` of an action step (the stenio-check action takes its scope there).
+    pub with_scope: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -150,6 +168,9 @@ pub fn parse_workflow(file: &str, yaml: &str) -> Option<Workflow> {
                 name: text(key(s, "name")),
                 run: text(key(s, "run")),
                 uses: text(key(s, "uses")),
+                with_scope: key(s, "with")
+                    .map(|w| text(key(w, "scope")))
+                    .unwrap_or_default(),
             });
         }
     }
@@ -407,6 +428,116 @@ pub fn evaluate_compile(
     out
 }
 
+fn scope_flag_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"--scope(?:=|\s+)["']?([A-Za-z_-]+)"#).ok())
+        .as_ref()
+}
+
+fn frappe_command_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\bstenio(?:\s+|[\x22']\s+)(?:pre-release|verify-release)\b").ok()
+    })
+    .as_ref()
+}
+
+/// Scopes one piece of text asks stenio to run. `default_scope` is the `[general] scope` of the
+/// repository config: a bare `stenio` call without `--scope` runs it.
+fn scopes_in_text(text: &str, default_scope: Option<&str>) -> Vec<String> {
+    if !text.contains("stenio") {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = scope_flag_re()
+        .map(|re| {
+            re.captures_iter(text)
+                .map(|c| c[1].to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    // `stenio pre-release` and `stenio verify-release` run the frappe audit (pre_release.rs).
+    if frappe_command_re().is_some_and(|re| re.is_match(text)) {
+        out.push(FRAPPE_SCOPE.to_string());
+    }
+    if out.is_empty() {
+        if let Some(d) = default_scope.filter(|d| !d.is_empty()) {
+            out.push(d.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Scopes a step invokes: its own `run:` body, the `scope:` input of the stenio-check action, and
+/// the repository scripts it calls (one level, read from `root`).
+pub fn step_scopes(step: &Step, root: &Path, default_scope: Option<&str>) -> Vec<String> {
+    let mut out = scopes_in_text(&step.run, default_scope);
+    if step.uses.to_lowercase().contains("stenio-check") && !step.with_scope.is_empty() {
+        out.push(step.with_scope.to_lowercase());
+    }
+    for tok in step.run.split_whitespace() {
+        let f = tok
+            .trim_matches(|c| c == '"' || c == '\'')
+            .trim_start_matches("./");
+        if f.ends_with(".sh") && !f.contains("..") && !f.starts_with('/') {
+            if let Ok(body) = fs::read_to_string(root.join(f)) {
+                out.extend(scopes_in_text(&body, default_scope));
+            }
+        }
+    }
+    out
+}
+
+/// True when the tree carries a Frappe app: a `[frappe]` table or `doctype/<n>/<n>.json` files.
+fn has_frappe_app(root: &Path, cfg: &SteniocheckConfig) -> bool {
+    cfg.frappe.is_some()
+        || ignore::WalkBuilder::new(root)
+            .max_depth(Some(7))
+            .build()
+            .filter_map(Result::ok)
+            .any(|e| {
+                let p = e.path();
+                let dir = p.parent();
+                p.extension().is_some_and(|x| x == "json")
+                    && dir.and_then(|d| d.parent()).and_then(|d| d.file_name())
+                        == Some(std::ffi::OsStr::new("doctype"))
+                    && p.file_stem() == dir.and_then(Path::file_name)
+            })
+}
+
+/// Pure decision for GB-283. `needed` holds the scopes the repository's rules live in; `invoked`
+/// holds, per workflow, the scopes its steps run. Inert without workflows.
+pub fn evaluate_scopes(
+    needed: &[&str],
+    workflows: &[Workflow],
+    invoked: &[Vec<String>],
+) -> Vec<Violation> {
+    if workflows.is_empty() || workflows.iter().any(|w| w.opaque_job) {
+        return Vec::new();
+    }
+    needed
+        .iter()
+        .filter(|scope| {
+            !invoked
+                .iter()
+                .flatten()
+                .any(|s| s.eq_ignore_ascii_case(scope))
+        })
+        .map(|scope| {
+            violation(
+                SCOPE_ID,
+                "Stenio Scope No Workflow Invokes",
+                ".github/workflows",
+                1,
+                format!(
+                    "the repository carries rules of scope `{scope}` but none of its {} workflow(s) runs `stenio --scope {scope}`: those rules never execute in CI (GB-283: FRAPPE-LINK-TITLE and FRAPPE-FIELD-ORDER lived in scope frappe, which no pass ran, while an inline copy was the only gate)",
+                    workflows.len()
+                ),
+                "Add a pass `stenio --scope frappe --compact` (the binary the stenio-check action leaves in RUNNER_TEMP, or the action with `scope: frappe`).",
+            )
+        })
+        .collect()
+}
+
 /// Line (1-based) of the first line of the step's `run:` body in the workflow file, else 1.
 fn line_in(root: &Path, file: &str, step: &Step) -> usize {
     let Ok(body) = fs::read_to_string(root.join(file)) else {
@@ -463,8 +594,25 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> CiReport {
         &compiling,
         &exclusions,
     ));
+    let default_scope = cfg.general.as_ref().and_then(|g| g.scope.as_deref());
+    let mut needed: Vec<&str> = Vec::new();
+    if !workflows.is_empty() && has_frappe_app(root, cfg) {
+        needed.push(FRAPPE_SCOPE);
+    }
+    let invoked: Vec<Vec<String>> = workflows
+        .iter()
+        .map(|w| {
+            w.steps
+                .iter()
+                .flat_map(|s| step_scopes(s, root, default_scope))
+                .collect()
+        })
+        .collect();
+    report
+        .violations
+        .extend(evaluate_scopes(&needed, &workflows, &invoked));
     report.messages.push(format!(
-        "{COMPILE_ID}/{PARITY_ID}: {} workflow(s), {} finding(s)",
+        "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}: {} workflow(s), {} finding(s)",
         workflows.len(),
         report.violations.len()
     ));
@@ -539,6 +687,36 @@ fn compile_exclusion(reason: &str) -> DependabotExclude {
     }
 }
 
+const FORK_ONLY_YML: &str = "name: ci\non: [push, pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n        with:\n          scope: fork\n      - run: '\"$RUNNER_TEMP/stenio/stenio\" --tag miracena --strict --compact'\n";
+const FRAPPE_PASS_YML: &str = "name: ci\non: [push, pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n        with:\n          scope: fork\n      - run: '\"$RUNNER_TEMP/stenio/stenio\" --scope frappe --compact'\n";
+const FRAPPE_ACTION_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n        with:\n          scope: frappe\n";
+const FRAPPE_EQ_YML: &str = "name: ci\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: stenio --scope=frappe --compact\n";
+const DOCTYPE_FILES: [(&str, &str); 2] = [
+    (
+        "app/app/doctype/thing/thing.json",
+        "{\"doctype\":\"DocType\",\"name\":\"Thing\",\"fields\":[]}",
+    ),
+    ("app/hooks.py", "app_name = \"app\"\n"),
+];
+
+/// Findings of GB-283 on a tree: the Frappe files (unless `frappe` is false) plus the workflow.
+fn scope_count(workflow: Option<&str>, frappe: bool, tag: &str) -> Option<usize> {
+    let mut files: Vec<(&str, &str)> = if frappe {
+        DOCTYPE_FILES.to_vec()
+    } else {
+        vec![("README.md", "# repo\n")]
+    };
+    if let Some(w) = workflow {
+        files.push((".github/workflows/ci.yml", w));
+    }
+    Some(
+        tree(&files, tag, &SteniocheckConfig::default())?
+            .iter()
+            .filter(|v| v.rule_id == SCOPE_ID)
+            .count(),
+    )
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let none = SteniocheckConfig::default();
     let ex = |reason: &str| CiParityExclude {
@@ -600,6 +778,26 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                 "ci-compile-noreason",
                 &cfg_with(compile_exclusion(" ")),
             ) == Some(2),
+        ),
+        (
+            "ci-scope: mutation, Frappe DocTypes and a workflow that runs only fork and a tag fires"
+                .to_string(),
+            scope_count(Some(FORK_ONLY_YML), true, "ci-scope-bad") == Some(1),
+        ),
+        (
+            "ci-scope: a pass with `--scope frappe` is green".to_string(),
+            scope_count(Some(FRAPPE_PASS_YML), true, "ci-scope-pass") == Some(0),
+        ),
+        (
+            "ci-scope: the stenio-check action with `scope: frappe` and `--scope=frappe` are green"
+                .to_string(),
+            scope_count(Some(FRAPPE_ACTION_YML), true, "ci-scope-action") == Some(0)
+                && scope_count(Some(FRAPPE_EQ_YML), true, "ci-scope-eq") == Some(0),
+        ),
+        (
+            "ci-scope: inert without workflows and for a repo without a Frappe app".to_string(),
+            scope_count(None, true, "ci-scope-noci") == Some(0)
+                && scope_count(Some(FORK_ONLY_YML), false, "ci-scope-nofrappe") == Some(0),
         ),
         (
             "ci-compile: inert without a dependabot cargo entry".to_string(),

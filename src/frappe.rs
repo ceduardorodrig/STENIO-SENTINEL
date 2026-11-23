@@ -80,6 +80,11 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
     (
+        "FRAPPE-FIELDNAME-UNIQUE",
+        "DocType Repeats A Fieldname",
+        Severity::Error,
+    ),
+    (
         "FRAPPE-AUTONAME-COLLISION",
         "Duplicate Guard Defeated By Autoname",
         Severity::Error,
@@ -770,6 +775,51 @@ fn rule_field_order(c: &Ctx) -> Vec<Violation> {
     out
 }
 
+// ── FRAPPE-FIELDNAME-UNIQUE (GB-279) ───────────────────────────────────────
+/// A DocType may not name two fields alike: `validate_fields.check_unique_fieldname` throws
+/// `UniqueFieldnameError` ("Fieldname X appears multiple times in rows ...") when the DocType is
+/// saved (during `bench migrate` the check runs only under CI, `frappe.flags.in_migrate`), so a
+/// duplicate that slips into a release surfaces on the first desk edit of the production site. A field without a `fieldname` (a layout
+/// break exported without one) has nothing to compare and is skipped. JSON that does not parse is
+/// reported by `FRAPPE-DOCTYPE-HEADER-KEYS` ("does not parse"), the same file walk, so it is not
+/// repeated here: the pair replaces the inline CI step "DocType JSON is valid and fieldnames are
+/// unique" of Miracena PR #2.
+/// fonte: github.com/frappe/frappe v16.60.2 frappe/core/doctype/doctype/doctype.py:1361-1371 and :1851-1852.
+fn rule_fieldname_unique(c: &Ctx) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for json in c.files.iter().filter(|p| doctype_json(p)) {
+        let text = read(json);
+        let Ok(v) = serde_json::from_str::<Value>(&text) else {
+            continue; // FRAPPE-DOCTYPE-HEADER-KEYS owns the parse error
+        };
+        let stem = str_of(&v, "name");
+        let r = rel(&c.root, json);
+        let mut rows: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let fields = v.get("fields").and_then(|f| f.as_array());
+        for (i, f) in fields.into_iter().flatten().enumerate() {
+            let n = str_of(f, "fieldname");
+            if !n.is_empty() {
+                rows.entry(n).or_default().push(i + 1);
+            }
+        }
+        for (n, idx) in rows.iter().filter(|(_, idx)| idx.len() > 1) {
+            let list: Vec<String> = idx.iter().map(usize::to_string).collect();
+            out.push(viol(
+                "FRAPPE-FIELDNAME-UNIQUE",
+                &r,
+                line_of(&text, &format!("\"{n}\"")),
+                n,
+                format!(
+                    "DocType `{stem}`: fieldname `{n}` appears multiple times in rows {}: Frappe refuses to save or migrate it (UniqueFieldnameError).",
+                    list.join(", ")
+                ),
+                "Rename or delete one of the fields; keep field_order in step.",
+            ));
+        }
+    }
+    out
+}
+
 /// A deterministic autoname (`format:`, `field:`, `prompt:`) fills `doc.name` **before**
 /// `validate`, so a duplicate guard that compares the found name with `doc.name` is always
 /// false and the insert reaches the primary key. rc80 and rc81 of the Miracena app burned
@@ -1394,6 +1444,23 @@ fn rule_tests(c: &Ctx) -> Vec<Violation> {
         c.root.join(file)
     };
     let tr = rel(&c.root, &path);
+    // GB-280: a list kept outside the repository (the owner's vault) is absent on a CI runner or a
+    // fresh clone. That is an environment fact, not a defect of the tree, so the rule skips visibly
+    // (WARNING, which never fails scope frappe) instead of erroring. A list inside the repository
+    // that is missing stays an ERROR: it is the repository's own file.
+    if !path.exists() && !path.starts_with(&c.root) {
+        return vec![viol_as(
+            "FRAPPE-TEST-REGISTERED",
+            Severity::Warning,
+            &tr,
+            1,
+            anchor,
+            format!(
+                "SKIPPED: the test list `{tr}` is outside the repository and absent here, so no test could be checked against section `{anchor}`."
+            ),
+            "Keep the test list in the repository (relative `test_list_file`) so every runner enforces FRAPPE-TEST-REGISTERED; the skip is only for a list that lives on the owner's machine.",
+        )];
+    }
     let sec = match fs::read_to_string(&path)
         .ok()
         .and_then(|t| section(&t, anchor))
@@ -5344,6 +5411,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     for f in [
         rule_doctype_headers,
         rule_field_order,
+        rule_fieldname_unique,
         rule_controller,
         rule_autoname_collision,
         rule_link_title,
@@ -5743,6 +5811,16 @@ pub fn fixture_files(bad: bool) -> Vec<(String, String)> {
             "demoapp/demo/doctype/deal/deal.py",
             "class Deal:\n    pass\n",
         ));
+        // FRAPPE-FIELDNAME-UNIQUE: the same fieldname in rows 1 and 3 of one DocType.
+        v.push(f("demoapp/demo/doctype/twin/__init__.py", ""));
+        v.push(f(
+            "demoapp/demo/doctype/twin/twin.json",
+            "{\"doctype\":\"DocType\",\"name\":\"Twin\",\"fields\":[{\"fieldname\":\"code\",\"fieldtype\":\"Data\"},{\"fieldname\":\"note\",\"fieldtype\":\"Data\"},{\"fieldname\":\"code\",\"fieldtype\":\"Data\"}],\"permissions\":[{\"role\":\"Demo Role\"}]}",
+        ));
+        v.push(f(
+            "demoapp/demo/doctype/twin/twin.py",
+            "class Twin:\n    pass\n",
+        ));
         // DOCTYPE-CALENDAR-GANTT-NEEDS-DATES: the flag with a start date, no end, no controller.
         v.push(f("demoapp/demo/doctype/roadmap/__init__.py", ""));
         v.push(f("demoapp/demo/doctype/roadmap/roadmap.json", ROADMAP_JSON));
@@ -5815,7 +5893,110 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         "FRAPPE-TEST-REGISTERED-PURE".to_string(),
         pure_registration_agrees(),
     ));
+    cases.push((
+        "FRAPPE-FIELDNAME-UNIQUE-JSON-PARSE".to_string(),
+        fieldname_unique_agrees(),
+    ));
+    cases.push((
+        "FRAPPE-TEST-REGISTERED-ABSENT-LIST".to_string(),
+        absent_test_list_agrees(),
+    ));
     cases
+}
+
+/// GB-280 mutation proof: a test list outside the repository that is absent skips visibly (one
+/// WARNING, no ERROR); an in-repo list that lacks a test is red; an in-repo list that names it is
+/// green; an in-repo list that does not exist stays an ERROR (the skip is only for the outside).
+pub(crate) fn absent_test_list_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let outcome = |file: &str, doc: Option<&str>| -> Option<(usize, usize)> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut files: Vec<(String, String)> = vec![
+            (
+                "repo/app/__init__.py".into(),
+                "__version__ = \"0.1.0\"\n".into(),
+            ),
+            ("repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+            (
+                "repo/app/tests/alpha.py".into(),
+                "def run():\n    pass\n".into(),
+            ),
+        ];
+        if let Some(d) = doc {
+            files.push(("repo/AGENTS.md".into(), d.to_string()));
+        }
+        let cfg = FrappeConfig {
+            app: Some("app".into()),
+            test_list_file: Some(file.to_string()),
+            test_list_anchor: Some("## 2. Tests".into()),
+            ..FrappeConfig::default()
+        };
+        let base = write_fixture(&format!("absent-list-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        let hits: Vec<Violation> = got?
+            .into_iter()
+            .filter(|v| v.rule_id == "FRAPPE-TEST-REGISTERED")
+            .collect();
+        let errors = hits
+            .iter()
+            .filter(|v| v.severity == Severity::Error)
+            .count();
+        Some((errors, hits.len() - errors))
+    };
+    outcome("/nonexistent-stenio-vault/AGENTS.md", None) == Some((0, 1))
+        && outcome("AGENTS.md", Some("## 2. Tests\nbeta\n")) == Some((1, 0))
+        && outcome("AGENTS.md", Some("## 2. Tests\n`alpha`\n")) == Some((0, 0))
+        && outcome("AGENTS.md", None) == Some((1, 0))
+}
+
+/// GB-279 mutation proof for the pair that replaces the inline CI step "JSON is valid and fieldnames
+/// are unique": a duplicated fieldname is red under FRAPPE-FIELDNAME-UNIQUE, JSON that does not
+/// parse is red under FRAPPE-DOCTYPE-HEADER-KEYS (and not double-reported), the same DocType with
+/// distinct fieldnames is green under both.
+pub(crate) fn fieldname_unique_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let count = |json: &str, rule: &str| -> Option<usize> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let files: Vec<(String, String)> = vec![
+            (
+                "repo/app/__init__.py".into(),
+                "__version__ = \"0.1.0\"\n".into(),
+            ),
+            ("repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+            (
+                "repo/app/demo/doctype/twin/__init__.py".into(),
+                String::new(),
+            ),
+            (
+                "repo/app/demo/doctype/twin/twin.py".into(),
+                "class Twin:\n    pass\n".into(),
+            ),
+            (
+                "repo/app/demo/doctype/twin/twin.json".into(),
+                json.to_string(),
+            ),
+        ];
+        let base = write_fixture(&format!("fieldname-unique-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(got?.iter().filter(|v| v.rule_id == rule).count())
+    };
+    let doc = |second: &str| {
+        format!(
+            "{{\"doctype\":\"DocType\",\"name\":\"Twin\",\"fields\":[{{\"fieldname\":\"code\"}},{{\"fieldname\":\"{second}\"}}],\"permissions\":[]}}"
+        )
+    };
+    let broken = "{\"doctype\":\"DocType\",\"name\":\"Twin\",\"fields\":[{\"fieldname\":\"code\"},],\"permissions\":[]}";
+    count(&doc("code"), "FRAPPE-FIELDNAME-UNIQUE") == Some(1)
+        && count(&doc("note"), "FRAPPE-FIELDNAME-UNIQUE") == Some(0)
+        && count(broken, "FRAPPE-DOCTYPE-HEADER-KEYS") == Some(1)
+        && count(broken, "FRAPPE-FIELDNAME-UNIQUE") == Some(0)
+        && count(&doc("note"), "FRAPPE-DOCTYPE-HEADER-KEYS") == Some(0)
 }
 
 /// GB-150 mutation proof, run on every self-test: a stray `tests/stray_pure.py` is red, the same

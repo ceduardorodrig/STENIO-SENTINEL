@@ -852,7 +852,11 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
         ),
         (
             "ci.rs",
-            &["CI-STEP-STENIO-PARITY", "CI-RUST-COMPILE-ON-DEPENDENCY-PR"],
+            &[
+                "CI-STEP-STENIO-PARITY",
+                "CI-RUST-COMPILE-ON-DEPENDENCY-PR",
+                "CI-RULE-SCOPE-NEVER-INVOKED",
+            ],
         ),
         (
             "hook_fixtures.rs",
@@ -872,6 +876,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "FRAPPE-CURRENCY-THRESHOLD-UNSET",
                 "FRAPPE-PERMISSION-SCOPE",
                 "FRAPPE-FETCH-PARITY",
+                "FRAPPE-FIELDNAME-UNIQUE",
                 "FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE",
                 "JS-DESK-WEB-ONLY-API",
                 "no suppression directive",

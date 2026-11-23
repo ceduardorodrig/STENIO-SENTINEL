@@ -2803,11 +2803,13 @@ fn main() -> Result<()> {
         }
     }
 
-    // ── CI workflow rules (CI-STEP-STENIO-PARITY GB-262, CI-RUST-COMPILE-ON-DEPENDENCY-PR GB-272)
+    // ── CI workflow rules (CI-STEP-STENIO-PARITY GB-262, CI-RUST-COMPILE-ON-DEPENDENCY-PR GB-272, CI-RULE-SCOPE-NEVER-INVOKED GB-283)
     let should_audit_ci = (tag_lower.as_deref() == Some("ci") || tag_lower.is_none())
         && only_rule
             .map(|s| {
-                s.eq_ignore_ascii_case(ci::PARITY_ID) || s.eq_ignore_ascii_case(ci::COMPILE_ID)
+                s.eq_ignore_ascii_case(ci::PARITY_ID)
+                    || s.eq_ignore_ascii_case(ci::COMPILE_ID)
+                    || s.eq_ignore_ascii_case(ci::SCOPE_ID)
             })
             .unwrap_or(true);
     if should_audit_ci {

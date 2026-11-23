@@ -1236,6 +1236,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         remediation: "Add the missing fieldname to field_order at the position it should render, or remove the stale entry.",
     },
     RuleExplanation {
+        id: "FRAPPE-FIELDNAME-UNIQUE",
+        name: "DocType Repeats A Fieldname",
+        severity: "ERROR",
+        tag: "frappe",
+        summary: "In a DocType JSON, no two entries of fields[] may carry the same fieldname. Fields without a fieldname are skipped. JSON that does not parse is reported by FRAPPE-DOCTYPE-HEADER-KEYS (same files), so the pair covers 'JSON is valid and fieldnames are unique'.",
+        rationale: "Frappe validates the DocType on save with check_unique_fieldname and throws UniqueFieldnameError 'Fieldname X appears multiple times in rows N, M' (frappe/core/doctype/doctype/doctype.py:1361-1371, called at :1851-1852, v16.60.2). A repeated fieldname merged by hand or by a bad rebase therefore stays invisible until someone edits the DocType on a site. GB-279, 2026-11-21: Miracena PR #2 kept an inline Python step only for this check, a second copy of a rule that no Stenio rule covered.",
+        bad_example: "\"fields\": [{\"fieldname\": \"code\"}, {\"fieldname\": \"note\"}, {\"fieldname\": \"code\"}]",
+        good_example: "\"fields\": [{\"fieldname\": \"code\"}, {\"fieldname\": \"note\"}, {\"fieldname\": \"code_2\"}]",
+        remediation: "Rename or delete one of the repeated fields and keep field_order in step (FRAPPE-FIELD-ORDER). Then delete any inline CI step that checks uniqueness and run `stenio --scope frappe` instead.",
+    },
+    RuleExplanation {
         id: "SCOPE-HUB-PATH-RESOLUTION",
         name: "An Explicit --path Is The Tree That Gets Scanned",
         severity: "INFO",
@@ -1476,6 +1487,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         bad_example: "# Cargo.lock + dependabot cargo entry\n# .github/workflows/ci.yml only runs uses: .../stenio-check@v1",
         good_example: "# .github/workflows/ci.yml\non: [pull_request]\njobs:\n  rust:\n    steps:\n      - run: cargo check --locked --workspace --all-targets",
         remediation: "Add a pull_request job that runs `cargo check --locked --workspace --all-targets` (or build/test); for a repo without CI declare [[dependabot.exclude]] rule = \"cargo-compile\" with a reason.",
+    },
+    RuleExplanation {
+        id: "CI-RULE-SCOPE-NEVER-INVOKED",
+        name: "Stenio Scope No Workflow Invokes",
+        severity: "WARNING",
+        tag: "ci",
+        summary: "A repository that carries a Frappe app (a [frappe] table in steniocheck.toml, or doctype/<n>/<n>.json files) and has workflows, but whose workflows never run stenio with --scope frappe (or --scope=frappe, stenio pre-release, stenio verify-release, the stenio-check action with scope: frappe, a repository script a step calls, or a bare stenio with [general] scope = \"frappe\"), so its FRAPPE-* rules never execute in CI. A job that calls a reusable workflow is opaque and counts as possibly covering; a repository without workflows is not checked.",
+        rationale: "GB-283, 2026-11-21: stenio --tag miracena --list and stenio --scope fork --list show zero FRAPPE-* rules because those rules exist only in scope frappe (--scope frappe returns before the generic scan, src/main.rs). Miracenar/miracena-plataforma-frappe ran fork and the miracena tag, so FRAPPE-LINK-TITLE and FRAPPE-FIELD-ORDER were never in CI and an inline Python copy was the only gate. CI-STEP-STENIO-PARITY (GB-262) catches the inline copy but not the missing pass.",
+        bad_example: "- uses: ceduardorodrig/STENIO-SENTINEL/.github/actions/stenio-check@v1\n  with:\n    scope: fork\n- run: stenio --tag miracena --strict --compact",
+        good_example: "- run: stenio --scope frappe --compact   # added next to the fork and tag passes",
+        remediation: "Add a workflow pass that runs `stenio --scope frappe --compact` (the stenio-check action leaves the verified binary in RUNNER_TEMP/stenio/stenio, or use the action with scope: frappe).",
     },
 ];
 
