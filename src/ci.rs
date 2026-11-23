@@ -669,6 +669,46 @@ pub fn evaluate_tag_can_fail(tags: &[(String, bool, bool)], calls: &[Vec<Call>])
     out
 }
 
+
+pub const LOG_EN_ID: &str = "GOV-LOG-EN-PRINT-COVERAGE";
+
+/// True when a log-language pattern names Python's `print(` call: `println`/`eprintln` (Rust)
+/// are removed first because they contain the word `print`.
+fn pattern_covers_print(pattern: &str) -> bool {
+    pattern
+        .replace("eprintln", "")
+        .replace("println", "")
+        .contains("print")
+}
+
+/// Pure decision for GB-289. A custom rule whose id contains `LOG-EN` and that scans `py` files
+/// must name `print(` in its pattern: Python's diagnostic output is `print(...)`, and the Tier A
+/// pattern copied from the Rust repos listed only log_msg, println!, eprintln!, error!, warn!,
+/// info!, debug! and usage, so `print('Falha ...')` passed (mutation on macrokey-driver driver.py,
+/// 2026-11-23). The wordlist stays per repository (it is curated per codebase); the engine only
+/// refuses a rule whose declared scope (py) its pattern cannot reach.
+/// `rules` holds `(id, pattern, extensions)`.
+pub fn evaluate_log_en_coverage(rules: &[(String, String, Vec<String>)]) -> Vec<Violation> {
+    rules
+        .iter()
+        .filter(|(id, _, _)| id.to_uppercase().contains("LOG-EN"))
+        .filter(|(_, _, ext)| ext.iter().any(|e| e.eq_ignore_ascii_case("py")))
+        .filter(|(_, pattern, _)| !pattern_covers_print(pattern))
+        .map(|(id, _, _)| {
+            violation(
+                LOG_EN_ID,
+                "Log Language Pattern Misses Python print",
+                "steniocheck.toml",
+                1,
+                format!(
+                    "custom rule `{id}` scans `py` files but its pattern has no `print(` call, so a Portuguese `print('Falha ...')` is never reported (GB-289)"
+                ),
+                "Add `print\\\\(` to the call alternation of the pattern, e.g. `(log_msg|print\\\\(|println!|...)`.",
+            )
+        })
+        .collect()
+}
+
 /// True when the tree carries a Frappe app: a `[frappe]` table or `doctype/<n>/<n>.json` files.
 fn has_frappe_app(root: &Path, cfg: &SteniocheckConfig) -> bool {
     cfg.frappe.is_some()
@@ -829,6 +869,13 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> CiReport {
     report
         .violations
         .extend(evaluate_tag_can_fail(&tag_rules, &calls));
+    let log_en: Vec<(String, String, Vec<String>)> = cfg
+        .custom_rules
+        .iter()
+        .flatten()
+        .map(|r| (r.id.clone(), r.pattern.clone(), r.extensions.clone()))
+        .collect();
+    report.violations.extend(evaluate_log_en_coverage(&log_en));
     report.messages.push(format!(
         "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}/{TAG_FAIL_ID}: {} workflow(s), {} finding(s)",
         workflows.len(),
@@ -967,6 +1014,16 @@ fn custom_count(workflow: Option<&str>, id: &str, tag: &str, fixture: &str) -> O
     )
 }
 
+/// Findings of GB-289 for one `GOV-LOG-EN` rule with the given pattern and extensions.
+fn log_en_case(pattern: &str, ext: &[&str]) -> usize {
+    evaluate_log_en_coverage(&[(
+        "GOV-LOG-EN".to_string(),
+        pattern.to_string(),
+        ext.iter().map(|e| e.to_string()).collect(),
+    )])
+    .len()
+}
+
 /// Findings of GB-288 on a tree with one custom rule tagged `miracena` of the given severity.
 fn tag_fail_count(workflow: &str, severity: &str, fixture: &str) -> Option<usize> {
     let mut cfg = custom_cfg("MIRACENA-X", "miracena");
@@ -1103,6 +1160,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                     "warning",
                     "ci-tagfail-nostrict",
                 ) == Some(0),
+        ),
+        (
+            "log-en: mutation, a LOG-EN rule on py files without `print(` fires; with it, green".to_string(),
+            log_en_case("(log_msg|println!)", &["rs", "py"]) == 1
+                && log_en_case("(log_msg|print\\(|println!)", &["rs", "py"]) == 0
+                && log_en_case("(log_msg|println!)", &["rs"]) == 0
+                && Regex::new("(log_msg|print\\()[^\\n]*\\b(Falha|Erro)\\b")
+                    .is_ok_and(|re| re.is_match("print('Falha ao abrir')") && !re.is_match("print('Failed to open')")),
         ),
         (
             "ci-compile: inert without a dependabot cargo entry".to_string(),

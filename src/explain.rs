@@ -1543,6 +1543,17 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "# raise one rule of the tag to error (omit `severity`, or severity = \"error\")\n[[custom_rules]]\nid = \"GOV-LOG-EN\"\ntag = \"gov\"\nseverity = \"error\"",
         remediation: "Raise at least one rule of the tag to `severity = \"error\"` or drop the step; then plant a violation and confirm the exit code changes (mutation proof).",
     },
+    RuleExplanation {
+        id: "GOV-LOG-EN-PRINT-COVERAGE",
+        name: "Log Language Pattern Misses Python print",
+        severity: "WARNING",
+        tag: "ci",
+        summary: "A custom rule whose id contains LOG-EN, scanning `py` files, whose pattern has no `print(` call.",
+        rationale: "GB-289, 2026-11-23: the GOV-LOG-EN pattern of the Tier A repos matches log_msg, println!, eprintln!, error!, warn!, info!, debug! and usage only, so a Python `print('Falha ...')` was never reported (mutation on macrokey-driver driver.py). The Portuguese wordlist is curated per repository and stays in its steniocheck.toml, so the engine does not ship a canonical GOV-LOG-EN (that would add errors to every Tier A repo at once); it refuses a rule whose declared extension (py) its own pattern cannot reach.",
+        bad_example: "[[custom_rules]]\nid = \"GOV-LOG-EN\"\npattern = \"(log_msg|println!).*\\\\b(Falha|Erro)\"\nextensions = [\"rs\", \"py\"]",
+        good_example: "pattern = \"(log_msg|print\\\\(|println!).*\\\\b(Falha|Erro)\"",
+        remediation: "Add `print\\\\(` (and `logging\\\\.\\\\w+\\\\(` if used) to the call alternation, or drop `py` from extensions.",
+    },
 ];
 
 pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {

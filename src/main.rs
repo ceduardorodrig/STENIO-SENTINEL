@@ -2811,6 +2811,8 @@ fn main() -> Result<()> {
                 s.eq_ignore_ascii_case(ci::PARITY_ID)
                     || s.eq_ignore_ascii_case(ci::COMPILE_ID)
                     || s.eq_ignore_ascii_case(ci::SCOPE_ID)
+                    || s.eq_ignore_ascii_case(ci::TAG_FAIL_ID)
+                    || s.eq_ignore_ascii_case(ci::LOG_EN_ID)
             })
             .unwrap_or(true);
     if should_audit_ci {
