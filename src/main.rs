@@ -49,6 +49,7 @@ mod release_engine;
 mod release_order;
 pub mod remote;
 mod rule;
+mod secrets_guard;
 mod semantic;
 mod sweep;
 #[cfg(test)]
@@ -692,6 +693,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(backlog::self_test_cases())
         .chain(verify_host::self_test_cases())
         .chain(frappe_drift::self_test_cases())
+        .chain(secrets_guard::self_test_cases())
         .chain(frappe_whitelist::self_test_cases())
         .chain(release_order::self_test_cases())
         .chain(release_engine::self_test_cases())
@@ -2044,6 +2046,11 @@ fn main() -> Result<()> {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
+        Some("secrets-guard") => {
+            let mut rest = vec!["stenio secrets-guard".to_string()];
+            rest.extend_from_slice(&argv[2..]);
+            std::process::exit(secrets_guard::run_cli(&rest))
+        }
         Some("pre-release") => std::process::exit(pre_release::run_cli(&argv[1..])),
         Some("release-engine") => std::process::exit(release_engine::run_cli(&argv[1..])),
         Some("compare-engines") => {

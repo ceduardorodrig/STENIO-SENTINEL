@@ -12,13 +12,16 @@ pub struct InfraReport {
 }
 
 /// Redacts the matched value so the report never re-leaks the credential it found.
-fn mask_snippet(line: &str) -> String {
+pub(crate) fn mask_snippet(line: &str) -> String {
+    // GB-285: never carry value characters. Keep the key name, replace the value with `***`;
+    // a line with no key/value separator (a bare token, a PEM header) becomes `***`.
     let trimmed = line.trim();
-    let head: String = trimmed.chars().take(28).collect();
-    if trimmed.chars().count() > 28 {
-        format!("{head}…[REDACTED]")
-    } else {
-        format!("{head}[REDACTED]")
+    match trimmed.find(['=', ':']) {
+        Some(i) if !crate::guardian::line_has_token_shape(&trimmed[..i]) => {
+            let key: String = trimmed[..i].chars().take(60).collect();
+            format!("{key}{}***", &trimmed[i..=i])
+        }
+        _ => "***".to_string(),
     }
 }
 
@@ -735,6 +738,82 @@ fn key_looks_secret(key: &str) -> bool {
         || k == "SECRET"
 }
 
+/// GB-285: values that are obviously not a secret: empty, `$VAR`, `${VAR:-}`, `<...>`, `...`,
+/// `xxx`, `changeme`-style words, `null`/`none`. Password hashes (`$2y$...`, `{SHA1}...`) are NOT
+/// placeholders: they stay findings.
+fn value_is_placeholder(value: &str) -> bool {
+    let v = value.trim();
+    let lower = v.to_ascii_lowercase();
+    if v.chars().count() <= 4
+        || ["null", "none", "nil", "undefined", "true", "false"].contains(
+            &lower
+                .split(|c: char| c.is_whitespace() || c == ';' || c == ',')
+                .next()
+                .unwrap_or(""),
+        )
+    {
+        return true;
+    }
+    // `$VAR` or `${VAR...}` and nothing that looks like a hash (`$2y$10$...`).
+    if let Some(rest) = v.strip_prefix('$') {
+        let name = rest.strip_prefix('{').unwrap_or(rest);
+        if name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name
+                .chars()
+                .take_while(|c| *c != '}' && *c != ':')
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return true;
+        }
+    }
+    // `...`, `***`, `xxxxxxxx`: one repeated filler character, or an ellipsis inside.
+    let filler = v
+        .chars()
+        .all(|c| matches!(c, '.' | '*' | 'x' | 'X' | '-' | '_' | '#'));
+    // Code, not a literal: a call such as `secrets.token_hex(32)`.
+    let is_call = v.ends_with(')')
+        && v.find('(').is_some_and(|i| {
+            i > 0
+                && v[..i]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        });
+    // A lowercase hyphen/underscore phrase (`local-dev-token`) or a short word followed by prose
+    // (`test postgres:16`) is a description, not a generated credential.
+    let word = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase());
+    let is_phrase = v.len() < 32 && v.contains(['-', '_']) && v.split(['-', '_']).all(word);
+    let word_then_prose = v
+        .split_once(' ')
+        .is_some_and(|(first, _)| first.len() <= 8 && word(first));
+    // A long token with digits is random-looking: a placeholder word inside it is chance.
+    let random_looking = v.len() >= 16 && v.chars().any(|c| c.is_ascii_digit());
+    filler
+        || is_call
+        || is_phrase
+        || word_then_prose
+        || v.contains("...")
+        || v.contains('…')
+        || !random_looking
+            && [
+                "changeme",
+                "change_me",
+                "change-me",
+                "placeholder",
+                "your_",
+                "your-",
+                "yourpass",
+                "<your",
+                "redacted",
+                "xxxx",
+                "example",
+                "dummy",
+                "replace_me",
+                "todo",
+            ]
+            .iter()
+            .any(|w| lower.contains(w))
+}
+
 /// A value that points at a file or is a vault reference rather than carrying a secret.
 fn value_is_path_like(value: &str) -> bool {
     value.starts_with('/')
@@ -805,11 +884,20 @@ fn keyword_secret_hit(trimmed: &str) -> bool {
         .split_once('=')
         .or_else(|| trimmed_no_prefix.split_once(':'))
         .unwrap_or(("", ""));
-    let key = maybe_key.trim().trim_matches('"');
+    // GB-285: the key is the last whitespace-separated token before the separator
+    // (`docker run -e DB_PASSWORD=x`, `UPDATE t SET session_token = NULL`, `if [ -n "${K:-}" ]`).
+    let key = maybe_key
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("")
+        .trim_matches(['"', '\'']);
+    // A shell/YAML expansion or bracket fragment is code, never a credential name.
+    let key_is_code = key.contains(['$', '{', '}', '[', ']', '(', ')']);
     let value = maybe_value.trim().trim_matches(['"', '\'']);
-    let looks_like_secret_key = key_looks_secret(key);
+    let looks_like_secret_key = !key_is_code && key_looks_secret(key);
 
     let value_is_literal = value.len() >= 8
+            && !value_is_placeholder(value)
             && !value.is_empty()
             && !value.contains("${")
             && !value.contains("$(")
@@ -1044,6 +1132,62 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
         ),
         ("token in comment", hits(&format!("# {gh}")) == 1),
         ("var reference silent", hits("DB_PASS=${DB_PASS_FILE}") == 0),
+        // GB-285: placeholder awareness, each paired with a real-secret case that stays red.
+        (
+            "gb285 literal mixed stays red",
+            hits("DB_PASS=Xk29sLm4Qp7vRt8z") == 1,
+        ),
+        (
+            "gb285 hash stays red",
+            hits("password: $2y$10$abcdefghijklmnopqrstuv") == 1,
+        ),
+        ("gb285 empty silent", hits("DB_PASS=") == 0),
+        (
+            "gb285 ${VAR:-} silent",
+            hits("TS_AUTH_KEY=${TS_EDGE_AUTH_KEY:-}") == 0,
+        ),
+        ("gb285 $VAR silent", hits("DB_PASS=$DB_PASSWORD_VALUE") == 0),
+        ("gb285 ellipsis silent", hits("export X_API_KEY=...") == 0),
+        (
+            "gb285 angle placeholder silent",
+            hits("API_KEY=<paste-your-key>") == 0,
+        ),
+        ("gb285 xxx silent", hits("API_KEY=xxxxxxxxxxxx") == 0),
+        (
+            "gb285 changeme silent",
+            hits("DB_PASS=changeme-please") == 0,
+        ),
+        (
+            "gb285 NULL silent",
+            hits("UPDATE t SET session_token = NULL WHERE id = 1") == 0,
+        ),
+        (
+            "gb285 call silent",
+            hits("csrf_token = secrets.token_hex(32)") == 0,
+        ),
+        (
+            "gb285 phrase silent",
+            hits("OPENAI_API_KEY=local-dev-token") == 0,
+        ),
+        (
+            "gb285 hyphen mixed stays red",
+            hits("API_KEY=Xk29-sLm4-Qp7v-Rt8z") == 1,
+        ),
+        ("gb285 short silent", hits("DB_PASS=abc") == 0),
+        (
+            "gb285 shell test silent",
+            hits("  if [ -n \"${TS_EDGE_AUTH_KEY:-}\" ]; then") == 0,
+        ),
+        (
+            "gb285 docker -e literal red",
+            hits("docker run -e POSTGRES_PASSWORD=Xk29sLm4Qp7vRt8z img") == 1,
+        ),
+        (
+            "gb285 snippet has no value",
+            plaintext_secret_violations("x.env", "DB_PASS=Xk29sLm4Qp7vRt8z", false)
+                .first()
+                .is_some_and(|v| v.snippet == "DB_PASS=***"),
+        ),
         (
             "path value silent",
             hits("TLS_PRIVATE_KEY=/etc/ssl/private/site.pem") == 0,
