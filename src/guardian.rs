@@ -877,6 +877,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "is_portuguese_comment_wide",
                 "portuguese_severity",
                 "PT_STOPWORDS_WIDE",
+                "wide_signals",
+                "is_prose_case",
             ],
         ),
         (

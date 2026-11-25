@@ -176,3 +176,19 @@ The canonical method is [`../backlog-method.md`](../backlog-method.md). `src/bac
 - **Adding a queue:** scaffold it, append it to `backlog-queues.toml`, rebuild, run `stenio --guardian`. Tests guard the registry (parses, unique prefixes, only `HB-` linked) and the scaffolder (a fresh queue audits clean; never overwrites).
 - Rule ids keep their `HOMELAB-` prefix for compatibility (Guardian anchors); they apply to every queue.
 - Authorization: extending the engine was explicitly authorized by the owner on 2026-10-30 (`ARCH-SCOPE-ISOLATION` otherwise forbids engine edits during product work).
+
+
+## Portuguese comment wide-tier precision (`CODE-NO-PORTUGUESE-COMMENTS`, v4.41.0, GB-287)
+
+Changelog 4.41.0. Only the wide (WARN) tier of `comments.rs::detect_portuguese` changed; the narrow
+ERROR detector is untouched and the wide tier is still WARN.
+
+- A wide function word counts once per comment, however often it repeats (`pop que, push que`).
+- All-caps tokens (`DOS`, `DAS`, `ELE`) and capitalised tokens after the first word (surnames,
+  product names) are not Portuguese signals. Case is judged on the original text.
+- `de`, `da` and `em` count once per distinct preposition, and only before a word that is lowercase
+  in the original text (`de arquivos`, not `da Vinci`).
+- Cost: comments whose only second signal was a Title Case or acronym follower (`Filtro de Tipo de
+  Carta`) or a repeated preposition are no longer reported. Measured 2026-11-24 against 4.40.0:
+  SUMAENIMA-HUB `DEVELOPMENT` (scope `hub`) 42 to 27 warnings, MNEMOCINE-CONFIGS (scope `all`) 249
+  to 205, no new hit, ERROR count unchanged. Re-measure before promoting the tier to ERROR.

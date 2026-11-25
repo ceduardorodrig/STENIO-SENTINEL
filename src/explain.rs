@@ -932,7 +932,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Non-English Comments in Source Code",
         severity: "ERROR",
         tag: "gov",
-        summary: "Prohibits Portuguese and non-English comments across all programming languages (Rust, TypeScript, Python, Shell, SQL, CSS, HTML, TOML, YAML). A comment the narrow detector flags is an ERROR; a comment only the wider recall of GB-282 flags (two or more Portuguese function words or prepositions such as que, dos, antes, `de arquivos`, with accented words counted too) is a WARNING.",
+        summary: "Prohibits Portuguese and non-English comments across all programming languages (Rust, TypeScript, Python, Shell, SQL, CSS, HTML, TOML, YAML). A comment the narrow detector flags is an ERROR; a comment only the wider recall of GB-282 flags (two or more signals: distinct Portuguese function words or distinct prepositions before a lowercase word, such as que, dos, antes, `de arquivos`, skipping all-caps and non-initial capitalised tokens, with accented words counted too) is a WARNING.",
         rationale: "Per the universal language policy (governance/language-policy.md), all codebase assets including code comments must be written strictly in English to ensure universal comprehensibility, multi-agent interoperability, and professional engineering standards.",
         bad_example: "// função para validar o token do usuário\n# verificar se o container está ativo\n-- tabela de pagamentos pendentes",
         good_example: "// Function to validate user token\n# Verify if container is active\n-- Pending payments table",
