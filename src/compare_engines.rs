@@ -15,7 +15,8 @@
 //! workflows trigger on (`push` / `pull_request` branch filters, read from the default branch and
 //! from every branch selected through them; a trigger without a filter selects every branch). The
 //! first comparison of the default branch alone reported `gained_error=0` while SUMAENIMA-HUB
-//! `DEVELOPMENT` would have gained 42 errors (2026-11-24).
+//! `DEVELOPMENT` would have gained 42 errors (2026-11-24). A selected branch that carries no
+//! branch-triggered workflow of its own is listed as `NOCI` and not compared: no push runs there.
 //!
 //! Not wired into `release-engine` in this version: the step order of that command is guarded by
 //! `release_order` and needs its own mutation case.
@@ -280,8 +281,16 @@ pub fn compare(
                 lines.push(format!("SKIP {target}: {e}"));
                 continue;
             }
+            let own = crate::ci::load_branch_filters(&dir);
+            if own.is_empty() {
+                tally.no_ci += 1;
+                lines.push(format!(
+                    "NOCI {target}: no branch-triggered workflow on this branch, not compared"
+                ));
+                continue;
+            }
             compare_target(r, &engines, &target, &dir, &mut lines, &mut tally);
-            filters.extend(crate::ci::load_branch_filters(&dir));
+            filters.extend(own);
         }
     }
     if tally.broken {
@@ -290,20 +299,21 @@ pub fn compare(
     if tally.gained > 0 {
         ok = false;
     }
-    if tally.compared + tally.skipped != tally.declared {
+    if tally.compared + tally.skipped + tally.no_ci != tally.declared {
         ok = false;
         lines.push(format!(
-            "FAIL declared {} != compared {} + skipped {}",
-            tally.declared, tally.compared, tally.skipped
+            "FAIL declared {} != compared {} + skipped {} + no_ci {}",
+            tally.declared, tally.compared, tally.skipped, tally.no_ci
         ));
     }
     lines.push(format!(
-        "compare-engines: repos={} ci_branches={} targets declared={} compared={} skipped={} gained_error={} {}",
+        "compare-engines: repos={} ci_branches={} targets declared={} compared={} skipped={} no_ci={} gained_error={} {}",
         repos.len(),
         tally.branches,
         tally.declared,
         tally.compared,
         tally.skipped,
+        tally.no_ci,
         tally.gained,
         if ok { "PASS" } else { "FAIL" }
     ));
@@ -322,6 +332,7 @@ struct Tally {
     branches: usize,
     compared: usize,
     skipped: usize,
+    no_ci: usize,
     gained: usize,
     /// An engine run or a branch listing failed, so safety is not proven.
     broken: bool,
@@ -429,7 +440,7 @@ impl Runner for Fixture {
             );
         }
         if key.starts_with("gh api --paginate repos/o/") {
-            return out("main\nDEVELOPMENT\nrelease/1.x\nfeature/x\n");
+            return out("main\nDEVELOPMENT\nrelease/1.x\nrelease/stale\nfeature/x\n");
         }
         if key.starts_with("git -C ") && key.ends_with("branch --show-current") {
             return out("main\n");
@@ -447,7 +458,9 @@ impl Runner for Fixture {
             } else {
                 "name: ci\non:\n  push:\n    tags: ['v*']\njobs:\n  c:\n    runs-on: x\n    steps:\n      - run: make\n"
             };
-            std::fs::write(wf.join("ci.yml"), body).map_err(|e| e.to_string())?;
+            if !argv.iter().any(|a| a == "release/stale") {
+                std::fs::write(wf.join("ci.yml"), body).map_err(|e| e.to_string())?;
+            }
             return out("");
         }
         // A fake engine is a shell script: run it through `sh` (no exec of a fresh file).
@@ -466,6 +479,9 @@ fn write_engine(path: &Path, extra_on_r2: bool) {
     let mut body = String::from("echo '[ERROR] a.rs:1: [BASE] existing'\n");
     if extra_on_r2 {
         body.push_str("case \"$*\" in *o__r2*) echo '[ERROR] b.rs:2: [NEW-RULE] fresh';; esac\n");
+        body.push_str(
+            "case \"$*\" in *o__r1*_release_stale*) echo '[ERROR] d.rs:4: [NEW-RULE] stale';; esac\n",
+        );
         body.push_str(
             "case \"$*\" in *o__r1*_DEVELOPMENT*) echo '[ERROR] c.rs:3: [NEW-RULE] branch';; esac\n",
         );
@@ -552,7 +568,12 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "compare-engines: counts are derived (declared = compared + skipped)".to_string(),
-            red.contains("repos=3 ci_branches=2 targets declared=5 compared=4 skipped=1"),
+            red.contains("repos=3 ci_branches=3 targets declared=6 compared=4 skipped=1 no_ci=1"),
+        ),
+        (
+            "compare-engines: GB-298 a branch without a workflow runs no CI and is only listed"
+                .to_string(),
+            red.contains("NOCI o/r1@release/stale") && !red.contains("[NEW-RULE] stale"),
         ),
     ]
 }
