@@ -123,13 +123,126 @@ fn text(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-/// `on:` as a string, a list or a mapping; YAML 1.1 parsers turn a bare `on` key into `true`.
-fn triggers(doc: &Value) -> (bool, bool) {
-    let on = key(doc, "on").or_else(|| {
+/// The `on:` value; YAML 1.1 parsers turn a bare `on` key into `true`.
+fn on_value(doc: &Value) -> Option<&Value> {
+    key(doc, "on").or_else(|| {
         doc.as_mapping()?
             .iter()
             .find_map(|(k, v)| (k == &Value::Bool(true)).then_some(v))
-    });
+    })
+}
+
+/// Events whose branch filter says on which branches a workflow runs.
+const BRANCH_EVENTS: [&str; 3] = ["push", "pull_request", "pull_request_target"];
+
+/// Branch filter of one `push` / `pull_request` trigger (GB-298).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BranchFilter {
+    /// `branches:` patterns in order (`!` negates); `None` means every branch.
+    pub include: Option<Vec<String>>,
+    /// `branches-ignore:` patterns.
+    pub ignore: Vec<String>,
+}
+
+/// GitHub filter pattern: `**` any text, `*` any text without `/`, `?`, `+` and `[]` as in a
+/// regular expression, everything else literal.
+fn branch_matches(pattern: &str, branch: &str) -> bool {
+    let mut re = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                re.push_str(".*");
+            }
+            '*' => re.push_str("[^/]*"),
+            '?' | '+' | '[' | ']' => re.push(c),
+            other => re.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    re.push('$');
+    Regex::new(&re).is_ok_and(|r| r.is_match(branch))
+}
+
+impl BranchFilter {
+    pub fn matches(&self, branch: &str) -> bool {
+        if self.ignore.iter().any(|p| branch_matches(p, branch)) {
+            return false;
+        }
+        let Some(include) = &self.include else {
+            return true;
+        };
+        include
+            .iter()
+            .fold(false, |hit, p| match p.strip_prefix('!') {
+                Some(negated) => hit && !branch_matches(negated, branch),
+                None => hit || branch_matches(p, branch),
+            })
+    }
+}
+
+fn patterns(v: Option<&Value>) -> Option<Vec<String>> {
+    match v? {
+        Value::String(s) => Some(vec![s.clone()]),
+        Value::Sequence(s) => Some(
+            s.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The branch filters of one workflow document; a trigger that only filters tags runs on no
+/// branch and yields nothing.
+pub fn branch_filters(yaml: &str) -> Vec<BranchFilter> {
+    let Ok(doc) = serde_yaml::from_str::<Value>(yaml) else {
+        return Vec::new();
+    };
+    let every = BranchFilter::default;
+    match on_value(&doc) {
+        Some(Value::String(s)) if BRANCH_EVENTS.contains(&s.as_str()) => vec![every()],
+        Some(Value::Sequence(s)) => s
+            .iter()
+            .filter(|x| x.as_str().is_some_and(|n| BRANCH_EVENTS.contains(&n)))
+            .map(|_| every())
+            .collect(),
+        Some(on @ Value::Mapping(_)) => BRANCH_EVENTS
+            .iter()
+            .filter_map(|event| {
+                let body = on.as_mapping()?.get(Value::String((*event).to_string()))?;
+                let include = patterns(key(body, "branches"));
+                let ignore = patterns(key(body, "branches-ignore"));
+                let tags_only = include.is_none()
+                    && ignore.is_none()
+                    && (key(body, "tags").is_some() || key(body, "tags-ignore").is_some());
+                (!tags_only).then(|| BranchFilter {
+                    include,
+                    ignore: ignore.unwrap_or_default(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Branch filters of every workflow of the checkout under `root`.
+pub fn load_branch_filters(root: &Path) -> Vec<BranchFilter> {
+    let Ok(entries) = fs::read_dir(root.join(".github/workflows")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "yml" || x == "yaml"))
+        .filter_map(|p| fs::read_to_string(p).ok())
+        .flat_map(|y| branch_filters(&y))
+        .collect()
+}
+
+/// `on:` as a string, a list or a mapping.
+fn triggers(doc: &Value) -> (bool, bool) {
+    let on = on_value(doc);
     let names: Vec<String> = match on {
         Some(Value::String(s)) => vec![s.clone()],
         Some(Value::Sequence(s)) => s
