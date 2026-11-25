@@ -213,7 +213,7 @@ struct Args {
 
     #[arg(
         long,
-        help = "Audit cryptographic integrity and anti-tampering mechanisms of Stenio itself"
+        help = "Audit cryptographic integrity and anti-tampering mechanisms of Stenio itself (exit 1 on a tamper alert). Audits --path, else the checkout the binary was built from: a checkout on another branch than the binary reports false alerts"
     )]
     guardian: bool,
 
@@ -2240,6 +2240,10 @@ fn main() -> Result<()> {
             }
         }
         println!();
+        let code = guardian::exit_code(&rep);
+        if code != 0 {
+            std::process::exit(code);
+        }
         return Ok(());
     }
 

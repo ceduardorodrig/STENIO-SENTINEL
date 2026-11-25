@@ -6,7 +6,9 @@
 //!      and before the image build (GB-165 / GB-157);
 //!   2. the version bump and the tag creation come only after the battery (GB-214);
 //!   3. the tag push comes after the rehearsal (GB-196). That one is a WARNING: the real fix is a
-//!      release.sh + Dockerfile change, so the detector reports it without blocking.
+//!      release.sh + Dockerfile change, so the detector reports it without blocking. A rehearsal is
+//!      a line that RUNS rehearse.sh: copying it to the host (`scp`), removing it or running it
+//!      with `--dry-run` rehearses nothing.
 //! Echo lines (`say`, `note`, `pass`, `fail`, `echo`, `printf`) and comments are not calls.
 
 use regex::Regex;
@@ -45,7 +47,10 @@ pub fn analyze(text: &str) -> Order {
         Regex::new(r"\bgit\s+(?:-C\s+\S+\s+)?tag\s+(?:-[asfm]\b|[^-\s])"),
         Regex::new(r"\b(?:sd|sed)\b.*__version__"),
         Regex::new(r"\bdocker\s+(?:buildx\s+)?build\b"),
-        Regex::new(r"rehearse\.sh"),
+        // Run through a shell (also inside an `ssh`/`remote` string), or in command position.
+        Regex::new(
+            r#"(?:(?:^|[\s"'/;|&(])(?:ba|z)?sh\s+(?:-\w+\s+)*["']?[^"'\s;|&]*|(?:^\s*|[;&|(]\s*|\b(?:if|elif|then|else|do|run|remote|exec|time|nohup|sudo)\s+(?:!\s+)?)["']?[^"'\s=;|&]*)rehearse\.sh\b"#,
+        ),
     ) else {
         return out;
     };
@@ -92,7 +97,11 @@ pub fn analyze(text: &str) -> Order {
             });
         }
     }
-    match (all(&push).first().copied(), first(&rehearse)) {
+    let rehearsal = calls
+        .iter()
+        .find(|(_, l)| rehearse.is_match(l) && !l.contains("--dry-run"))
+        .map(|c| c.0);
+    match (all(&push).first().copied(), rehearsal) {
         (Some(p), Some(r)) if p < r => out.rehearsal.push(Finding {
             line: p,
             message: format!("the tag is pushed at line {p} before the rehearsal call at line {r}: a red rehearsal still spends the published number (GB-196, WARNING: the fix is a release.sh + Dockerfile change, not yet done)."),
@@ -130,6 +139,17 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "bash /tmp/rehearse.sh \"$IMG\"\n",
             "git push origin \"refs/tags/$VTAG\"\nbash /tmp/rehearse.sh \"$IMG\"\n",
         );
+    // The shape of the real release.sh: the script is copied and dry-run before it runs.
+    let remote = |before: &str, after: &str| {
+        format!(
+            "release-checks.sh\nrun scp \"$S/rehearse.sh\" \"$H:/tmp/rehearse.sh\"\nremote \"bash /tmp/rehearse.sh --dry-run $IMG\"\nscp -q \"$S/rehearse.sh\" \"$H:/tmp/rehearse.sh\" || fail rehearse scp\n{before}if ssh \"$H\" \"bash /tmp/rehearse.sh $IMG\" </dev/null; then\n  remote \"rm -f /tmp/rehearse.sh\"\nfi\n{after}"
+        )
+    };
+    let push_line = "git push origin \"refs/tags/$VTAG\"\n";
+    let early = analyze(&remote(push_line, ""));
+    let late = analyze(&remote("", push_line));
+    let direct = analyze(&GOOD.replace("bash /tmp/rehearse.sh", "\"$SCRIPTS/rehearse.sh\""));
+    let copy_only = analyze("release-checks.sh\nscp rehearse.sh h:/tmp/rehearse.sh\n");
     let g = analyze(GOOD);
     let a = analyze(&battery_after_push);
     let b = analyze(&bump_first);
@@ -150,6 +170,22 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (
             "release-order: tag before rehearsal is only a warning".into(),
             r.errors.is_empty() && !r.rehearsal.is_empty(),
+        ),
+        (
+            "release-order: GB-196 a push between the copy and the run of rehearse.sh is reported"
+                .into(),
+            early
+                .rehearsal
+                .iter()
+                .any(|f| f.line == 5 && f.message.contains("line 6")),
+        ),
+        (
+            "release-order: GB-196 a push after the rehearsal run is silent".into(),
+            late.rehearsal.is_empty() && late.inert.is_empty(),
+        ),
+        (
+            "release-order: GB-196 a direct call counts, a copy alone is inert".into(),
+            direct.inert.is_empty() && direct.rehearsal.is_empty() && copy_only.inert.len() == 1,
         ),
         (
             "release-order: no battery call is inert".into(),
