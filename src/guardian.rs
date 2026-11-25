@@ -870,6 +870,7 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "CI-TAG-STEP-MUST-BE-ABLE-TO-FAIL",
                 "GOV-LOG-EN-PRINT-COVERAGE",
                 "Stenio Custom Rules No Workflow Invokes",
+                "load_branch_filters",
             ],
         ),
         (
@@ -880,6 +881,8 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "PT_STOPWORDS_WIDE",
                 "wide_signals",
                 "is_prose_case",
+                "find_prepositions",
+                "has_preposition_chain",
             ],
         ),
         (
@@ -891,7 +894,10 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["DEPENDABOT-LOCKFILE-COVERAGE", "DEPENDABOT-IGNORE-MAJOR"],
         ),
         ("sweep.rs", &["owners declared", "unverified"]),
-        ("compare_engines.rs", &["gained_error", "SKIP"]),
+        (
+            "compare_engines.rs",
+            &["gained_error", "SKIP", "list_branches", "ci_branches"],
+        ),
         (
             "frappe.rs",
             &[
