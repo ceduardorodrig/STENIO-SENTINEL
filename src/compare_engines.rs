@@ -36,7 +36,7 @@ const SHOWN: usize = 20;
 #[derive(Parser, Debug)]
 #[command(
     name = "stenio compare-engines",
-    about = "Run an old and a new stenio binary over the owners' non-archived repos with each repo's CI scope and list the new ERROR lines"
+    about = "Run an old and a new stenio binary over the owners' non-archived repos (default and CI-triggered branches) with each CI scope and list the new ERROR lines"
 )]
 struct Args {
     #[arg(long, help = "The engine currently released")]

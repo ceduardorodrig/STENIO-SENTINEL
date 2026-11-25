@@ -178,17 +178,33 @@ The canonical method is [`../backlog-method.md`](../backlog-method.md). `src/bac
 - Authorization: extending the engine was explicitly authorized by the owner on 2026-10-30 (`ARCH-SCOPE-ISOLATION` otherwise forbids engine edits during product work).
 
 
-## Portuguese comment wide-tier precision (`CODE-NO-PORTUGUESE-COMMENTS`, v4.41.0, GB-287)
+## Release 4.41.0 (GB-287, GB-298, GB-273)
 
-Changelog 4.41.0. Only the wide (WARN) tier of `comments.rs::detect_portuguese` changed; the narrow
-ERROR detector is untouched and the wide tier is still WARN.
+### `CODE-NO-PORTUGUESE-COMMENTS`: wide tier precision, recall and ERROR (GB-287)
 
-- A wide function word counts once per comment, however often it repeats (`pop que, push que`).
-- All-caps tokens (`DOS`, `DAS`, `ELE`) and capitalised tokens after the first word (surnames,
-  product names) are not Portuguese signals. Case is judged on the original text.
-- `de`, `da` and `em` count once per distinct preposition, and only before a word that is lowercase
-  in the original text (`de arquivos`, not `da Vinci`).
-- Cost: comments whose only second signal was a Title Case or acronym follower (`Filtro de Tipo de
-  Carta`) or a repeated preposition are no longer reported. Measured 2026-11-24 against 4.40.0:
-  SUMAENIMA-HUB `DEVELOPMENT` (scope `hub`) 42 to 27 warnings, MNEMOCINE-CONFIGS (scope `all`) 249
-  to 205, no new hit, ERROR count unchanged. Re-measure before promoting the tier to ERROR.
+The narrow detector still decides `DOC-LANGUAGE-EN`; for source comments the wide detector
+(`comments.rs::detect_portuguese`) decides and **every hit is an ERROR**.
+
+- Precision: a wide function word counts once per comment (`pop que, push que`); all-caps tokens of
+  up to four letters (`DOS`, `DAS`, `ELE`) and capitalised tokens after the first word are not
+  signals; `de`/`da`/`em` count once each; `de facto`, `de jure`, `de novo` are loanwords.
+- Recall: before a Title Case word or acronym a preposition counts only next to a standalone
+  Portuguese function word (`Deploy da API para`); a `de X de Y` chain inside one clause counts on
+  its own (`Filtro de Tipo de Carta`; `em ... em` alone does not); an all-caps word of five or more
+  letters is emphasis (`SEMPRE`).
+- Measured 2026-11-25 against 4.40.0: SUMAENIMA-HUB `f7b964a` (scope `hub`) 42 of 42 hits kept;
+  1568 third-party crates: 17 wide hits become 0, no new hit; MNEMOCINE-CONFIGS (scope `all`) 8 of
+  249 wide hits lost and 1 gained.
+- Known limits: an English comment with a name chain (`Maria da Silva de Souza`) is flagged; the
+  narrow detector still flags some lines of bare URLs (`com` twice), as 4.40.0 does.
+
+### `compare-engines` covers CI branches (GB-298)
+
+Run `stenio compare-engines` before every release: it now compares each non-default branch the
+workflows trigger on. Branch filters are read from the default branch and from every branch selected
+through them.
+
+### `UWSM-APP-EXEC` (GB-273)
+
+Host-only WARNING (it runs only while `wayland-wm@hyprland.desktop.service` is active). Covered by
+unit tests in `homelab.rs` and `gaming.rs`.
