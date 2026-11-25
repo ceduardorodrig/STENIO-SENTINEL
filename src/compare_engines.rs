@@ -6,9 +6,16 @@
 //! shallow-clones through `gh` under `timeout 60` (a clone that hangs is skipped and reported,
 //! never waited for), reads the CI scope(s) from the repository's workflows (`--scope X` in a run
 //! step, `scope:` of the stenio-check action, a script a step calls; `all` when none), runs both
-//! binaries with `--scope <s> --strict --compact` and prints per repository the ERROR lines the new
-//! engine adds. Exit 1 when any repository gains an ERROR line, or when an engine run itself fails
-//! (a crash or timeout proves nothing). Counts are derived from the lists iterated (rule 12.3).
+//! binaries with `--scope <s> --strict --compact` and prints per target the ERROR lines the new
+//! engine adds. Exit 1 when any target gains an ERROR line, or when an engine run or a branch
+//! listing fails (a crash or timeout proves nothing). Counts are derived from the lists iterated
+//! (rule 12.3).
+//!
+//! GB-298: a target is the default branch of a repository and every other remote branch its
+//! workflows trigger on (`push` / `pull_request` branch filters, read from the default branch and
+//! from every branch selected through them; a trigger without a filter selects every branch). The
+//! first comparison of the default branch alone reported `gained_error=0` while SUMAENIMA-HUB
+//! `DEVELOPMENT` would have gained 42 errors (2026-11-24).
 //!
 //! Not wired into `release-engine` in this version: the step order of that command is guarded by
 //! `release_order` and needs its own mutation case.
@@ -128,8 +135,52 @@ fn list_repos(r: &dyn Runner, owner: &str) -> Result<Vec<String>, String> {
         .unwrap_or_default())
 }
 
-fn clone_repo(r: &dyn Runner, full: &str, dir: &Path) -> Result<(), String> {
+/// Every remote branch of `full`.
+fn list_branches(r: &dyn Runner, full: &str) -> Result<Vec<String>, String> {
     let argv: Vec<String> = [
+        "gh",
+        "api",
+        "--paginate",
+        &format!("repos/{full}/branches?per_page=100"),
+        "--jq",
+        ".[].name",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let o = r.run(None, &argv, LIST_TIMEOUT)?;
+    if o.code != 0 {
+        return Err(format!("gh api branches: exit {}", o.code));
+    }
+    Ok(o.stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// The branch the default clone checked out.
+fn head_branch(r: &dyn Runner, dir: &Path) -> Result<String, String> {
+    let argv: Vec<String> = [
+        "git",
+        "-C",
+        &dir.display().to_string(),
+        "branch",
+        "--show-current",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let o = r.run(None, &argv, LIST_TIMEOUT)?;
+    if o.code != 0 {
+        return Err(format!("git branch --show-current: exit {}", o.code));
+    }
+    Ok(o.stdout.trim().to_string())
+}
+
+fn clone_repo(r: &dyn Runner, full: &str, branch: Option<&str>, dir: &Path) -> Result<(), String> {
+    let mut argv: Vec<String> = [
         "timeout",
         &CLONE_TIMEOUT_S.to_string(),
         "gh",
@@ -145,6 +196,9 @@ fn clone_repo(r: &dyn Runner, full: &str, dir: &Path) -> Result<(), String> {
     .iter()
     .map(|s| s.to_string())
     .collect();
+    if let Some(b) = branch {
+        argv.extend(["--branch".to_string(), b.to_string()]);
+    }
     let o = r.run(None, &argv, Duration::from_secs(CLONE_TIMEOUT_S + 10))?;
     if o.code == 0 {
         Ok(())
@@ -180,70 +234,147 @@ pub fn compare(
     repos.extend(extra.iter().cloned());
     repos.sort();
     repos.dedup();
-    let (mut compared, mut skipped, mut gained) = (0usize, 0usize, 0usize);
-    for full in &repos {
-        let dir: PathBuf = work.join(full.replace('/', "__"));
-        if let Err(e) = clone_repo(r, full, &dir) {
-            skipped += 1;
+    let engines = Engines { old, new };
+    let mut tally = Tally::default();
+    for (index, full) in repos.iter().enumerate() {
+        let slug = full.replace('/', "__");
+        let dir: PathBuf = work.join(&slug);
+        tally.declared += 1;
+        if let Err(e) = clone_repo(r, full, None, &dir) {
+            tally.skipped += 1;
             lines.push(format!("SKIP {full}: {e}"));
             continue;
         }
-        let scopes = ci_scopes(&dir);
-        let (mut o_tot, mut n_tot, mut added) = (0, 0, Vec::new());
-        let mut broken = None;
-        for s in &scopes {
-            match (run_engine(r, old, s, &dir), run_engine(r, new, s, &dir)) {
-                (Ok(a), Ok(b)) => {
-                    let (x, y, add) = delta(&a, &b);
-                    o_tot += x;
-                    n_tot += y;
-                    added.extend(add.into_iter().map(|l| format!("[{s}] {l}")));
-                }
-                (a, b) => {
-                    broken = Some(format!(
-                        "scope {s}: old={} new={}",
-                        a.err().unwrap_or_else(|| "ok".to_string()),
-                        b.err().unwrap_or_else(|| "ok".to_string())
-                    ));
-                    break;
-                }
-            }
-        }
-        compared += 1;
-        if let Some(why) = broken {
-            ok = false;
-            lines.push(format!("FAIL {full}: engine run failed, {why}"));
+        compare_target(r, &engines, full, &dir, &mut lines, &mut tally);
+        let mut filters = crate::ci::load_branch_filters(&dir);
+        if filters.is_empty() {
             continue;
         }
-        lines.push(format!(
-            "{full} scope={} old_err={o_tot} new_err={n_tot} added={}",
-            scopes.join(","),
-            added.len()
-        ));
-        if !added.is_empty() {
-            ok = false;
-            gained += 1;
-            for l in added.iter().take(SHOWN) {
-                lines.push(format!("  + {l}"));
+        let listed = head_branch(r, &dir).and_then(|h| list_branches(r, full).map(|b| (h, b)));
+        let (head, mut pending) = match listed {
+            Ok(x) => x,
+            Err(e) => {
+                tally.broken = true;
+                lines.push(format!("FAIL {full}: CI branches unknown, {e}"));
+                continue;
             }
-            if added.len() > SHOWN {
-                lines.push(format!("  + ... {} more", added.len() - SHOWN));
+        };
+        pending.retain(|b| *b != head);
+        // A selected branch carries its own workflows, which may select further branches.
+        let mut number = 0usize;
+        while let Some(at) = pending
+            .iter()
+            .position(|b| filters.iter().any(|f| f.matches(b)))
+        {
+            let branch = pending.remove(at);
+            number += 1;
+            let target = format!("{full}@{branch}");
+            let dir = work.join(format!(
+                "{slug}__{index}_{number}_{}",
+                branch.replace('/', "_")
+            ));
+            tally.declared += 1;
+            tally.branches += 1;
+            if let Err(e) = clone_repo(r, full, Some(&branch), &dir) {
+                tally.skipped += 1;
+                lines.push(format!("SKIP {target}: {e}"));
+                continue;
             }
+            compare_target(r, &engines, &target, &dir, &mut lines, &mut tally);
+            filters.extend(crate::ci::load_branch_filters(&dir));
         }
     }
-    if compared + skipped != repos.len() {
+    if tally.broken {
+        ok = false;
+    }
+    if tally.gained > 0 {
+        ok = false;
+    }
+    if tally.compared + tally.skipped != tally.declared {
         ok = false;
         lines.push(format!(
-            "FAIL declared {} != compared {compared} + skipped {skipped}",
-            repos.len()
+            "FAIL declared {} != compared {} + skipped {}",
+            tally.declared, tally.compared, tally.skipped
         ));
     }
     lines.push(format!(
-        "compare-engines: repos declared={} compared={compared} skipped={skipped} gained_error={gained} {}",
+        "compare-engines: repos={} ci_branches={} targets declared={} compared={} skipped={} gained_error={} {}",
         repos.len(),
+        tally.branches,
+        tally.declared,
+        tally.compared,
+        tally.skipped,
+        tally.gained,
         if ok { "PASS" } else { "FAIL" }
     ));
     (lines, ok)
+}
+
+struct Engines<'a> {
+    old: &'a str,
+    new: &'a str,
+}
+
+/// Counts derived from the targets iterated.
+#[derive(Default)]
+struct Tally {
+    declared: usize,
+    branches: usize,
+    compared: usize,
+    skipped: usize,
+    gained: usize,
+    /// An engine run or a branch listing failed, so safety is not proven.
+    broken: bool,
+}
+
+/// Runs both engines over one checkout at its CI scopes and reports the added ERROR lines.
+fn compare_target(
+    r: &dyn Runner,
+    engines: &Engines<'_>,
+    target: &str,
+    dir: &Path,
+    lines: &mut Vec<String>,
+    tally: &mut Tally,
+) {
+    let scopes = ci_scopes(dir);
+    let (mut o_tot, mut n_tot, mut added) = (0, 0, Vec::new());
+    tally.compared += 1;
+    for s in &scopes {
+        match (
+            run_engine(r, engines.old, s, dir),
+            run_engine(r, engines.new, s, dir),
+        ) {
+            (Ok(a), Ok(b)) => {
+                let (x, y, add) = delta(&a, &b);
+                o_tot += x;
+                n_tot += y;
+                added.extend(add.into_iter().map(|l| format!("[{s}] {l}")));
+            }
+            (a, b) => {
+                tally.broken = true;
+                lines.push(format!(
+                    "FAIL {target}: engine run failed, scope {s}: old={} new={}",
+                    a.err().unwrap_or_else(|| "ok".to_string()),
+                    b.err().unwrap_or_else(|| "ok".to_string())
+                ));
+                return;
+            }
+        }
+    }
+    lines.push(format!(
+        "{target} scope={} old_err={o_tot} new_err={n_tot} added={}",
+        scopes.join(","),
+        added.len()
+    ));
+    if !added.is_empty() {
+        tally.gained += 1;
+        for l in added.iter().take(SHOWN) {
+            lines.push(format!("  + {l}"));
+        }
+        if added.len() > SHOWN {
+            lines.push(format!("  + ... {} more", added.len() - SHOWN));
+        }
+    }
 }
 
 pub fn run_cli(argv: &[String]) -> i32 {
@@ -297,6 +428,12 @@ impl Runner for Fixture {
                 r#"[{"nameWithOwner":"o/r1"},{"nameWithOwner":"o/r2"},{"nameWithOwner":"o/hang"}]"#,
             );
         }
+        if key.starts_with("gh api --paginate repos/o/") {
+            return out("main\nDEVELOPMENT\nrelease/1.x\nfeature/x\n");
+        }
+        if key.starts_with("git -C ") && key.ends_with("branch --show-current") {
+            return out("main\n");
+        }
         if argv.first().map(String::as_str) == Some("timeout") {
             let full = argv.get(5).cloned().unwrap_or_default();
             if full.ends_with("hang") {
@@ -306,9 +443,9 @@ impl Runner for Fixture {
             let wf = d.join(".github/workflows");
             std::fs::create_dir_all(&wf).map_err(|e| e.to_string())?;
             let body = if full.ends_with("r1") {
-                "name: ci\non: [push]\njobs:\n  c:\n    runs-on: x\n    steps:\n      - run: stenio --scope fork --strict --compact\n"
+                "name: ci\non:\n  push:\n    branches: [main, DEVELOPMENT]\n  pull_request:\n    branches: ['release/**']\njobs:\n  c:\n    runs-on: x\n    steps:\n      - run: stenio --scope fork --strict --compact\n"
             } else {
-                "name: ci\non: [push]\njobs:\n  c:\n    runs-on: x\n    steps:\n      - run: make\n"
+                "name: ci\non:\n  push:\n    tags: ['v*']\njobs:\n  c:\n    runs-on: x\n    steps:\n      - run: make\n"
             };
             std::fs::write(wf.join("ci.yml"), body).map_err(|e| e.to_string())?;
             return out("");
@@ -329,6 +466,9 @@ fn write_engine(path: &Path, extra_on_r2: bool) {
     let mut body = String::from("echo '[ERROR] a.rs:1: [BASE] existing'\n");
     if extra_on_r2 {
         body.push_str("case \"$*\" in *o__r2*) echo '[ERROR] b.rs:2: [NEW-RULE] fresh';; esac\n");
+        body.push_str(
+            "case \"$*\" in *o__r1*_DEVELOPMENT*) echo '[ERROR] c.rs:3: [NEW-RULE] branch';; esac\n",
+        );
     }
     let _ = std::fs::write(path, body);
 }
@@ -351,14 +491,52 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let (green, green_ok) = compare(&Fixture, &o, &o, &owners, &[], &w2);
     let green = green.join("\n");
     let _ = std::fs::remove_dir_all(&base);
+    let selected = |on: &str| -> Vec<&str> {
+        let filters = crate::ci::branch_filters(on);
+        [
+            "main",
+            "dev",
+            "release/1",
+            "release/1/hotfix",
+            "release/old",
+        ]
+        .into_iter()
+        .filter(|b| filters.iter().any(|f| f.matches(b)))
+        .collect()
+    };
     vec![
+        (
+            "compare-engines: GB-298 branch filters follow the GitHub pattern syntax".to_string(),
+            selected("on:\n  push:\n    branches: ['release/*', '!release/old']\n") == ["release/1"]
+                && selected("on:\n  push:\n    branches: ['release/**']\n")
+                    == ["release/1", "release/1/hotfix", "release/old"]
+                && selected("on:\n  push:\n    branches-ignore: ['release/**']\n")
+                    == ["main", "dev"]
+                && selected("on: [push]\n").len() == 5
+                && selected("on:\n  pull_request:\n").len() == 5
+                && selected("on:\n  push:\n    tags: ['v*']\n").is_empty()
+                && selected("on:\n  schedule:\n    - cron: '0 0 * * *'\n").is_empty(),
+        ),
         (
             "compare-engines: mutation, a repo that gains an ERROR line fails and names it"
                 .to_string(),
             !red_ok
                 && red.contains("o/r2 scope=all old_err=1 new_err=2 added=1")
                 && red.contains("+ [all] [ERROR] b.rs:2: [NEW-RULE] fresh")
-                && red.contains("gained_error=1 FAIL"),
+                && red.contains("gained_error=2 FAIL"),
+        ),
+        (
+            "compare-engines: GB-298 mutation, an ERROR gained only on a non-default CI branch fails"
+                .to_string(),
+            red.contains("o/r1 scope=fork old_err=1 new_err=1 added=0")
+                && red.contains("o/r1@DEVELOPMENT scope=fork old_err=1 new_err=2 added=1")
+                && red.contains("+ [fork] [ERROR] c.rs:3: [NEW-RULE] branch"),
+        ),
+        (
+            "compare-engines: GB-298 only branches the workflows trigger on are compared".to_string(),
+            green.contains("o/r1@release/1.x ")
+                && !green.contains("@feature/x")
+                && !green.contains("o/r2@"),
         ),
         (
             "compare-engines: identical engines pass with zero deltas".to_string(),
@@ -374,7 +552,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "compare-engines: counts are derived (declared = compared + skipped)".to_string(),
-            red.contains("declared=3 compared=2 skipped=1"),
+            red.contains("repos=3 ci_branches=2 targets declared=5 compared=4 skipped=1"),
         ),
     ]
 }
