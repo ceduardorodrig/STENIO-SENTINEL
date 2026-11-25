@@ -194,15 +194,7 @@ fn detect_portuguese(comment: &str, wide: bool) -> bool {
     ];
 
     // Strip backticked symbols before checking word tokens
-    let mut cleaned_no_code = String::with_capacity(cleaned.len());
-    let mut in_backtick = false;
-    for ch in cleaned.chars() {
-        if ch == '`' {
-            in_backtick = !in_backtick;
-        } else if !in_backtick {
-            cleaned_no_code.push(ch);
-        }
-    }
+    let cleaned_no_code = strip_backticked(&cleaned);
 
     let words: Vec<&str> = cleaned_no_code
         .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -220,14 +212,62 @@ fn detect_portuguese(comment: &str, wide: bool) -> bool {
     //    detector only got narrower (every comment it flags now was flagged before), so a repo
     //    that was green on 4.35.0 never turns red on 4.36.0.
     //
-    //    GB-282(a) widens the recall (`wide`): the second tier holds Portuguese function words
-    //    that are not English words (a comment such as `// arquivo que contém os dados` carried
+    //    GB-282(a) widens the recall (`wide`, see `wide_signals`): the second tier holds
+    //    Portuguese function words (a comment such as `// arquivo que contém os dados` carried
     //    one accented word and nothing else the old list knew). The threshold stays at two
     //    signals per comment, so a single borrowed word or a proper noun never fires.
     static PT_STOPWORDS: &[&str] = &[
         "para", "com", "como", "pelo", "pela", "pelos", "pelas", "este", "esta", "esse", "essa",
         "aquele", "aquela", "quando", "onde", "porque", "uma", "mais",
     ];
+
+    let sw_count = words
+        .iter()
+        .filter(|w| PT_STOPWORDS.iter().any(|&sw| sw == **w))
+        .count();
+
+    let wide_count = if wide {
+        wide_signals(&strip_backticked(comment))
+    } else {
+        0
+    };
+
+    sw_count + wide_count + accented_words >= 2
+}
+
+/// Drops the text between backticks (code symbols are not prose).
+fn strip_backticked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_backtick = false;
+    for ch in text.chars() {
+        if ch == '`' {
+            in_backtick = !in_backtick;
+        } else if !in_backtick {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// A token can be a Portuguese function word only if its original case reads like prose: all-caps
+/// tokens (`DOS`, `DAS`, `ELE`) and capitalised tokens after the first word (surnames, product
+/// names) are English identifiers or proper nouns (GB-287).
+fn is_prose_case(token: &str, is_initial: bool) -> bool {
+    let mut chars = token.chars();
+    let Some(initial) = chars.next() else {
+        return false;
+    };
+    if !initial.is_uppercase() {
+        return true;
+    }
+    let all_caps = token.chars().count() > 1 && !token.chars().any(char::is_lowercase);
+    is_initial && !all_caps
+}
+
+/// The second-tier signals of the wide detector, judged on the original case: the number of
+/// DISTINCT wide function words plus the number of DISTINCT prepositions (`de`, `da`, `em`) that
+/// precede a lowercase word. Repeating one token (`pop que, push que`) is one signal (GB-287).
+fn wide_signals(text: &str) -> usize {
     static PT_STOPWORDS_WIDE: &[&str] = &[
         "que", "dos", "das", "seus", "suas", "mas", "sem", "sobre", "entre", "cada", "isso",
         "aqui", "pode", "podem", "deve", "devem", "fazer", "antes", "depois", "ainda", "apenas",
@@ -235,32 +275,59 @@ fn detect_portuguese(comment: &str, wide: bool) -> bool {
         "ele", "ela", "eles", "elas", "pois", "seja", "foram", "estava", "tambem", "entao", "voce",
         "sera",
     ];
+    // Brand names are never the noun that follows a preposition.
+    static BRANDS: &[&str] = &[
+        "sumænimá",
+        "sumaenima",
+        "stênio",
+        "stenio",
+        "mnemocine",
+        "pokémon",
+        "pokemon",
+        "sérgio",
+    ];
 
-    let sw_count = words
-        .iter()
-        .filter(|w| {
-            PT_STOPWORDS.iter().any(|&sw| sw == **w)
-                || (wide && PT_STOPWORDS_WIDE.iter().any(|&sw| sw == **w))
-        })
-        .count();
+    let mut found: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    let words = text
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.chars().any(char::is_alphabetic));
+    for (index, word) in words.enumerate() {
+        if !is_prose_case(word, index == 0) {
+            continue;
+        }
+        let lowered = word.to_lowercase();
+        if let Some(&sw) = PT_STOPWORDS_WIDE.iter().find(|&&sw| sw == lowered) {
+            found.insert(sw);
+        }
+    }
 
     // `de`, `da` and `em` are Portuguese prepositions but also appear in English as `de-dup`,
-    // `em` (CSS) or a loanword: they count only as a standalone token followed by a lowercase
-    // word of three or more letters (`de arquivos`, `em memória`).
-    let tokens: Vec<&str> = cleaned_no_code
+    // `em` (CSS) or a loanword: they count only as a standalone token followed by a word of three
+    // or more letters that is lowercase in the original text (`de arquivos`, not `da Vinci`).
+    let tokens: Vec<&str> = text
         .split_whitespace()
         .map(|t| t.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|t| !t.is_empty())
         .collect();
-    let preposition_count = tokens
-        .windows(2)
-        .filter(|w| {
-            wide && matches!(w[0], "de" | "da" | "em")
-                && w[1].chars().count() >= 3
-                && w[1].chars().all(char::is_alphabetic)
-        })
-        .count();
+    let initial = tokens
+        .iter()
+        .position(|t| t.chars().any(char::is_alphabetic));
+    for (index, pair) in tokens.windows(2).enumerate() {
+        let (head, next) = (pair[0], pair[1]);
+        let lowercase_word = next.chars().count() >= 3
+            && next.chars().all(|c| c.is_alphabetic() && !c.is_uppercase())
+            && !BRANDS.iter().any(|b| next.contains(b));
+        if !lowercase_word || !is_prose_case(head, initial == Some(index)) {
+            continue;
+        }
+        let lowered = head.to_lowercase();
+        if let Some(&preposition) = ["de", "da", "em"].iter().find(|&&p| p == lowered) {
+            found.insert(preposition);
+        }
+    }
 
-    sw_count + preposition_count + accented_words >= 2
+    found.len()
 }
 
 /// Counts words with Portuguese accented letters, skipping brand names, URL/path-like tokens and
@@ -426,6 +493,36 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
                 && !wide("// Timezone Brasília handled by the caller; que is a variable here")
                 && !wide("// Timezone: Brasília is UTC-3, handled by the caller.")
                 && !wide("// Read the file and return the parsed rows"),
+        ),
+        (
+            "pt-comment: GB-287 English with acronyms, surnames or a repeated token stays green",
+            [
+                "// Convert DOS line endings, as DOS tools expect CRLF",
+                "// MS-DOS 8.3 names: DOS reserves CON and NUL",
+                "// acquire sem before the write, release sem after",
+                "// DAS and NAS volumes: DAS is mounted first",
+                "// ELA and ELE are the two register aliases",
+                "// ELA register aliases sem in the table",
+                "// Map each em value; the em square is 1000 units",
+                "// Use de facto defaults, da Vinci layout",
+                "// Mas and Dos are the author surnames",
+                "// Que is short for queue: pop que, push que",
+            ]
+            .iter()
+            .all(|line| !wide(line)),
+        ),
+        (
+            "pt-comment: GB-287 two distinct wide words stay red, a capitalised first word counts",
+            wide("// Isso pode quebrar o build")
+                && wide("// o job roda sempre, nunca manualmente")
+                && !pt("// Isso pode quebrar o build"),
+        ),
+        (
+            "pt-comment: GB-287 two distinct prepositions before lowercase words stay red",
+            wide("// backup de dados em disco")
+                && wide("// Em caso de falha, reiniciar")
+                && wide("// copia o dump antes da troca")
+                && !pt("// backup de dados em disco"),
         ),
         (
             "pt-comment: GB-282 severity, narrow hit is ERROR, wide-only hit is WARNING, English is none",
