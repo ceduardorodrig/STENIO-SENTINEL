@@ -405,6 +405,10 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
             "guardian audits the checkout the binary was built from",
             guardian_dir_cases(),
         ),
+        (
+            "guardian exits 1 on an anchor absent from its module (GB-035)",
+            guardian_exit_cases(),
+        ),
     ]
 }
 
@@ -452,6 +456,31 @@ fn guardian_dir_cases() -> bool {
     let falls_back = resolve_guardian_src(None, &gone, canon) == canon;
     let _ = std::fs::remove_dir_all(&built);
     from_build && explicit_wins && falls_back
+}
+
+/// An anchor absent from its module raises an alert and a non-zero exit; a present one neither.
+fn guardian_exit_cases() -> bool {
+    let files = vec![(
+        "src/m.rs".to_string(),
+        "// the pinned sentence\n".to_string(),
+    )];
+    let Some(root) = crate::frappe::write_fixture("guardexit", &files) else {
+        return false;
+    };
+    let status = |anchor: &str| {
+        let (_, tamper_alerts, _) =
+            audit_critical_modules(&root, &[("m.rs", &[anchor] as &[&str])]);
+        exit_code(&GuardianReport {
+            is_intact: tamper_alerts.is_empty(),
+            binary_hash: String::new(),
+            source_files_checked: 1,
+            messages: Vec::new(),
+            tamper_alerts,
+        })
+    };
+    let ok = status("the pinned sentence") == 0 && status("a sentence nobody wrote") == 1;
+    let _ = std::fs::remove_dir_all(&root);
+    ok
 }
 
 /// True when the matched fragment carries a placeholder rather than a credential.
@@ -696,6 +725,11 @@ fn audit_critical_modules(
     }
 
     (files_checked, tamper_alerts, override_messages)
+}
+
+/// Exit status of `--guardian` (GB-035): a tamper alert has to fail the step that runs it.
+pub fn exit_code(report: &GuardianReport) -> i32 {
+    i32::from(!report.is_intact || !report.tamper_alerts.is_empty())
 }
 
 /// Guardian audits the cryptographic integrity of the Stenio binary and source code.

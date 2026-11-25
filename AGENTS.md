@@ -178,7 +178,7 @@ The canonical method is [`../backlog-method.md`](../backlog-method.md). `src/bac
 - Authorization: extending the engine was explicitly authorized by the owner on 2026-10-30 (`ARCH-SCOPE-ISOLATION` otherwise forbids engine edits during product work).
 
 
-## Release 4.41.0 (GB-287, GB-298, GB-273)
+## Release 4.41.0 (GB-287, GB-298, GB-273, GB-035, GB-196)
 
 ### `CODE-NO-PORTUGUESE-COMMENTS`: wide tier precision, recall and ERROR (GB-287)
 
@@ -204,6 +204,18 @@ Run `stenio compare-engines` before every release: it now compares each non-defa
 workflows trigger on. Branch filters are read from the default branch and from every branch selected
 through them. A branch without a workflow of its own is listed as `NOCI`
 (`macrokey-driver@feat/media-keys`, a merged branch, 2026-11-25).
+
+### `--guardian` fails on a tamper alert (GB-035)
+
+`--guardian` exits 1 on any alert, with or without `--strict`, so the CI, release and
+`release-engine` `integrity` steps can now fail. It audits `--path`, else the checkout the binary
+was built from: a checkout on another branch than the binary reports false alerts. Pinned by
+`tests/guardian_exit.rs`.
+
+### `FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL` finds the real run (GB-196)
+
+The first line naming `rehearse.sh` was the `scp` that copies it, so a tag push between the copy
+and the run was silent. Still a WARNING.
 
 ### `UWSM-APP-EXEC` (GB-273)
 
