@@ -202,7 +202,8 @@ The narrow detector still decides `DOC-LANGUAGE-EN`; for source comments the wid
 
 Run `stenio compare-engines` before every release: it now compares each non-default branch the
 workflows trigger on. Branch filters are read from the default branch and from every branch selected
-through them.
+through them. A branch without a workflow of its own is listed as `NOCI`
+(`macrokey-driver@feat/media-keys`, a merged branch, 2026-11-25).
 
 ### `UWSM-APP-EXEC` (GB-273)
 
