@@ -521,8 +521,8 @@ impl Engine {
                             continue;
                         }
 
-                        // GB-282(a): the narrow detector keeps the rule's ERROR; a comment only the
-                        // wide recall catches is a WARNING (a new ERROR would turn repos red).
+                        // GB-287: the rule's regex only preselects lines; the wide comment detector
+                        // decides, and every comment it flags is an ERROR.
                         let mut severity = severity;
                         if rule.id == "CODE-NO-PORTUGUESE-COMMENTS" {
                             let comment_opt = crate::comments::extract_comment(&ext, line);
