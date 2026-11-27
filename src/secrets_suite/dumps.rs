@@ -27,6 +27,9 @@ const DUMP_EXTENSIONS: &[&str] = &[
     "", "txt", "env", "val", "value", "secret", "key", "tmp", "out",
 ];
 
+/// Third-party package caches: their fixtures are not secrets of this fleet.
+const PACKAGE_CACHES: &[&str] = &["uv", "pnpm", "npm", "pip", "node_modules", "site-packages"];
+
 #[derive(Parser, Debug)]
 #[command(about = "Fail when scratch directories hold secrets (paths and key names only)")]
 struct Args {
@@ -55,7 +58,13 @@ fn scan(roots: &[PathBuf], allow: &[PathBuf]) -> (usize, Vec<String>) {
     let mut out = Vec::new();
     for root in roots {
         let mut walker = WalkBuilder::new(root);
-        walker.standard_filters(false);
+        walker.standard_filters(false).filter_entry(|e| {
+            e.depth() == 0
+                || !(e.file_type().is_some_and(|t| t.is_dir())
+                    && PACKAGE_CACHES
+                        .iter()
+                        .any(|c| e.file_name().to_str() == Some(*c)))
+        });
         for entry in walker.build().flatten() {
             let path = entry.path();
             let regular = entry.file_type().is_some_and(|t| t.is_file());
@@ -162,6 +171,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             ("names.txt", "POSTGRES_PASSWORD\nSECRET_KEY\n"),
             ("token_count.rs", "fn x() {}\n"),
             ("e.env", "DB_PASSWORD=${DB_PASSWORD}\n"),
+            ("uv/pkg/t.env", "API_TOKEN=Qv7mZp2Lx9Rt4Kd8Wn3Bs6Hy\n"),
         ],
     );
     let snap =
