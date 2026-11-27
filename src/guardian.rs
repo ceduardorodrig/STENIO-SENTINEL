@@ -859,6 +859,22 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             ],
         ),
         (
+            "secrets_suite/explain.rs",
+            &[
+                "SEC-SOPS-STORE-RECIPIENTS",
+                "SECRETS-STORE-DRIFT",
+                "ENV-VAR-WIRED",
+                "STACK-ENV-REQUIRED-HAS-CONSUMER",
+                "COMPOSE-ENV-EXAMPLE-PARITY",
+                "SEC-SECRET-WRITTEN-TO-DISK",
+                "HARNESS-ENV-SNAPSHOT-REDACTS-SECRETS",
+                "SEC-ONE-VALUE-MANY-NAMES",
+                "SECRET-IN-AGENT-OUTPUT",
+                "SECRETS-HELPER-HAS-NO-FALLBACK",
+                "PROVIDER-ERROR-NO-EMPTY-DETAIL",
+            ],
+        ),
+        (
             "vault.rs",
             &[
                 "PROJECT-AUTO-COLD-STORAGE",
