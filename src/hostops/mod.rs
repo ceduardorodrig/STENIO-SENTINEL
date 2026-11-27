@@ -14,6 +14,7 @@ use crate::engine::Violation;
 use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
+mod autopilot_last; // GB-175
 mod backup_verify; // GB-051
 mod boots; // GB-155
 mod kuma; // GB-014 GB-015
@@ -37,6 +38,7 @@ const LINTS: &[(&str, Lint)] = &[
 ];
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
+    autopilot_last::EXPLAIN,     // GB-175
     backup_verify::EXPLAIN,      // GB-051
     boots::EXPLAIN,              // GB-155
     kuma::EXPLAIN_LOOPBACK,      // GB-014
@@ -56,6 +58,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let rest = &argv[1..];
     match name.as_str() {
         "lint" => lint_cli(rest),
+        "autopilot-last" => autopilot_last::run_cli(rest), // GB-175
         "boots" => boots::run_cli(rest),                   // GB-155
         "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "onfailure" => onfailure::run_cli(rest),           // GB-016
@@ -69,6 +72,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut all = Vec::new();
+    all.extend(autopilot_last::self_test_cases()); // GB-175
     all.extend(backup_verify::self_test_cases()); // GB-051
     all.extend(boots::self_test_cases()); // GB-155
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
