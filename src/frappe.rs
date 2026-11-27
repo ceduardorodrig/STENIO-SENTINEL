@@ -5849,9 +5849,12 @@ pub fn fixture_config() -> FrappeConfig {
     }
 }
 
-/// Writes a fixture under a fresh temp directory; the caller removes it.
+/// Writes a fixture under a fresh temp directory, unique per call (GB-246: two tests sharing a
+/// tag raced when the key was tag and pid only); the caller removes it.
 pub fn write_fixture(tag: &str, files: &[(String, String)]) -> Option<PathBuf> {
-    let root = std::env::temp_dir().join(format!("stenio-{tag}-{}", std::process::id()));
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("stenio-{tag}-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     for (p, t) in files {
         let path = root.join(p);
@@ -6090,11 +6093,7 @@ pub(crate) fn parity_spelling_agrees() -> bool {
             "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
         ),
     ];
-    // One directory per call: the self-test case and its unit test run in one process, in parallel,
-    // and `write_fixture` keys the directory by tag and pid only.
-    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let Some(base) = write_fixture(&format!("parity-spelling-{n}"), &files) else {
+    let Some(base) = write_fixture("parity-spelling", &files) else {
         return false;
     };
     let cfg = FrappeConfig {
@@ -6266,6 +6265,11 @@ mod tests {
         };
         let got = audit(&base.join("ws"), cfg).unwrap_or_default();
         let _ = fs::remove_dir_all(&base);
+        // A tag with a slash ("x/inert") leaves a private parent; `remove_dir` only removes it
+        // when empty (GB-246).
+        if tag.contains('/') {
+            let _ = base.parent().map(fs::remove_dir);
+        }
         got.into_iter().filter(|v| v.rule_id == rule).collect()
     }
 

@@ -37,11 +37,13 @@ mod hook_fixtures;
 mod i18n;
 mod infra;
 mod learner;
+mod lockparity;
 mod mcp;
 mod mcp_server;
 mod mesh;
 mod migrations;
 mod opportunity;
+mod parity;
 mod ports;
 mod pre_release;
 mod reconcile;
@@ -51,6 +53,7 @@ pub mod remote;
 mod rule;
 mod secrets_guard;
 mod semantic;
+mod shell;
 mod sweep;
 #[cfg(test)]
 mod testkit;
@@ -700,6 +703,9 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(hook_fixtures::self_test_cases())
+        .chain(shell::self_test_cases())
+        .chain(lockparity::self_test_cases())
+        .chain(parity::self_test_cases())
         .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
@@ -2055,6 +2061,8 @@ fn main() -> Result<()> {
         argv.push("--static-only".to_string());
     }
     match argv.get(1).map(String::as_str) {
+        Some("binary-parity") => std::process::exit(parity::run_binary_parity(&argv[1..])),
+        Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
@@ -2787,9 +2795,7 @@ fn main() -> Result<()> {
     // ── Harness entry points (AGENT-ENTRYPOINT-RULES, GB-033) ──────────────
     let should_audit_entrypoints = (is_vault_active || is_homelab_active)
         && (tag_lower.is_none() || tag_lower.as_deref() == Some("agent"))
-        && only_rule
-            .map(|s| s.eq_ignore_ascii_case(entrypoints::RULE_ID))
-            .unwrap_or(true);
+        && only_rule.map(entrypoints::owns).unwrap_or(true);
     if should_audit_entrypoints {
         let ep = entrypoints::audit(&args.path);
         doc_messages.extend(ep.messages);
@@ -2846,6 +2852,31 @@ fn main() -> Result<()> {
         let dep = dependabot::audit(dep_root, &SteniocheckConfig::load_from_dir(dep_root));
         doc_messages.extend(dep.messages);
         for v in dep.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Shell scripts (GB-212/221/222/224/248/249) and lockfile parity (GB-070) ──
+    let repo_ids: Vec<&str> = shell::IDS
+        .into_iter()
+        .chain([lockparity::RULE_ID])
+        .collect();
+    let wants = |r: &str| only_rule.is_none_or(|o| o.eq_ignore_ascii_case(r));
+    if tag_lower.as_deref().is_none_or(|t| t == "shell") && repo_ids.iter().any(|r| wants(r)) {
+        let repo = dependabot::repo_root(&args.path, &scan_target);
+        let mut found = shell::audit(repo);
+        found.extend(lockparity::audit(repo));
+        if let Some(base) = diff_target {
+            let changed = shell::changed_files(repo, base);
+            found.retain(|v| changed.iter().any(|c| v.file_path.ends_with(c.as_str())));
+        }
+        for v in found.into_iter().filter(|v| wants(&v.rule_id)) {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {
