@@ -91,10 +91,11 @@ static CITATION: LazyLock<Option<Regex>> = LazyLock::new(|| {
     .ok()
 });
 
-/// Proper names (`Lei Geral de Proteção de Dados`) and file or identifier tokens.
+/// Proper names inside a sentence (`the Lei Geral de Proteção de Dados`) and file or identifier
+/// tokens. A title-case chain that opens a line is a heading, and is judged.
 static NAMES: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
-        r"\p{Lu}\p{L}*(?:\s+(?:de|da|do|das|dos|e)\s+\p{Lu}\p{L}*)+|\S*(?:/|_|\p{L}\.\p{L})\S*",
+        r"(?P<lead>\p{Ll}+\s+|\b(?:The|the)\s+)\p{Lu}\p{L}*(?:\s+(?:de|da|do|das|dos|e)\s+\p{Lu}\p{L}*)+|\S*(?:/|_|\p{L}\.\p{L})\S*",
     )
     .ok()
 });
@@ -126,6 +127,12 @@ const STRONG: &[&str] = &[
     "depois",
     "rodar",
     "voces",
+    "estrutura",
+    "validade",
+    "procedimento",
+    "projetos",
+    "pendencias",
+    "cronograma",
 ];
 
 /// Portuguese words, diacritics dropped, that are not English words; two distinct ones in a
@@ -292,6 +299,24 @@ const LEXICON: &[&str] = &[
     "contra",
     "ate",
     "apos",
+    "segue",
+    "ficam",
+    "fica",
+    "diretorio",
+    "cliente",
+    "contexto",
+    "arquivamento",
+    "nomes",
+    "arquivado",
+    "arquivados",
+    "mantidos",
+    "projeto",
+    "resumo",
+    "objetivo",
+    "escopo",
+    "mesma",
+    "arquivada",
+    "diretorios",
 ];
 
 /// Lexicon entries that are also English tokens: they only support another signal.
@@ -417,12 +442,18 @@ fn fold(word: &str) -> String {
 }
 
 fn is_portuguese(text: &str) -> bool {
-    let text = strip(&NAMES, text);
+    let text = match NAMES.as_ref() {
+        Some(re) => re.replace_all(text, "${lead} ").into_owned(),
+        None => text.to_string(),
+    };
     let (mut hits, mut weak) = (BTreeSet::new(), BTreeSet::new());
-    let words = text
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().any(char::is_alphabetic));
-    for (index, word) in words.enumerate() {
+    // Each table cell opens its own sentence, so a capitalised first word is prose.
+    let words = text.split('|').flat_map(|cell| {
+        cell.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().any(char::is_alphabetic))
+            .enumerate()
+    });
+    for (index, word) in words {
         if !crate::comments::is_prose_case(word, index == 0) {
             continue;
         }
@@ -477,7 +508,8 @@ fn said(ext: &str, line: &str) -> Option<String> {
     } else {
         &CODE_OUTPUT
     };
-    if output.as_ref().is_some_and(|re| re.is_match(line))
+    if !matches!(ext, "toml" | "sql" | "css")
+        && output.as_ref().is_some_and(|re| re.is_match(line))
         && let Some(literal) = STRING_LITERAL.as_ref()
     {
         for c in literal.captures_iter(line) {
@@ -1121,6 +1153,11 @@ fn self_test() -> Vec<(String, bool)> {
             "table-cell",
             "docs/new.md",
             "| Step | Note |\n|---|---|\n| 1 | falta conferir |\n",
+        ),
+        one(
+            "title-case-heading",
+            "docs/new.md",
+            "## Procedimento de Arquivamento\n",
         ),
         one("code-comment", "src/a.rs", "// apagar antes de enviar\n"),
         one(

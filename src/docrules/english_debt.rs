@@ -436,7 +436,7 @@ fn report(o: &Options) -> i32 {
                     }
                 }
             }
-            if o.init || o.prune {
+            if (o.init || o.prune) && scope.root == ctx.target {
                 let code = write_ledger(&ctx, scope, hits, o.prune);
                 if code != 0 {
                     return code;
