@@ -2029,24 +2029,6 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     i32::from(errors > 0)
 }
 
-/// Paths (repository-relative) that differ from `base`, for the rules that walk the tree.
-fn changed_files(repo: &Path, base: &str) -> Vec<String> {
-    let run = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default()
-    };
-    let mut out = run(&["diff", "--name-only", "--relative", base, "--"]);
-    out.push_str(&run(&["ls-files", "--others", "--exclude-standard"]));
-    out.lines().map(str::to_string).collect()
-}
-
 fn main() -> Result<()> {
     let mut argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("backlog") {
@@ -2857,7 +2839,7 @@ fn main() -> Result<()> {
         let mut found = shell::audit(repo);
         found.extend(lockparity::audit(repo));
         if let Some(base) = diff_target {
-            let changed = changed_files(repo, base);
+            let changed = shell::changed_files(repo, base);
             found.retain(|v| changed.iter().any(|c| v.file_path.ends_with(c.as_str())));
         }
         for v in found.into_iter().filter(|v| wants(&v.rule_id)) {

@@ -56,6 +56,24 @@ pub fn walk(root: &Path) -> impl Iterator<Item = PathBuf> {
         .map(ignore::DirEntry::into_path)
 }
 
+/// Paths (repository-relative) that differ from `base`, for the rules that walk the tree.
+pub fn changed_files(repo: &Path, base: &str) -> Vec<String> {
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
+    };
+    let mut out = run(&["diff", "--name-only", "--relative", base, "--"]);
+    out.push_str(&run(&["ls-files", "--others", "--exclude-standard"]));
+    out.lines().map(str::to_string).collect()
+}
+
 fn is_shell(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
         Some("sh" | "bash") => true,
