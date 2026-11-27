@@ -113,4 +113,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "stenio secrets-helper-check --min 100 --state ~/.cache/helper.count -- sops -d --output-type dotenv <store>",
         remediation: "Run it in the consumer's startup hook, fix the helper path or the age key, keep an encrypted copy outside the vault.",
     },
+    RuleExplanation {
+        id: "PROVIDER-ERROR-NO-EMPTY-DETAIL",
+        name: "Provider Failure Detail Can Be Empty",
+        severity: "WARN",
+        tag: "rust",
+        summary: "In Rust files about providers, an error built from a child's exit status and stderr without reading stdout or checking emptiness earlier in the function.",
+        rationale: "The CLI wrote a 429 as an event on stdout; the journal showed `exit status: 1:` with nothing after the colon and a quota refusal looked like a crash.",
+        bad_example: "bail!(\"exited with {}: {}\", output.status, stderr.trim());",
+        good_example: "parse the stdout error event first; otherwise report `stderr empty`",
+        remediation: "Classify the stdout error event and never emit an empty detail.",
+    },
 ];

@@ -11,6 +11,7 @@ mod env_wired;
 pub mod explain;
 mod helper_check;
 mod identities;
+mod provider_error;
 mod redact;
 mod store;
 mod store_recipients;
@@ -53,7 +54,8 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
     let wired = sel.wants("env", env_wired::RULE_ID);
     let stack = sel.wants("env", env_stack::RULE_ID);
     let parity = sel.wants("env", env_example::RULE_ID);
-    if !(wired || stack || parity) {
+    let provider = sel.wants("rust", provider_error::RULE_ID);
+    if !(wired || stack || parity || provider) {
         return out;
     }
     let files = tree::files(root);
@@ -62,6 +64,9 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
     }
     if parity {
         out.extend(env_example::audit(&files));
+    }
+    if provider {
+        out.extend(provider_error::audit(&files));
     }
     if stack {
         out.extend(env_stack::audit(root, &files));
@@ -130,6 +135,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     cases.extend(identities::self_test_cases());
     cases.extend(redact::self_test_cases());
     cases.extend(helper_check::self_test_cases());
+    cases.extend(provider_error::self_test_cases());
     cases.extend(env_wired::self_test_cases());
     cases.extend(env_stack::self_test_cases());
     cases.extend(env_example::self_test_cases());
