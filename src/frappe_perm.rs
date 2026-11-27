@@ -9,6 +9,7 @@ mod docperm_row;
 mod permlevel_list_view;
 mod permlevel_row;
 mod permlevel_write;
+mod public_drift;
 mod public_reason;
 
 use std::collections::BTreeSet;
@@ -41,6 +42,7 @@ struct Case {
 }
 
 pub static RULES: &[&Rule] = &[
+    &public_drift::RULE,
     &public_reason::RULE,
     &permlevel_list_view::RULE,
     &permlevel_write::RULE,

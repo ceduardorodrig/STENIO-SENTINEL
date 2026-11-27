@@ -1,16 +1,21 @@
 //! `FRAPPE-PUBLIC-FIELD-DRIFT` (GB-178): personal data left at permlevel 0 on a DocType that is
 //! declared public.
 
-use super::{
-    Case, PUBLIC_FILE, Rule, Tree, declarations, doctype_file, int_of, str_of, viol,
-};
+use super::{Case, PUBLIC_FILE, Rule, Tree, declarations, doctype_file, int_of, str_of, viol};
 use crate::engine::Violation;
 use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
 /// Fieldnames (whole, or as a `_` suffix) that hold personal contact or identity data.
 const PERSONAL: &[&str] = &[
-    "email", "e_mail", "cpf", "rg", "phone", "mobile", "mobile_no", "whatsapp",
+    "email",
+    "e_mail",
+    "cpf",
+    "rg",
+    "phone",
+    "mobile",
+    "mobile_no",
+    "whatsapp",
 ];
 
 pub static RULE: Rule = Rule {
@@ -81,7 +86,9 @@ fn cases() -> Vec<Case> {
             doctype_file(
                 "Member",
                 "",
-                &format!(r#"{{"fieldname":"email","fieldtype":"Data","permlevel":{level}}},{{"fieldname":"user","fieldtype":"Link","options":"User","permlevel":{level}}},{{"fieldname":"bio","fieldtype":"Small Text"}}"#),
+                &format!(
+                    r#"{{"fieldname":"email","fieldtype":"Data","permlevel":{level}}},{{"fieldname":"user","fieldtype":"Link","options":"User","permlevel":{level}}},{{"fieldname":"bio","fieldtype":"Small Text"}}"#
+                ),
                 "",
             ),
             ("demoapp/permissions-public.txt".into(), public.into()),
@@ -90,14 +97,29 @@ fn cases() -> Vec<Case> {
         expect,
     };
     vec![
-        case("restricted contact fields are accepted", 1, "Member # directory\n", 0),
+        case(
+            "restricted contact fields are accepted",
+            1,
+            "Member # directory\n",
+            0,
+        ),
         case(
             "fields declared public one by one are accepted",
             0,
             "Member # directory\nMember.email # work address\nMember.user # work login\n",
             0,
         ),
-        case("a DocType that is not declared public is not judged", 0, "Tag # x\n", 0),
-        case("e-mail and User link at level 0 fire", 0, "Member # directory\n", 2),
+        case(
+            "a DocType that is not declared public is not judged",
+            0,
+            "Tag # x\n",
+            0,
+        ),
+        case(
+            "e-mail and User link at level 0 fire",
+            0,
+            "Member # directory\n",
+            2,
+        ),
     ]
 }
