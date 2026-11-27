@@ -22,6 +22,9 @@ use crate::engine::Violation;
 use crate::i18n;
 use crate::rule::Severity;
 
+#[path = "frappe_ext/mod.rs"]
+pub(crate) mod ext;
+
 pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-DOCTYPE-CONTROLLER",
@@ -5449,6 +5452,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     ] {
         all.extend(f(&c));
     }
+    all.extend(ext::audit(&c));
     all.sort_by(|a, b| {
         (&a.rule_id, &a.file_path, a.line_number).cmp(&(&b.rule_id, &b.file_path, b.line_number))
     });
@@ -5885,6 +5889,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             (id.to_string(), silent && fires)
         })
         .collect();
+    cases.extend(ext::self_test_cases());
     cases.push((
         "FRAPPE-TEST-PARITY-SPELLING".to_string(),
         parity_spelling_agrees(),

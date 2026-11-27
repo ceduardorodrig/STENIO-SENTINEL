@@ -1591,6 +1591,7 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::frappe::ext::explanations())
         .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 
@@ -1687,7 +1688,10 @@ pub fn format_explanation_plain(exp: &RuleExplanation) -> String {
 pub fn list_all_explanations() -> String {
     let mut s = String::new();
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
-    for exp in EXPLANATIONS {
+    for exp in EXPLANATIONS
+        .iter()
+        .chain(crate::frappe::ext::explanations())
+    {
         s.push_str(&format!(
             "  • {:<26} [{:<5}] {:<7} - {}\n",
             exp.id, exp.tag, exp.severity, exp.name
