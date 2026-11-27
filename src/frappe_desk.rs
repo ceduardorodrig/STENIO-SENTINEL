@@ -33,6 +33,8 @@ mod single_count;
 mod support;
 #[path = "frappe_desk/table_section.rs"]
 mod table_section;
+#[path = "frappe_desk/version_endpoint.rs"]
+mod version_endpoint;
 
 pub(super) struct Item {
     explain: &'static RuleExplanation,
@@ -95,6 +97,11 @@ const ITEMS: &[Item] = &[
         explain: &js_registered::EXPLAIN,
         run: js_registered::run,
         cases: js_registered::cases,
+    },
+    Item {
+        explain: &version_endpoint::EXPLAIN,
+        run: version_endpoint::run,
+        cases: version_endpoint::cases,
     },
 ];
 
