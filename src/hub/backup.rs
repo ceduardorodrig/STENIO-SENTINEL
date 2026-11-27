@@ -4,6 +4,7 @@
 
 use chrono::{NaiveDateTime, Utc};
 use serde_json::{Value, json};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::store::Store;
@@ -22,21 +23,34 @@ fn receipt_of(db: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Restores `snapshot` into a private scratch directory and audits it there.
-fn restore_test(snapshot: &Path, scratch_parent: &Path) -> HubResult<Value> {
-    let scratch = scratch_parent.join(format!(
-        ".restore-test-{}-{}",
+fn private(path: &Path) -> HubResult<()> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| io("protect", path, e))
+}
+
+/// Restores `snapshot` into a private local scratch directory, audits it there and returns the
+/// audit report with the event export. The backup folder itself may be synchronised or remote,
+/// where a ledger is never opened.
+fn restore_test(snapshot: &Path) -> HubResult<(Value, String)> {
+    let scratch = std::env::temp_dir().join(format!(
+        "stenio-restore-test-{}-{}",
         std::process::id(),
         Utc::now().timestamp_micros()
     ));
-    std::fs::create_dir(&scratch).map_err(|e| io("create", &scratch, e))?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&scratch)
+        .map_err(|e| io("create", &scratch, e))?;
     let result = (|| {
         let copy = scratch.join("hub.db");
         std::fs::copy(snapshot, &copy).map_err(|e| io("restore", snapshot, e))?;
-        audit::audit(&mut Store::open(&copy)?, None, false)
+        let mut store = Store::open(&copy)?;
+        let report = audit::audit(&mut store, None, false)?;
+        let events = view::export(&mut store, None)?;
+        Ok::<_, HubError>((report, events))
     })();
     std::fs::remove_dir_all(&scratch).map_err(|e| io("remove", &scratch, e))?;
-    let report = result?;
+    let (report, events) = result?;
     if report["ok"] != json!(true) {
         return Err(HubError::refused(
             "backup_invalid",
@@ -48,7 +62,7 @@ fn restore_test(snapshot: &Path, scratch_parent: &Path) -> HubResult<Value> {
         )
         .with("audit", report));
     }
-    Ok(report)
+    Ok((report, events))
 }
 
 /// Snapshots in `dir`, oldest first, with the instant their name records.
@@ -80,16 +94,15 @@ pub fn backup(out: &Path, keep: usize) -> HubResult<Value> {
     let mut store = Store::open(&db)?;
     let file = out.join(format!("{PREFIX}{}.db", Utc::now().format(STAMP)));
     store.snapshot(&file)?;
-    let proven = restore_test(&file, out).and_then(|report| {
-        let mut copy = Store::open(&file)?;
-        let events = view::export(&mut copy, None)?;
-        copy.seal()?;
+    let proven = private(&file).and_then(|()| {
+        let (_, events) = restore_test(&file)?;
         let jsonl = file.with_extension("events.jsonl");
         std::fs::write(&jsonl, &events).map_err(|e| io("write", &jsonl, e))?;
-        Ok((report, events.lines().count()))
+        private(&jsonl)?;
+        Ok(events.lines().count())
     });
-    let (_, events) = match proven {
-        Ok(done) => done,
+    let events = match proven {
+        Ok(count) => count,
         Err(e) => {
             // An unproven snapshot must not pass for a backup.
             std::fs::remove_file(&file).map_err(|x| io("remove", &file, x))?;
@@ -136,7 +149,7 @@ pub fn check(dir: &Path, max_age_secs: u64) -> HubResult<Value> {
             max_age_secs / 3600
         )));
     }
-    restore_test(&file, &std::env::temp_dir())?;
+    restore_test(&file)?;
     Ok(
         json!({"ok": true, "file": file.display().to_string(), "age_secs": age,
         "restore_test": "audit ok"}),

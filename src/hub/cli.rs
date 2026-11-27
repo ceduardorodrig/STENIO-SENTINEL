@@ -2,7 +2,7 @@
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use super::config::{self, Config, WORKER_ENV};
@@ -86,6 +86,18 @@ enum QuotaCmd {
             help = "Read the harness record from stdin"
         )]
         from: Option<String>,
+    },
+    /// Owner only, at a terminal: lift the quota gate of an account for a limited time
+    Override {
+        #[arg(long)]
+        account: String,
+        #[arg(
+            long = "for",
+            help = "Seconds, or with s, m, h; at most 24h; 0 revokes"
+        )]
+        duration: String,
+        #[arg(long)]
+        reason: String,
     },
     /// Known and unknown windows
     Show {
@@ -537,6 +549,23 @@ fn execute(command: Cmd) -> HubResult<Value> {
                 resets_at,
                 from,
             } => put_quota(&account, window, used, resets_at, from),
+            QuotaCmd::Override {
+                account,
+                duration,
+                reason,
+            } => {
+                let secs = match duration.trim() {
+                    "0" => 0,
+                    other => parse_ttl(other)?,
+                };
+                quota::set_override(
+                    &mut open()?,
+                    &account,
+                    secs,
+                    &reason,
+                    std::io::stdin().is_terminal(),
+                )
+            }
             QuotaCmd::Show { cursor } => view::quota_view(&mut open()?, &cfg, cursor),
         },
         Cmd::Audit { run, require_final } => {

@@ -218,7 +218,9 @@ fn backup_restores_and_reports_staleness() -> Fallible {
     let f = Fixture::new("backup")?;
     let worker = f.join("s")?;
     assert_eq!(f.claim(&worker, "branch:x", "5m")?.code, 0);
-    let out = f.0.join("backups");
+    // The real backup tree is a synchronised folder, where a ledger is never opened.
+    fs::create_dir_all(f.0.join("synced/.stfolder"))?;
+    let out = f.0.join("synced/backups");
     let dir = out.display().to_string();
     let done = f.run(&["hub", "backup", "--out", &dir], "")?;
     assert_eq!(done.code, 0, "{}", done.err);

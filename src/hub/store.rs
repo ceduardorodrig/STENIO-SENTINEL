@@ -348,15 +348,6 @@ impl Store {
         Ok(())
     }
 
-    /// Leaves a copy as one self-contained file (no write-ahead log beside it).
-    pub fn seal(&mut self) -> HubResult<()> {
-        retry_busy(|| {
-            self.conn
-                .query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))
-        })?;
-        Ok(())
-    }
-
     /// A consistent read snapshot.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> HubResult<T>) -> HubResult<T> {
         let tx = self

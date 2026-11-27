@@ -184,6 +184,9 @@ pub fn status(
             items.extend(run_items(conn, run)?);
         }
         items.extend(questions(conn, true)?);
+        for account in quota::overridden(conn)? {
+            items.push(account);
+        }
         for mut entry in quota::show(conn, &cfg.quota)? {
             entry["kind"] = json!("quota");
             items.push(entry);

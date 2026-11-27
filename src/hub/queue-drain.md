@@ -54,6 +54,12 @@ selects another queue than GB and needs `--ref`; `--json` prints the id or the r
 run reports the same refusal. The claim covers every directory unless it was taken with
 `--path <root>`; then a scratch copy elsewhere stays writable.
 
+## Quota override
+
+Only the owner, at a terminal, may lift the quota gate of an account for up to 24 hours:
+`stenio hub quota override --account <a> --for 4h --reason <why>` (`--for 0` revokes). It is a
+ledger event and `status` shows it. An agent never runs it and never fakes a sample.
+
 ## Release and backup
 
 `release-engine` refuses without a live `release:stenio` claim of the caller (`--worker`). Only
