@@ -18,6 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -163,6 +164,18 @@ fn violation(
 /// Rows detached from their header and rows with the wrong cell count.
 pub fn table_integrity(file: File<'_>, severity: Severity) -> Vec<Violation> {
     let mut found = Vec::new();
+    let finding = |line, id: &str, message, suggestion| {
+        violation(
+            TABLE_ID,
+            "Backlog Table Integrity",
+            severity,
+            file.display,
+            line,
+            id,
+            message,
+            suggestion,
+        )
+    };
     let mut fenced = false;
     // Width of the id table the current block belongs to.
     let mut width: Option<usize> = None;
@@ -176,7 +189,7 @@ pub fn table_integrity(file: File<'_>, severity: Severity) -> Vec<Violation> {
             fenced = !fenced;
         }
         if fenced || !line.trim_start().starts_with('|') {
-            if in_block && width.is_some() {
+            if in_block && (width.is_some() || reported) {
                 broke_at = Some(i + 1);
             }
             in_block = false;
@@ -202,11 +215,7 @@ pub fn table_integrity(file: File<'_>, severity: Severity) -> Vec<Violation> {
         };
         let id = first.trim_matches(|ch| ch == '*' || ch == ' ');
         match width {
-            Some(w) if w != c.len() => found.push(violation(
-                TABLE_ID,
-                "Backlog Table Integrity",
-                severity,
-                file.display,
+            Some(w) if w != c.len() => found.push(finding(
                 i + 1,
                 id,
                 format!(
@@ -228,13 +237,9 @@ pub fn table_integrity(file: File<'_>, severity: Severity) -> Vec<Violation> {
                     || "no table header precedes them".to_string(),
                     |n| format!("the table is interrupted at line {n} (blank or non-row line)"),
                 );
-                found.push(violation(
-                    TABLE_ID,
-                    "Backlog Table Integrity",
-                    severity,
-                    file.display,
-                    i + 1,
-                    id,
+                found.push(finding(
+                i + 1,
+                id,
                     format!(
                         "{detached} row(s) from {id} ({}:{}) are detached from the header: {cause}.",
                         file.display,
@@ -396,8 +401,21 @@ fn slug_extends(short: &str, long: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('-'))
 }
 
+/// Compiled once: the pair comparison below would otherwise rebuild them thousands of times.
+static FILE_LINE: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(r"[\w./-]+\.(?:rs|py|md|toml|ya?ml|json|sh|tsx?|jsx?|vue|lua|conf|css|html|sql|hujson|service|timer):\d+").ok()
+});
+
+static DECLARED: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:^|[.;:,(—–]\**\s*|\b(?:this|it)(?:\s+(?:row|item))?(?:\s+is\s+an?)?\s+|\b(?:closed|discarded|archived)\s+as\s+(?:an?\s+)?)\**duplicat(?:es|e\s+of|ed\s+of|e:)\s+\**([A-Z]{2,4}-\d+)",
+    )
+    .ok()
+});
+
 fn file_lines(text: &str) -> BTreeSet<String> {
-    Regex::new(r"[\w./-]+\.(?:rs|py|md|toml|ya?ml|json|sh|tsx?|jsx?|vue|lua|conf|css|html|sql|hujson|service|timer):\d+")
+    FILE_LINE
+        .as_ref()
         .map(|re| re.find_iter(text).map(|m| m.as_str().to_string()).collect())
         .unwrap_or_default()
 }
@@ -409,13 +427,15 @@ fn evidence(item: &str) -> &str {
     rest.split("Desired behaviour:").next().unwrap_or(rest)
 }
 
-/// Ids the text declares itself (or the other row) to be a duplicate of.
+/// Ids the text declares itself (or the other row) to be a duplicate of. Only a declaration
+/// counts (at the start of a clause, "this row is a duplicate of", "closed as duplicate of"); a
+/// row that merely talks about duplicates, as a rule description does, declares nothing.
 fn declared_duplicates(text: &str) -> Vec<String> {
-    Regex::new(r"(?i)(\bnot\s+an?\s+)?\bduplicat(?:es|e of|ed? of|e:)\s+\**([A-Z]{2,4}-\d+)")
+    DECLARED
+        .as_ref()
         .map(|re| {
             re.captures_iter(text)
-                .filter(|c| c.get(1).is_none())
-                .filter_map(|c| c.get(2).map(|m| m.as_str().to_string()))
+                .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
                 .collect()
         })
         .unwrap_or_default()
@@ -437,6 +457,18 @@ pub fn duplicate_defects(prefix: &str, active: File<'_>) -> Vec<Violation> {
         .into_iter()
         .filter(|r| r.prefix == prefix && r.cells.len() > 2)
         .collect();
+    // Per row, computed once: slug, declared duplicates and defect sites.
+    let facts: Vec<(Option<String>, Vec<String>, BTreeSet<String>)> = rows
+        .iter()
+        .map(|r| {
+            let text = evidence(&r.cells[1]);
+            let mut sites = file_lines(text);
+            if let Some(reference) = r.cells.get(2) {
+                sites.extend(file_lines(reference));
+            }
+            (slug(&r.cells[1]), declared_duplicates(text), sites)
+        })
+        .collect();
     let mut found = Vec::new();
     let mut report = |severity, row: &Row, message: String| {
         found.push(violation(
@@ -451,11 +483,11 @@ pub fn duplicate_defects(prefix: &str, active: File<'_>) -> Vec<Violation> {
         ));
     };
     for (i, a) in rows.iter().enumerate() {
-        for b in rows.iter().skip(i + 1) {
+        for (j, b) in rows.iter().enumerate().skip(i + 1) {
             let (ia, ib) = (&a.cells[1], &b.cells[1]);
-            let (sa, sb) = (slug(ia), slug(ib));
+            let (sa, sb) = (&facts[i].0, &facts[j].0);
             let pair = format!("{} (line {}) and {} (line {})", a.id, a.line, b.id, b.line);
-            if let (Some(x), Some(y)) = (&sa, &sb) {
+            if let (Some(x), Some(y)) = (sa, sb) {
                 if x == y {
                     report(
                         Severity::Error,
@@ -465,9 +497,7 @@ pub fn duplicate_defects(prefix: &str, active: File<'_>) -> Vec<Violation> {
                     continue;
                 }
             }
-            if declared_duplicates(evidence(ia)).contains(&b.id)
-                || declared_duplicates(evidence(ib)).contains(&a.id)
-            {
+            if facts[i].1.contains(&b.id) || facts[j].1.contains(&a.id) {
                 report(
                     Severity::Error,
                     b,
@@ -478,7 +508,7 @@ pub fn duplicate_defects(prefix: &str, active: File<'_>) -> Vec<Violation> {
             if mentions_related(ia, &b.id) || mentions_related(ib, &a.id) {
                 continue;
             }
-            if let (Some(x), Some(y)) = (&sa, &sb) {
+            if let (Some(x), Some(y)) = (sa, sb) {
                 if slug_extends(x, y) || slug_extends(y, x) {
                     report(
                         Severity::Warning,
@@ -488,14 +518,7 @@ pub fn duplicate_defects(prefix: &str, active: File<'_>) -> Vec<Violation> {
                     continue;
                 }
             }
-            let at = |r: &Row| {
-                let mut s = file_lines(evidence(&r.cells[1]));
-                if let Some(reference) = r.cells.get(2) {
-                    s.extend(file_lines(reference));
-                }
-                s
-            };
-            if let Some(shared) = at(a).intersection(&at(b)).next() {
+            if let Some(shared) = facts[i].2.intersection(&facts[j].2).next() {
                 report(
                     Severity::Warning,
                     b,
@@ -637,7 +660,12 @@ pub(super) fn cross_refs(repo_root: &Path, q: &Queue, files: &[File<'_>]) -> Vec
 }
 
 /// Every check of this module for one queue.
-pub(super) fn audit(repo_root: &Path, q: &Queue, active: File<'_>, archive: File<'_>) -> Vec<Violation> {
+pub(super) fn audit(
+    repo_root: &Path,
+    q: &Queue,
+    active: File<'_>,
+    archive: File<'_>,
+) -> Vec<Violation> {
     let mut found = table_integrity(active, Severity::Error);
     found.extend(table_integrity(archive, Severity::Warning));
     found.extend(duplicate_ids(&q.prefix, active, archive));

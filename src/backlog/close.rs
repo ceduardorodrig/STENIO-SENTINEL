@@ -448,13 +448,7 @@ fn collect_items(a: &CloseArgs) -> Result<Vec<CloseItem>, String> {
 pub fn run_cli(argv: &[String]) -> i32 {
     let a = match CloseArgs::try_parse_from(argv) {
         Ok(a) => a,
-        Err(e) => {
-            let _ = e.print();
-            return match e.kind() {
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
-                _ => 2,
-            };
-        }
+        Err(e) => return crate::util::usage_exit(&e),
     };
     let root = crate::opportunity::vault_root(a.path.as_deref());
     let date = a
