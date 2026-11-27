@@ -675,11 +675,12 @@ pub struct BeatRequest {
     pub from_hook: bool,
 }
 
-/// Claims this worker lost to expiry and has neither taken again nor handed back.
-fn lost_leases(conn: &Connection, worker_id: &str) -> HubResult<Vec<Value>> {
+/// Claims this worker lost to expiry, has neither taken again nor handed back, and has not been
+/// told about. With `acknowledge` they are marked as told.
+fn lost_leases(conn: &Connection, worker_id: &str, acknowledge: bool) -> HubResult<Vec<Value>> {
     let lost = claims(
         conn,
-        "WHERE holder = ?1 AND reason = 'expired' AND NOT EXISTS \
+        "WHERE holder = ?1 AND reason = 'expired' AND loss_reported = 0 AND NOT EXISTS \
          (SELECT 1 FROM claims n WHERE n.resource = claims.resource AND n.id > claims.id \
           AND n.holder = claims.holder) AND NOT EXISTS \
          (SELECT 1 FROM results r WHERE r.fence = claims.fence AND r.worker = claims.holder)",
@@ -691,6 +692,13 @@ fn lost_leases(conn: &Connection, worker_id: &str) -> HubResult<Vec<Value>> {
             .filter(|c| c.id != claim.id)
             .map(|c| c.holder);
         out.push(json!({"resource": claim.resource, "fence": claim.fence, "taken_by": now_holder}));
+        if acknowledge {
+            // Bookkeeping about a message, not ledger state: no event.
+            conn.execute(
+                "UPDATE claims SET loss_reported = 1 WHERE id = ?1",
+                [claim.id],
+            )?;
+        }
     }
     Ok(out)
 }
@@ -705,7 +713,8 @@ pub fn beat(store: &mut Store, cfg: &Config, request: &BeatRequest) -> HubResult
         };
         let lost = match request.fence {
             Some(_) => Vec::new(),
-            None => lost_leases(tx, &who.id)?,
+            // A hook's answer may never reach the model, so it does not count as told.
+            None => lost_leases(tx, &who.id, !request.from_hook)?,
         };
         let now = now_ms();
         let min_ms = (cfg.lease.hook_beat_min_secs as i64).saturating_mul(1000);

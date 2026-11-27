@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS workers(
 CREATE TABLE IF NOT EXISTS claims(
   id INTEGER PRIMARY KEY AUTOINCREMENT, resource TEXT NOT NULL, holder TEXT NOT NULL,
   fence INTEGER NOT NULL, run TEXT, acquired INTEGER NOT NULL, ttl_ms INTEGER NOT NULL,
-  expires INTEGER NOT NULL, released INTEGER, reason TEXT, checkpoint TEXT);
+  expires INTEGER NOT NULL, released INTEGER, reason TEXT, checkpoint TEXT,
+  loss_reported INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS results(
   id INTEGER PRIMARY KEY AUTOINCREMENT, run TEXT, row TEXT NOT NULL, worker TEXT NOT NULL,
   fence INTEGER NOT NULL, verdict TEXT NOT NULL, branch TEXT, pr TEXT, proof TEXT,
@@ -258,7 +259,11 @@ fn private_file(path: &Path) -> HubResult<()> {
             .open(path)
             .map_err(|e| HubError::Store(format!("cannot create {}: {e}", path.display())))?;
     }
-    Ok(())
+    // A link must not lead the file into a shared location either.
+    let file = path
+        .canonicalize()
+        .map_err(|e| HubError::Store(format!("cannot resolve {}: {e}", path.display())))?;
+    refuse_shared_location(file.parent().unwrap_or(&dir))
 }
 
 /// Switching a new file to WAL can report "busy" without honouring the busy timeout.

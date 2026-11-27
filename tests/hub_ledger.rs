@@ -151,20 +151,16 @@ fn finish(child: Child) -> Result<(i32, Value), Box<dyn std::error::Error>> {
 }
 
 fn pause(ms: u64) {
-    std::thread::park_timeout(Duration::from_millis(ms));
-    // `park_timeout` may wake early.
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_millis(ms / 20) {
-        std::hint::spin_loop();
+    let (start, wanted) = (std::time::Instant::now(), Duration::from_millis(ms));
+    // `park_timeout` may wake early, so wait for what is left.
+    while let Some(left) = wanted.checked_sub(start.elapsed()) {
+        std::thread::park_timeout(left);
     }
 }
 
 /// Waits until a one-second lease is certainly over.
 fn expire() {
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_millis(1_200) {
-        pause(100);
-    }
+    pause(1_200);
 }
 
 #[test]
@@ -187,6 +183,14 @@ fn a1_a2_a4_claims_are_exclusive_and_all_or_nothing() -> Fallible {
     assert!(!status.to_string().contains("row:GB-004"), "{status}");
     f.claim(&w2, "row:GB-004")?;
 
+    // Another spelling of a held resource is the same resource.
+    f.refused(&["claim", "--worker", &w2, "row:gb-1"], "held")?;
+    f.claim(&w1, "host:Node-A")?;
+    f.refused(&["claim", "--worker", &w2, "host:node-a"], "held")?;
+    std::os::unix::fs::symlink(f.vault(), f.root.join("alias"))?;
+    f.claim(&w1, &format!("tree:{}/new-dir", f.vault().display()))?;
+    let aliased = format!("tree:{}/alias/new-dir", f.root.display());
+    f.refused(&["claim", "--worker", &w2, &aliased], "held")?;
     // Misuse is distinct from refusal.
     assert_eq!(f.hub(&["claim", "--worker", &w1, "row:XX-1"])?.0, 2);
     f.refused(
@@ -317,6 +321,8 @@ fn a5_a6_a7_expiry_takeover_and_stale_fences() -> Fallible {
 
     // A7: a heartbeat after the takeover is refused.
     f.refused(&["beat", "--worker", &w1], "lease_lost")?;
+    // Told once; afterwards the worker simply holds nothing.
+    f.refused(&["beat", "--worker", &w1], "no_claims")?;
     f.refused(
         &["beat", "--worker", &w1, "--fence", &old_text],
         "stale_fence",

@@ -21,28 +21,30 @@ fn bad(raw: &str, why: &str) -> HubError {
     HubError::Usage(format!("invalid resource '{raw}': {why}"))
 }
 
-/// `GB-7`-shaped id of a declared queue, upper-cased.
+/// The canonical id of a declared queue: upper-cased and padded, so that `gb-7` and `GB-007`
+/// name the same row.
 pub fn row_id(raw: &str) -> HubResult<String> {
     let id = raw.trim().to_uppercase();
-    let known = id.split_once('-').is_some_and(|(prefix, number)| {
-        !number.is_empty()
-            && number.bytes().all(|b| b.is_ascii_digit())
-            && declared_prefixes().iter().any(|p| p == prefix)
+    let canonical = id.split_once('-').and_then(|(prefix, number)| {
+        let digits = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
+        let n = number.parse::<u32>().ok().filter(|_| digits)?;
+        declared_prefixes()
+            .iter()
+            .any(|p| p == prefix)
+            .then(|| format!("{prefix}-{n:03}"))
     });
-    if known {
-        Ok(id)
-    } else {
-        Err(bad(
+    canonical.ok_or_else(|| {
+        bad(
             raw,
             &format!(
                 "a row id is <PREFIX>-<number> with a declared prefix ({})",
                 declared_prefixes().join(", ")
             ),
-        ))
-    }
+        )
+    })
 }
 
-/// An absolute path without `.`/`..`; symlinks are resolved when the path exists.
+/// An absolute path without `..`; symlinks of its existing part are resolved.
 fn tree_path(raw: &str, value: &str) -> HubResult<String> {
     let path = Path::new(value);
     if !path.is_absolute() {
@@ -52,7 +54,18 @@ fn tree_path(raw: &str, value: &str) -> HubResult<String> {
         return Err(bad(raw, "'..' is not allowed"));
     }
     let clean: PathBuf = path.components().collect();
-    let resolved = clean.canonicalize().unwrap_or(clean);
+    let resolved = clean
+        .ancestors()
+        .find_map(|existing| {
+            let rest = clean.strip_prefix(existing).ok()?;
+            let real = existing.canonicalize().ok()?;
+            Some(
+                real.components()
+                    .chain(rest.components())
+                    .collect::<PathBuf>(),
+            )
+        })
+        .unwrap_or_else(|| clean.clone());
     resolved
         .to_str()
         .map(str::to_string)
@@ -77,7 +90,8 @@ impl Resource {
         let value = match kind {
             "row" => row_id(value)?,
             "tree" => tree_path(raw, value)?,
-            "repo" => value.to_lowercase(),
+            // Names that are case-insensitive where they are used.
+            "repo" | "host" | "release" | "deploy" => value.to_lowercase(),
             "backlog" => {
                 let prefix = value
                     .strip_suffix(":write")
