@@ -22,6 +22,7 @@ pub struct DocRule {
     pub explain: RuleExplanation,
 }
 
+mod bind_claim;
 mod contract_parity;
 mod incident;
 mod inline_style;
@@ -35,6 +36,7 @@ pub static RULES: &[&DocRule] = &[
     &inline_style::RULE,
     &contract_parity::RULE,
     &live_claim::RULE,
+    &bind_claim::RULE,
 ];
 
 /// What the rules may look at.
