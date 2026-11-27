@@ -1591,6 +1591,7 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::hostops::EXPLANATIONS)
         .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 

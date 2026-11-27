@@ -420,11 +420,16 @@ mod tests {
         crate::testkit::assert_cases(self_test_cases());
     }
 
+    /// Goes through the public lookup, so an unregistered table fails too.
     #[test]
     fn every_rule_is_explained() {
-        for (id, _) in LINTS {
+        let ids = LINTS
+            .iter()
+            .map(|l| l.0)
+            .chain(EXPLANATIONS.iter().map(|e| e.id));
+        for id in ids {
             assert!(
-                EXPLANATIONS.iter().any(|e| e.id == *id),
+                crate::explain::get_explanation(id).is_some(),
                 "no --explain entry for {id}"
             );
         }
