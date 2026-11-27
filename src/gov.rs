@@ -341,7 +341,23 @@ pub fn evaluate_agents_md_content(content: &str) -> (usize, Vec<String>, Vec<Str
             messages.push("✅ Rust tools and system privilege rules preserved".to_string());
             laws_count = 14;
         } else {
-            let err = "❌ Universal AGENTS.md missing essential conventions or rules".to_string();
+            // GB-223: name the missing literals; "missing conventions" alone forced a hand search.
+            let missing: Vec<&str> = [
+                (has_conventions, "agent-conventions.md"),
+                (
+                    has_rust_tools,
+                    "Ferramentas Rust | Preferências de Terminal | Rust Tools | Terminal Preferences",
+                ),
+                (has_homelab_or_mei, "Homelab | MEI"),
+            ]
+            .iter()
+            .filter(|(present, _)| !present)
+            .map(|(_, literal)| *literal)
+            .collect();
+            let err = format!(
+                "❌ Universal AGENTS.md missing essential conventions or rules; missing: {}",
+                missing.join("; ")
+            );
             messages.push(err.clone());
             errors.push(err);
         }
@@ -500,6 +516,15 @@ This repo follows agent-conventions.md.
         let (laws_en, _, errs_en) = evaluate_agents_md_content(en);
         assert_eq!(laws_en, 14);
         assert!(errs_en.is_empty());
+    }
+
+    #[test]
+    fn test_universal_error_names_the_missing_literal() {
+        let content = "# AGENTS.md\nSee agent-conventions.md.\n## Homelab\n";
+        let (_, _, errs) = evaluate_agents_md_content(content);
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("missing: Ferramentas Rust"), "{errs:?}");
+        assert!(!errs[0].contains("MEI"), "{errs:?}");
     }
 
     #[test]

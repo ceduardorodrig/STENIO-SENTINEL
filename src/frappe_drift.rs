@@ -66,6 +66,11 @@ fn fmt_ver(v: Ver) -> String {
 }
 
 /// The `BASE_IMAGE` pin of a Dockerfile text, as (image reference, version).
+/// Major version of the pinned `BASE_IMAGE`, for the version-gated Frappe rules.
+pub(crate) fn pinned_major(dockerfile: &str) -> Option<u64> {
+    parse_pin(dockerfile).map(|(_, v)| v.0)
+}
+
 fn parse_pin(dockerfile: &str) -> Option<(String, Ver)> {
     dockerfile.lines().find_map(|l| {
         let rest = l.trim().strip_prefix("ARG BASE_IMAGE=")?;
