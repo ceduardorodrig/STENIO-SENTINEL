@@ -28,6 +28,7 @@ mod frappe_drift;
 mod frappe_perm;
 mod frappe_whitelist;
 mod frontend;
+mod gate;
 mod gaming;
 mod gov;
 mod gpu;
