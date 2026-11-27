@@ -1963,11 +1963,11 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     let fc = cfg.frappe.clone().unwrap_or_default();
     if args.list {
-        for (id, name, sev) in frappe::RULES {
+        for (id, name, sev) in frappe::rule_table() {
             println!(
                 "{:<30} {:<6} {}",
                 id,
-                if *sev == Severity::Error {
+                if sev == Severity::Error {
                     "ERROR"
                 } else {
                     "WARN"
@@ -2006,7 +2006,7 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
                 v.message
             );
         }
-        for (id, _, _) in frappe::RULES {
+        for (id, _, _) in frappe::rule_table() {
             let n = violations.iter().filter(|v| v.rule_id == *id).count();
             println!("  {:<30} {}", id, n);
         }

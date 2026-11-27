@@ -211,6 +211,15 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     ),
 ];
 
+/// Desk, UI and i18n rules, one per file (`src/frappe_desk/`).
+#[path = "frappe_desk.rs"]
+pub(crate) mod desk;
+
+/// `(id, name, severity)` of every rule of the scope: the core table and the desk rules.
+pub fn rule_table() -> impl Iterator<Item = (&'static str, &'static str, Severity)> {
+    RULES.iter().copied().chain(desk::rule_table())
+}
+
 const SKIP_DIRS: &[&str] = &[
     "node_modules",
     ".git",
@@ -1614,13 +1623,16 @@ fn load_catalogue(path: &Path) -> Option<BTreeMap<String, String>> {
     )
 }
 
+/// The configured `locale_file` (inside the package, else under the app root), else whatever
+/// `po_catalogue` finds in either layout. A configured file that is missing resolves to nothing,
+/// and FRAPPE-PO-CATALOGUE-RESOLVES reports it (GB-084).
 fn catalogue(c: &Ctx) -> Option<(String, BTreeMap<String, String>)> {
-    let rel_loc = c
-        .cfg
-        .locale_file
-        .clone()
-        .unwrap_or_else(|| "locale/pt_BR.po".into());
-    let path = c.pkg.join(&rel_loc);
+    let Some(configured) = &c.cfg.locale_file else {
+        return po_catalogue(c);
+    };
+    let path = [c.pkg.join(configured), c.root.join(configured)]
+        .into_iter()
+        .find(|p| p.is_file())?;
     Some((rel(&c.root, &path), load_catalogue(&path)?))
 }
 
@@ -5470,6 +5482,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     ] {
         all.extend(f(&c));
     }
+    all.extend(desk::audit(&c));
     all.sort_by(|a, b| {
         (&a.rule_id, &a.file_path, a.line_number).cmp(&(&b.rule_id, &b.file_path, b.line_number))
     });
@@ -5906,6 +5919,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             (id.to_string(), silent && fires)
         })
         .collect();
+    cases.extend(desk::self_test_cases());
     cases.push((
         "FRAPPE-TEST-PARITY-SPELLING".to_string(),
         parity_spelling_agrees(),
@@ -5918,10 +5932,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         "FRAPPE-FIELDNAME-UNIQUE-JSON-PARSE".to_string(),
         fieldname_unique_agrees(),
     ));
-    cases.push((
-        "FRAPPE-HOOK-LIST-FORM".to_string(),
-        hook_list_form_agrees(),
-    ));
+    cases.push(("FRAPPE-HOOK-LIST-FORM".to_string(), hook_list_form_agrees()));
     cases.push((
         "FRAPPE-CURRENCY-ZERO-TEST-WRAPPED".to_string(),
         wrapped_zero_test_agrees(),
