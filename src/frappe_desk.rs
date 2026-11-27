@@ -7,6 +7,8 @@
 use super::*;
 use crate::explain::RuleExplanation;
 
+#[path = "frappe_desk/calendar_map.rs"]
+mod calendar_map;
 #[path = "frappe_desk/desk_field_real.rs"]
 mod desk_field_real;
 #[path = "frappe_desk/fieldname_shadow.rs"]
@@ -72,6 +74,11 @@ const ITEMS: &[Item] = &[
         explain: &single_count::EXPLAIN,
         run: single_count::run,
         cases: single_count::cases,
+    },
+    Item {
+        explain: &calendar_map::EXPLAIN,
+        run: calendar_map::run,
+        cases: calendar_map::cases,
     },
 ];
 
