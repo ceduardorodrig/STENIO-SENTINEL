@@ -12,6 +12,9 @@ mod permlevel_row;
 mod permlevel_write;
 mod public_drift;
 mod public_reason;
+mod whitelist_guest;
+
+pub use whitelist_guest::guarded_by_helper;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -43,6 +46,7 @@ struct Case {
 }
 
 pub static RULES: &[&Rule] = &[
+    &whitelist_guest::RULE,
     &perm_matrix::RULE,
     &public_drift::RULE,
     &public_reason::RULE,
@@ -290,10 +294,11 @@ fn wired_into_scope() -> bool {
 }
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
-    let mut out = vec![(
+    let mut out = whitelist_guest::helper_cases();
+    out.push((
         "frappe permission rules are wired into the scope audit".to_string(),
         wired_into_scope(),
-    )];
+    ));
     for (r, rule) in RULES.iter().enumerate() {
         let cases = (rule.cases)();
         // a rule never seen both silent and red proves nothing

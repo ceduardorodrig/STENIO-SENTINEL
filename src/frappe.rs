@@ -1994,7 +1994,9 @@ fn rule_whitelist(c: &Ctx) -> Vec<Violation> {
                 k += 1;
             }
             let body = lines[j..k].join("\n");
-            if !markers.iter().any(|m| body.contains(m)) {
+            if !markers.iter().any(|m| body.contains(m))
+                && !crate::frappe_perm::guarded_by_helper(&text, &body, &markers)
+            {
                 let name = lines[j]
                     .trim()
                     .trim_start_matches("async ")
