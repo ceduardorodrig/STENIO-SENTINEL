@@ -30,6 +30,7 @@ mod inline_style;
 mod live_claim;
 mod quote_source;
 mod raci;
+mod route_drift;
 mod rule_count;
 mod sources;
 
@@ -43,6 +44,7 @@ pub static RULES: &[&DocRule] = &[
     &bind_claim::RULE,
     &raci::RULE,
     &quote_source::RULE,
+    &route_drift::RULE,
     &adr_roadmap::RULE,
 ];
 
