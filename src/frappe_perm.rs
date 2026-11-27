@@ -39,7 +39,12 @@ struct Case {
     expect: usize,
 }
 
-pub static RULES: &[&Rule] = &[&docperm_row::RULE, &permlevel_row::RULE];
+pub static RULES: &[&Rule] = &[
+    &permlevel_list_view::RULE,
+    &permlevel_write::RULE,
+    &docperm_row::RULE,
+    &permlevel_row::RULE,
+];
 
 /// Roles that carry no identity of their own (house policy, same list as `FRAPPE-PERMISSION-SCOPE`).
 const BROAD_ROLES: &[&str] = crate::frappe::BROAD_ROLES;
