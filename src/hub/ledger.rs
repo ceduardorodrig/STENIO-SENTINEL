@@ -866,6 +866,18 @@ pub fn handback(store: &mut Store, request: &Handback) -> HubResult<Value> {
                 ));
             }
         }
+        let stored: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM results WHERE row = ?1 AND fence = ?2",
+            params![row, request.fence],
+            |r| r.get(0),
+        )?;
+        if stored > 0 {
+            return Err(HubError::refused(
+                "handed_back",
+                format!("fence {} of {row} already has a result", request.fence),
+                "claim the row again to replace a result that is not done",
+            ));
+        }
         refuse_final_row(tx, &row, run.as_deref())?;
         let superseded: Vec<i64> = {
             let mut stmt = tx.prepare(

@@ -62,6 +62,11 @@ impl Config {
         toml::from_str(text).map_err(|e| HubError::Usage(format!("invalid hub configuration: {e}")))
     }
 
+    /// The declaration shipped inside the engine.
+    pub fn embedded() -> HubResult<Self> {
+        Self::parse(DEFAULTS)
+    }
+
     /// The host override when one exists, else the embedded declaration. An override that is
     /// named but unreadable is an error: silently using other limits would be a bypass.
     pub fn load() -> HubResult<Self> {

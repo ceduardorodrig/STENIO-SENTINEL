@@ -41,48 +41,70 @@ fn joined(store: &mut Store, cfg: &Config, harness: &str) -> HubResult<String> {
     Ok(out["worker"].as_str().unwrap_or_default().to_string())
 }
 
-fn claim_row(store: &mut Store, cfg: &Config, worker: &str) -> HubResult<serde_json::Value> {
+fn claim_row(
+    store: &mut Store,
+    cfg: &Config,
+    worker: &str,
+    ttl_secs: u64,
+) -> HubResult<serde_json::Value> {
     ledger::claim(
         store,
         cfg,
         &ClaimRequest {
             worker: worker.to_string(),
             resources: vec!["row:GB-001".to_string()],
-            ttl_secs: Some(1),
+            ttl_secs: Some(ttl_secs),
             run: None,
         },
     )
 }
 
-/// A second claim of a held row is refused.
+/// Connections claiming one row at once.
+const CONTENDERS: usize = 8;
+
+/// Of many simultaneous claims of one row exactly one wins and every other is told who holds it.
 fn exclusive(dir: &Path, faults: Faults) -> HubResult<bool> {
-    let cfg = Config::load()?;
-    let mut store = Store::open_with(&dir.join("hub.db"), faults)?;
-    let (a, b) = (
-        joined(&mut store, &cfg, "first")?,
-        joined(&mut store, &cfg, "second")?,
-    );
-    claim_row(&mut store, &cfg, &a)?;
-    let second = claim_row(&mut store, &cfg, &b);
-    Ok(matches!(second, Err(e) if e.code() == "held"))
+    let cfg = Config::embedded()?;
+    let path = dir.join("hub.db");
+    // The schema, with or without its constraint, exists before the contenders open it.
+    let mut store = Store::open_with(&path, faults)?;
+    let workers = (0..CONTENDERS)
+        .map(|n| joined(&mut store, &cfg, &format!("contender{n}")))
+        .collect::<HubResult<Vec<_>>>()?;
+    let outcomes: Vec<_> = std::thread::scope(|scope| {
+        let running: Vec<_> = workers
+            .iter()
+            .map(|worker| {
+                let (path, cfg) = (&path, &cfg);
+                scope.spawn(move || claim_row(&mut Store::open(path)?, cfg, worker, 600))
+            })
+            .collect();
+        running.into_iter().map(|t| t.join()).collect()
+    });
+    let won = outcomes.iter().filter(|o| matches!(o, Ok(Ok(_)))).count();
+    let held = outcomes
+        .iter()
+        .filter(|o| matches!(o, Ok(Err(e)) if e.code() == "held"))
+        .count();
+    Ok(won == 1 && held == CONTENDERS - 1)
 }
 
 /// After a takeover the old fence cannot hand the row back.
 fn fenced(dir: &Path, faults: Faults) -> HubResult<bool> {
-    let cfg = Config::load()?;
+    let cfg = Config::embedded()?;
     let mut store = Store::open_with(&dir.join("hub.db"), faults)?;
     let (a, b) = (
         joined(&mut store, &cfg, "first")?,
         joined(&mut store, &cfg, "second")?,
     );
-    let old = claim_row(&mut store, &cfg, &a)?["fence"]
+    let old = claim_row(&mut store, &cfg, &a, 1)?["fence"]
         .as_i64()
         .unwrap_or_default();
     std::thread::park_timeout(std::time::Duration::from_millis(1100));
     while ledger::sweep_now(&mut store)? == 0 {
         std::thread::park_timeout(std::time::Duration::from_millis(100));
     }
-    let new = claim_row(&mut store, &cfg, &b)?["fence"]
+    let new = claim_row(&mut store, &cfg, &b, 60)?["fence"]
         .as_i64()
         .unwrap_or_default();
     let stale = ledger::handback(
@@ -101,7 +123,7 @@ fn fenced(dir: &Path, faults: Faults) -> HubResult<bool> {
 
 /// An edited event is reported with its sequence number.
 fn tamper_evident(dir: &Path) -> HubResult<bool> {
-    let cfg = Config::load()?;
+    let cfg = Config::embedded()?;
     let mut store = Store::open(&dir.join("hub.db"))?;
     joined(&mut store, &cfg, "first")?;
     let clean = audit::audit(&mut store, None, false)?["ok"] == true;
