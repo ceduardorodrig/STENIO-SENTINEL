@@ -54,6 +54,7 @@ mod release_order;
 pub mod remote;
 mod rule;
 mod secrets_guard;
+mod secrets_suite;
 mod semantic;
 mod shell;
 mod sweep;
@@ -699,6 +700,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(verify_host::self_test_cases())
         .chain(frappe_drift::self_test_cases())
         .chain(secrets_guard::self_test_cases())
+        .chain(secrets_suite::self_test_cases())
         .chain(frappe_whitelist::self_test_cases())
         .chain(frappe_perm::self_test_cases())
         .chain(release_order::self_test_cases())
@@ -2078,6 +2080,9 @@ fn main() -> Result<()> {
         argv[1] = "pre-release".to_string(); // `stenio preflight --repo R` = `pre-release --static-only`
         argv.push("--static-only".to_string());
     }
+    if let Some(code) = secrets_suite::dispatch(&argv) {
+        std::process::exit(code);
+    }
     match argv.get(1).map(String::as_str) {
         Some("binary-parity") => std::process::exit(parity::run_binary_parity(&argv[1..])),
         Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
@@ -2848,6 +2853,22 @@ fn main() -> Result<()> {
             report.total_violations += 1;
             report.violations.push(v);
         }
+    }
+
+    // ── Secret and environment gates (src/secrets_suite) ──────────────────
+    let suite = secrets_suite::Selection {
+        scope: &scope_opt,
+        tag: tag_lower.as_deref(),
+        only_rule,
+    };
+    for v in secrets_suite::audit(&args.path, &suite) {
+        if v.severity == Severity::Error {
+            report.error_count += 1;
+        } else {
+            report.warning_count += 1;
+        }
+        report.total_violations += 1;
+        report.violations.push(v);
     }
 
     // ── Gettext catalogues (locale/*.po and the sources next to them) ──────

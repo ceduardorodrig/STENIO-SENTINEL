@@ -129,7 +129,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Repository Gate For Tracked Secrets And Credential-Shaped Files",
         severity: "ERROR",
         tag: "sec",
-        summary: "`stenio secrets-guard --repo R [--baseline F] [--scope mirror]` fails (exit 1, last line `stenio: FAIL secrets-guard ...`) when (a) a tracked file has a SEC-PLAINTEXT-SECRET finding and its path is not in the baseline (one repo-relative path per line, `#` comments), (b) a tracked-but-ignored path (`git ls-files -ci --exclude-standard`, committed before its ignore rule) is credential-shaped or carries a finding outside the baseline, or (c) any tracked path has a credential-shaped name: `*.env` and `.env.*` except examples, `*.pem`, `*.key`, `*.kdbx`, `*.p12`, `*.pfx`, `*.ovpn`, `id_rsa*` / `id_ed25519*` private halves, `secrets.*.{yml,yaml,json,env}` except sops `*.enc.*`. Harmless tracked-but-ignored files are only counted. It prints paths, line numbers and rule ids only, never a value, a key name or a snippet; the baseline never excuses (c).",
+        summary: "`stenio secrets-guard --repo R [--baseline F] [--scope mirror]` fails (exit 1, last line `stenio: FAIL secrets-guard ...`) when (a) a tracked file has a SEC-PLAINTEXT-SECRET finding and its path is not in the baseline (one repo-relative path per line, `#` comments), (b) a tracked-but-ignored path (`git ls-files -ci --exclude-standard`, committed before its ignore rule) is credential-shaped or carries a finding outside the baseline, or (c) any tracked path has a credential-shaped name: `*.env` and `.env.*` except examples, `*.pem`, `*.key`, `*.kdbx`, `*.p12`, `*.pfx`, `*.ovpn`, `id_rsa*` / `id_ed25519*` private halves, `secrets.*.{yml,yaml,json,env}` except sops `*.enc.*`. Harmless tracked-but-ignored files are only counted. It prints paths, line numbers and rule ids only, never a value, a key name or a snippet; the baseline never excuses (c). A baseline entry may pin a count (`path count=N`): one more finding in that file fails; `--require-counts` rejects bare entries. `--history` judges every commit of `git log --all` and fails on a `commit:path` absent from `--history-baseline` (history that is not rewritten stays listed there, a new leak fails even if deleted in the next commit).",
         rationale: "GB-285: the daily config-backup job pushed a mirror to GitHub with a size guard and no secret guard; four real secrets in `*.env` files got through because the exclude was the exact basename `.env`. A gate that prints values would re-leak what it finds, so the output is paths only.",
         bad_example: "# repo tracks kavure/n8n.env\n# stenio secrets-guard --repo /mnt/BACKUP/configs-homelab\n# FAIL (c) credential-shaped path tracked: kavure/n8n.env\n# stenio: FAIL secrets-guard files=1200 fails=2 ...",
         good_example: "# the same repo with `*.env` and `.env.*` excluded and untracked\n# stenio: PASS secrets-guard files=1190 fails=0 tracked-ignored-harmless=14 baseline=0",
@@ -1745,6 +1745,7 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::secrets_suite::explain::EXPLANATIONS)
         .chain(crate::frappe::ext::explanations())
         .chain(crate::release_file_gate::EXPLANATIONS)
         .chain(crate::frappe_perm::explanations())
@@ -1847,6 +1848,7 @@ pub fn list_all_explanations() -> String {
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
     for exp in EXPLANATIONS
         .iter()
+        .chain(crate::secrets_suite::explain::EXPLANATIONS)
         .chain(crate::frappe::ext::explanations())
         .chain(crate::release_file_gate::EXPLANATIONS)
         .chain(crate::frappe_perm::explanations())
