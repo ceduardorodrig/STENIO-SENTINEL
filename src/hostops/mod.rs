@@ -18,6 +18,7 @@ mod alert_independence; // GB-213
 mod autopilot_last; // GB-175
 mod backup_verify; // GB-051
 mod boots; // GB-155
+mod false_alive; // GB-231
 mod kuma; // GB-014 GB-015
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
@@ -46,6 +47,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     autopilot_last::EXPLAIN,     // GB-175
     backup_verify::EXPLAIN,      // GB-051
     boots::EXPLAIN,              // GB-155
+    false_alive::EXPLAIN,        // GB-231
     kuma::EXPLAIN_LOOPBACK,      // GB-014
     kuma::EXPLAIN_NOTIFY,        // GB-015
     onfailure::EXPLAIN,          // GB-016
@@ -66,6 +68,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         "lint" => lint_cli(rest),
         "autopilot-last" => autopilot_last::run_cli(rest), // GB-175
         "boots" => boots::run_cli(rest),                   // GB-155
+        "false-alive" => false_alive::run_cli(rest),       // GB-231
         "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "onfailure" => onfailure::run_cli(rest),           // GB-016
         "ports" => ports_vs_ss::run_cli(rest),             // GB-013
@@ -82,6 +85,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(autopilot_last::self_test_cases()); // GB-175
     all.extend(backup_verify::self_test_cases()); // GB-051
     all.extend(boots::self_test_cases()); // GB-155
+    all.extend(false_alive::self_test_cases()); // GB-231
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
