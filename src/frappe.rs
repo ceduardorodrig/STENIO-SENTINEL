@@ -2996,7 +2996,7 @@ fn rule_min_syntax(c: &Ctx) -> Vec<Violation> {
 // session of whoever saved, so a Structure Steward (no `write` on User) died with PermissionError
 // on an edit the steward is allowed to make. The rule reads the hook binding and the function
 // body as text (the engine never imports the app) and stays silent on any shape it cannot read:
-// a computed DocType, a path outside the app, a hook written as a list.
+// a computed DocType, a path outside the app, a computed hook value.
 
 /// Doc events that run inside a write, so the handler inherits the permissions of whoever saved.
 /// `before_validate` is included because it runs in the same save phase as `validate`.
@@ -3013,6 +3013,8 @@ enum DictTok {
     Str(String),
     Open,
     Close,
+    ListOpen,
+    ListClose,
     Colon,
 }
 
@@ -3031,6 +3033,8 @@ fn dict_tokens(s: &str) -> Vec<DictTok> {
             '{' => out.push(DictTok::Open),
             '}' => out.push(DictTok::Close),
             ':' => out.push(DictTok::Colon),
+            '[' => out.push(DictTok::ListOpen),
+            ']' => out.push(DictTok::ListClose),
             '"' | '\'' => {
                 let mut buf = String::new();
                 let quote = ch;
@@ -3054,10 +3058,10 @@ fn dict_tokens(s: &str) -> Vec<DictTok> {
     out
 }
 
-/// `(DocType, event, dotted path)` of every `doc_events` entry bound to a write hook. Only the
-/// dict form with a literal string path is read; a list of paths or a computed value stays
-/// unread (silent), which is the conservative direction.
-fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
+/// `(DocType, event, dotted paths)` of every entry of the `doc_events` dict literal. A string and
+/// a list of strings are read (GB-077); a computed value (a variable, a call) yields no path, so
+/// the rules stay silent only for what they cannot resolve.
+fn doc_event_entries(c: &Ctx) -> Vec<(String, String, Vec<String>)> {
     let text = read(&c.pkg.join("hooks.py"));
     let Ok(head) = Regex::new(r"(?m)^doc_events\s*=\s*\{") else {
         return Vec::new();
@@ -3089,22 +3093,43 @@ fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
                     doc_type = key.clone();
                 }
             }
-            Some(DictTok::Str(key)) if depth == 2 => {
-                let value = match (toks.get(i + 1), toks.get(i + 2)) {
-                    (Some(DictTok::Colon), Some(DictTok::Str(path))) => Some(path),
-                    _ => None,
+            Some(DictTok::Str(key))
+                if depth == 2
+                    && !doc_type.is_empty()
+                    && matches!(toks.get(i + 1), Some(DictTok::Colon)) =>
+            {
+                let paths = match toks.get(i + 2) {
+                    Some(DictTok::Str(path)) => vec![path.clone()],
+                    Some(DictTok::ListOpen) => toks[i + 3..]
+                        .iter()
+                        .take_while(|t| !matches!(t, DictTok::ListClose | DictTok::Close))
+                        .filter_map(|t| match t {
+                            DictTok::Str(path) => Some(path.clone()),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
                 };
-                if let Some(path) = value {
-                    if WRITE_HOOKS.contains(&key.as_str()) && !doc_type.is_empty() {
-                        out.push((doc_type.clone(), key.clone(), path.clone()));
-                    }
-                }
+                out.push((doc_type.clone(), key.clone(), paths));
             }
             _ => {}
         }
         i += 1;
     }
     out
+}
+
+/// `(DocType, event, dotted path)` of every `doc_events` binding to a write hook, one per path.
+fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
+    doc_event_entries(c)
+        .into_iter()
+        .filter(|(_, event, _)| WRITE_HOOKS.contains(&event.as_str()))
+        .flat_map(|(dt, event, paths)| {
+            paths
+                .into_iter()
+                .map(move |p| (dt.clone(), event.clone(), p))
+        })
+        .collect()
 }
 
 /// The module file and function name of an app-local dotted hook path (`miracena.api.on_todo`).
@@ -5894,6 +5919,10 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         fieldname_unique_agrees(),
     ));
     cases.push((
+        "FRAPPE-HOOK-LIST-FORM".to_string(),
+        hook_list_form_agrees(),
+    ));
+    cases.push((
         "FRAPPE-CURRENCY-ZERO-TEST-WRAPPED".to_string(),
         wrapped_zero_test_agrees(),
     ));
@@ -5902,6 +5931,45 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         absent_test_list_agrees(),
     ));
     cases
+}
+
+/// GB-077 mutation proof: a privileged read reached only through a list-form hook is reported
+/// (naming the line), the narrow read is silent, and a computed value stays silent.
+pub(crate) fn hook_list_form_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let lines = |value: &str, body: &str| -> Option<Vec<usize>> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let files: Vec<(String, String)> = vec![
+            (
+                "repo/app/hooks.py".into(),
+                format!("doc_events = {{\"ToDo\": {{\"on_update\": {value}}}}}\n"),
+            ),
+            (
+                "repo/app/session.py".into(),
+                format!("import frappe\n\n\ndef sync_members(doc=None, method=None):\n\t{body}\n"),
+            ),
+        ];
+        let base = write_fixture(&format!("hook-list-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(
+            got?.iter()
+                .filter(|v| v.rule_id == "FRAPPE-PRIVILEGED-READ-IN-SAVE")
+                .map(|v| v.line_number)
+                .collect(),
+        )
+    };
+    let list = "[\"app.session.noop\", \"app.session.sync_members\"]";
+    let bad = "frappe.get_doc(\"User\", doc.user)";
+    let good = "frappe.db.get_value(\"User\", doc.user, \"enabled\")";
+    lines(list, bad) == Some(vec![5])
+        && lines(list, good) == Some(vec![])
+        && lines("HANDLERS", bad) == Some(vec![])
+        && lines("\"app.session.sync_members\"", bad) == Some(vec![5])
 }
 
 /// GB-161 mutation proof: `float(x) > 0` / `flt(x) <= 0` are emptiness tests (silent), the same
