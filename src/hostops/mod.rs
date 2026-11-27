@@ -14,6 +14,7 @@ use crate::engine::Violation;
 use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
+mod alert_independence; // GB-213
 mod autopilot_last; // GB-175
 mod backup_verify; // GB-051
 mod boots; // GB-155
@@ -34,12 +35,14 @@ type Lint = fn(&[SourceFile]) -> Vec<Violation>;
 
 /// Static lints: rule id and function.
 const LINTS: &[(&str, Lint)] = &[
+    (alert_independence::RULE_ID, alert_independence::lint), // GB-213
     (backup_verify::RULE_ID, backup_verify::lint),           // GB-051
     (proxy_env::RULE_ID, proxy_env::lint),                   // GB-200
     (socket_order::RULE_ID, socket_order::lint),             // GB-171
 ];
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
+    alert_independence::EXPLAIN, // GB-213
     autopilot_last::EXPLAIN,     // GB-175
     backup_verify::EXPLAIN,      // GB-051
     boots::EXPLAIN,              // GB-155
@@ -75,6 +78,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut all = Vec::new();
+    all.extend(alert_independence::self_test_cases()); // GB-213
     all.extend(autopilot_last::self_test_cases()); // GB-175
     all.extend(backup_verify::self_test_cases()); // GB-051
     all.extend(boots::self_test_cases()); // GB-155
