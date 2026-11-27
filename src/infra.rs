@@ -713,7 +713,7 @@ pub fn audit_compose_dir(root: &Path, gpu_consumers: &[String]) -> InfraReport {
 /// True when an assignment key names a credential: `*_PASSWORD`, `*_PASS`, `*_PWD`,
 /// `*_SECRET`, `*_SECRET_KEY`, `*_API_KEY`, `*_ACCESS_KEY`, `*PRIVATE_KEY`,
 /// `*_AUTHKEY`, `*_AUTH_KEY`, `*_CREDENTIALS`, `*_TOKEN` and the bare `PASSWORD`/`SECRET`.
-fn key_looks_secret(key: &str) -> bool {
+pub(crate) fn key_looks_secret(key: &str) -> bool {
     let k = key.to_ascii_uppercase();
     [
         "PASSWORD",

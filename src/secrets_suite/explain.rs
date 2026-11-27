@@ -80,4 +80,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "declare -x PROVIDER_API_KEY=\"[REDACTED]\"",
         remediation: "Make the harness replace values by a marker when it serialises its environment; do not export secrets into the agent shell.",
     },
+    RuleExplanation {
+        id: "SEC-ONE-VALUE-MANY-NAMES",
+        name: "One Secret Value Under Several Names",
+        severity: "ERROR",
+        tag: "sec",
+        summary: "`stenio secret-identities [--env L=F] [--auth-json F] [--store F] [--decrypt] [--same A=B]` fails when one credential value appears under two key names, or a provider of an auth file has no credential in the store. Names and sources only.",
+        rationale: "One provider key was stored under three identities, one of them another provider's variable name; name-based comparisons called it fine.",
+        bad_example: "OPENCODE_GO_API_KEY=<v>\nOPENAI_API_KEY=<same v>",
+        good_example: "one name per credential, or an explicit `--same A=B`",
+        remediation: "Delete the alias, provision the right key, or declare the alias explicitly.",
+    },
 ];
