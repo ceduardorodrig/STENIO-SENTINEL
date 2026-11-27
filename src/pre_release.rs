@@ -692,7 +692,90 @@ fn remedy(name: &str) -> &'static str {
     }
 }
 
+/// The engine's own repository: a target of this gate too (GB-247).
+fn is_engine_repo(repo: &Path) -> bool {
+    repo.join(".github/workflows/ci.yml").is_file()
+        && fs::read_to_string(repo.join("Cargo.toml"))
+            .is_ok_and(|t| t.contains("name = \"stenio-sentinel\""))
+}
+
+/// Every `run:` step of `ci.yml`, executed locally in order and derived from the file (v4.30.0 was
+/// pushed with `cargo fmt --check` red because the five steps were retyped by hand). It stops at
+/// the first red step; a step with a `${{ }}` expression cannot run here and is a WARN.
+fn ci_steps(repo: &Path) -> Vec<Check> {
+    let steps: Vec<_> = crate::ci::load_workflows(repo)
+        .into_iter()
+        .filter(|w| w.file.ends_with("/ci.yml"))
+        .flat_map(|w| w.steps)
+        .filter(|s| !s.run.trim().is_empty())
+        .collect();
+    if steps.is_empty() {
+        return vec![mk(
+            Status::Fail,
+            "ci-step",
+            "ci.yml has no `run:` step to derive",
+        )];
+    }
+    let mut out = Vec::new();
+    for s in steps {
+        if s.run.contains("${{") {
+            out.push(mk(
+                Status::Warn,
+                "ci-step",
+                format!("{}: needs GitHub, not run", s.name),
+            ));
+            continue;
+        }
+        let status = Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &s.run])
+            .current_dir(repo)
+            .output();
+        let ok = status.as_ref().is_ok_and(|o| o.status.success());
+        let state = if ok { Status::Pass } else { Status::Fail };
+        out.push(mk(
+            state,
+            "ci-step",
+            format!("{}: `{}`", s.name, s.run.trim()),
+        ));
+        if !ok {
+            break;
+        }
+    }
+    out
+}
+
+fn engine_checks(o: &Opts) -> Vec<Check> {
+    let declared = fs::read_to_string(o.repo.join("Cargo.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
+        .and_then(|d| Some(d.get("package")?.get("version")?.as_str()?.to_string()))
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    if !o.static_only {
+        let want = o.tag.trim_start_matches('v');
+        let state = if declared == want {
+            Status::Pass
+        } else {
+            Status::Fail
+        };
+        out.push(mk(
+            state,
+            "version",
+            format!("Cargo.toml {declared}, tag needs {want}"),
+        ));
+        out.extend(check_git(o));
+    }
+    // A wrong version or tag fails fast, before minutes of compiling.
+    if out.iter().all(|c| c.status != Status::Fail) {
+        out.extend(ci_steps(&o.repo));
+    }
+    out
+}
+
 pub fn run_checks(o: &Opts) -> Vec<Check> {
+    if is_engine_repo(&o.repo) {
+        return engine_checks(o);
+    }
     if o.static_only {
         return static_checks(o, check_self_test);
     }
@@ -955,6 +1038,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             "preflight --prev sees uncommitted unbumped JSON".to_string(),
             preflight_prev_case(),
         ),
+        (
+            "engine repo: a red ci.yml step fails the gate".to_string(),
+            engine_repo_case("engine-red", "\"false\"") == Some(vec![Status::Pass, Status::Fail]),
+        ),
+        (
+            "engine repo: green ci.yml steps pass".to_string(),
+            engine_repo_case("engine-green", "\"true\"") == Some(vec![Status::Pass, Status::Pass]),
+        ),
     ]
 }
 
@@ -1043,6 +1134,26 @@ fn preflight_remedy_case() -> bool {
 }
 
 /// TEXT-ONLY needs a diff of translations only: compare the first commit with a po-only change.
+/// GB-247: an engine tree is judged by its own `ci.yml`; one red step fails the gate.
+fn engine_repo_case(name: &str, step: &str) -> Option<Vec<Status>> {
+    let ci = format!(
+        "on: [push]\njobs:\n  v:\n    steps:\n      - name: a\n        run: \"true\"\n      - name: b\n        run: {step}\n"
+    );
+    let files = vec![
+        (
+            "Cargo.toml".to_string(),
+            "[package]\nname = \"stenio-sentinel\"\nversion = \"1.0.0\"\n".to_string(),
+        ),
+        (".github/workflows/ci.yml".to_string(), ci),
+    ];
+    let root = frappe::write_fixture(name, &files)?;
+    let mut o = opts_for(&root);
+    o.static_only = true;
+    let got = run_checks(&o).iter().map(|c| c.status).collect();
+    let _ = fs::remove_dir_all(&root);
+    Some(got)
+}
+
 fn classify_text_only(work: &Path) -> bool {
     let po = work.join("demoapp/locale/pt_BR.po");
     let text = fs::read_to_string(&po).unwrap_or_default();

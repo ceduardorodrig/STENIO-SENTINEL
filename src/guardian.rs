@@ -971,6 +971,19 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             ],
         ),
         (
+            "backlog/integrity.rs",
+            &[
+                "BACKLOG-TABLE-INTEGRITY",
+                "DOC-BACKLOG-FOREIGN-ROW",
+                "BACKLOG-ID-CONTIGUOUS",
+                "BACKLOG-DUPLICATE-DEFECT",
+                "BACKLOG-DEDUP-FOLD-LOSSLESS",
+                "BACKLOG-CROSS-REF",
+                "duplicate_ids",
+            ],
+        ),
+        ("backlog/close.rs", &["nothing written", "remove_pending"]),
+        (
             "baseline.rs",
             &[
                 "stenio-ignore",

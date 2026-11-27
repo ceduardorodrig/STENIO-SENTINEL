@@ -19,7 +19,8 @@ struct Repo(PathBuf);
 
 impl Drop for Repo {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        // `self.0` is `<base>/work`; the bare origin sits next to it, so the base goes (GB-246).
+        let _ = fs::remove_dir_all(self.0.parent().unwrap_or(&self.0));
     }
 }
 
