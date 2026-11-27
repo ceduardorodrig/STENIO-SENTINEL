@@ -157,12 +157,12 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-WHITELIST-METHODS",
         "State-Changing Endpoint Without A Methods List",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-WRITE-POST",
         "State-Changing Endpoint Reachable By A Verb Other Than POST",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-NO-CALLER",
@@ -217,7 +217,11 @@ pub(crate) mod desk;
 
 /// `(id, name, severity)` of every rule of the scope: the core table and the desk rules.
 pub fn rule_table() -> impl Iterator<Item = (&'static str, &'static str, Severity)> {
-    RULES.iter().copied().chain(desk::rule_table())
+    RULES.iter().copied().chain(desk::rule_table()).chain(
+        crate::frappe_perm::RULES
+            .iter()
+            .map(|r| (r.id, r.name, r.severity)),
+    )
 }
 
 const SKIP_DIRS: &[&str] = &[
@@ -1009,7 +1013,7 @@ fn rule_patches(c: &Ctx) -> Vec<Violation> {
 }
 
 // ── FRAPPE-HOOK-TARGETS ────────────────────────────────────────────────────
-fn strip_comment(line: &str) -> String {
+pub(crate) fn strip_comment(line: &str) -> String {
     let mut quote: Option<char> = None;
     let mut out = String::new();
     for ch in line.chars() {
@@ -2006,7 +2010,9 @@ fn rule_whitelist(c: &Ctx) -> Vec<Violation> {
                 k += 1;
             }
             let body = lines[j..k].join("\n");
-            if !markers.iter().any(|m| body.contains(m)) {
+            if !markers.iter().any(|m| body.contains(m))
+                && !crate::frappe_perm::guarded_by_helper(&text, &body, &markers)
+            {
                 let name = lines[j]
                     .trim()
                     .trim_start_matches("async ")
@@ -2136,7 +2142,7 @@ fn rule_whitelist_no_caller(c: &Ctx) -> Vec<Violation> {
 // guessing.
 
 /// Byte range `[start, end)` of the `open`/`close` pair opening at `start`.
-fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
+pub(crate) fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     if bytes.get(start).copied() != Some(open) {
         return None;
@@ -5236,7 +5242,7 @@ fn rel_to_fixtures(path: &str) -> bool {
 // that stores rows about a PERSON and lets one of these roles `read` or `write` needs a row-level
 // scope in `hooks.py`. Adding a role here is a policy edit, deliberate and reviewed in the
 // repository — the same way `mnemocine/network/gpu-consumers.txt` registers a GPU consumer.
-const BROAD_ROLES: &[&str] = &[
+pub(crate) const BROAD_ROLES: &[&str] = &[
     "Miracena Member",
     "Miracena Freelancer",
     "Desk User",
@@ -5482,6 +5488,10 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     ] {
         all.extend(f(&c));
     }
+    let validated = gate_entries(&c).into_keys().collect();
+    all.extend(crate::frappe_perm::audit(
+        &c.root, &c.pkg, &c.files, validated,
+    ));
     all.extend(desk::audit(&c));
     all.sort_by(|a, b| {
         (&a.rule_id, &a.file_path, a.line_number).cmp(&(&b.rule_id, &b.file_path, b.line_number))
