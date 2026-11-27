@@ -1471,6 +1471,9 @@ pub fn run_backlog_report(repo_root: &Path, search: Option<&str>) {
         println!();
     }
     if search.is_none() {
+        for line in crate::docrules::english_debt::totals(repo_root) {
+            println!("   {line}");
+        }
         println!(
             "   {}",
             "Tip: --backlog --search <term> greps every queue and its archive (find recurrences)."

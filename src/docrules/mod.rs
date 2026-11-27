@@ -27,6 +27,8 @@ mod bind_claim;
 mod contract_parity;
 mod count_drift;
 mod english_codebase;
+pub mod english_debt;
+mod english_required;
 mod incident;
 mod inline_style;
 mod live_claim;
@@ -61,6 +63,7 @@ pub static RULES: &[&DocRule] = &[
     &english_codebase::RULE,
     &route_drift::RULE,
     &adr_roadmap::RULE,
+    &english_required::RULE,
 ];
 
 /// What the rules may look at.
@@ -278,6 +281,12 @@ pub fn applies(target: &Path, tag: Option<&str>, only: Option<&str>) -> bool {
                 .any(|c| c.eq_ignore_ascii_case(t))
     });
     tag_ok && only.is_none_or(|o| RULES.iter().any(|r| r.id.eq_ignore_ascii_case(o)))
+}
+
+/// The language gate alone, for the paths that do not run the whole document audit (the frappe
+/// scope and the MCP tools): English is judged everywhere agents can ask for a verdict.
+pub fn language_findings(target: &Path) -> Vec<Violation> {
+    run(&Ctx::new(target, None), Some(english_required::RULE.id))
 }
 
 /// Writes a fixture tree, runs one rule over it and removes the tree.
