@@ -27,6 +27,7 @@ mod contract_parity;
 mod incident;
 mod inline_style;
 mod live_claim;
+mod quote_source;
 mod raci;
 mod rule_count;
 mod sources;
@@ -40,6 +41,7 @@ pub static RULES: &[&DocRule] = &[
     &live_claim::RULE,
     &bind_claim::RULE,
     &raci::RULE,
+    &quote_source::RULE,
 ];
 
 /// What the rules may look at.
