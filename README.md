@@ -47,6 +47,14 @@ Connects directly to the local Docker socket (`/var/run/docker.sock`) via `bolla
 ### 4. Native MCP SSE Network Server (`--mcp-sse`)
 Built on `axum` and `tokio`, exposes a local Model Context Protocol (MCP) server over Server-Sent Events (SSE) and JSON-RPC 2.0 (`/sse`, `/message`, `/health`). Allows OpenCode, Claude Code, and remote agents on the Tailnet to invoke all 10 Stenio tools remotely without personal API keys.
 
+Transport security (MCP 2026-07-28, [Streamable HTTP, Security & Endpoint](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)):
+
+- `--mcp-host` is an IP literal, default `127.0.0.1`; anything else stops the start.
+- `Host` must be loopback, the bound IP or listed in `STENIO_MCP_ALLOWED_HOSTS` (comma separated, no port), otherwise 403. A server bound to `0.0.0.0` (the container) needs the list for remote clients.
+- A request carrying an `Origin` header gets 403 unless it is listed in `STENIO_MCP_ALLOWED_ORIGINS`. No CORS headers are sent.
+- With `STENIO_MCP_TOKEN` set (at least 32 characters, from an env file, never a flag), every route except `/health` needs `Authorization: Bearer <token>`. Without it a non-loopback bind starts with a warning and is not authenticated.
+- The container runs as UID 1000 and needs no Docker socket; `stenio_docker` reports an error there.
+
 ### 5. Local Offline Semantic Search (`--semantic`)
 Pure Rust in-memory TF-IDF vectorizer and cosine similarity ranking (<250ms). Answers natural language queries over the entire vault/codebase offline, with zero external API calls, zero token costs, and zero cloud leaks.
 

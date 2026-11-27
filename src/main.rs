@@ -43,6 +43,7 @@ mod infra;
 mod learner;
 mod lockparity;
 mod mcp;
+mod mcp_http_policy;
 mod mcp_server;
 mod mesh;
 mod migrations;
@@ -269,8 +270,8 @@ struct Args {
     #[arg(
         long,
         value_name = "HOST",
-        default_value = "0.0.0.0",
-        help = "Bind host/IP for MCP SSE HTTP server (e.g. 100.82.51.112 for Tailscale only)"
+        default_value = "127.0.0.1",
+        help = "Bind IP literal for the MCP HTTP server. A non-loopback bind needs STENIO_MCP_ALLOWED_HOSTS for remote Host names and should set STENIO_MCP_TOKEN"
     )]
     mcp_host: String,
 
