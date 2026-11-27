@@ -36,4 +36,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "environment:\n  APP_LLM_KEY: ${APP_LLM_KEY:-}",
         remediation: "Wire it in compose and .env.example, or declare `[env_wiring] ignore = [\"NAME\"]` in steniocheck.toml.",
     },
+    RuleExplanation {
+        id: "STACK-ENV-REQUIRED-HAS-CONSUMER",
+        name: "Mandatory Stack Variable Without A Consumer",
+        severity: "WARN",
+        tag: "env",
+        summary: "A stack file passes `${VAR:?...}` to the environment key VAR but no code file of the repository mentions VAR. Interpolations into another key or string, and settings read by common third-party images, are not judged.",
+        rationale: "`HF_TOKEN: ${HF_TOKEN:?}` had no consumer and made `docker stack config` fail whenever the variable was unset.",
+        bad_example: "HF_TOKEN: ${HF_TOKEN:?HF_TOKEN not set}   # rg HF_TOKEN app/server/src: 0 hits",
+        good_example: "HF_TOKEN: ${HF_TOKEN:-}",
+        remediation: "Make it optional, delete it, or declare `[stack_env] external = [\"NAME\"]` when an image reads it.",
+    },
 ];
