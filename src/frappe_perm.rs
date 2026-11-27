@@ -9,6 +9,7 @@ mod docperm_row;
 mod permlevel_list_view;
 mod permlevel_row;
 mod permlevel_write;
+mod public_reason;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -40,6 +41,7 @@ struct Case {
 }
 
 pub static RULES: &[&Rule] = &[
+    &public_reason::RULE,
     &permlevel_list_view::RULE,
     &permlevel_write::RULE,
     &docperm_row::RULE,
@@ -48,6 +50,39 @@ pub static RULES: &[&Rule] = &[
 
 /// Roles that carry no identity of their own (house policy, same list as `FRAPPE-PERMISSION-SCOPE`).
 const BROAD_ROLES: &[&str] = crate::frappe::BROAD_ROLES;
+
+/// DocTypes (or `DocType.field`) declared public on purpose.
+const PUBLIC_FILE: &str = "permissions-public.txt";
+
+/// One `entry  # reason` line of a permission data file.
+struct Declaration {
+    file: String,
+    line: usize,
+    entry: String,
+    reason: String,
+}
+
+/// Entries of a data file read from the app package and from `--path`; comment and blank lines
+/// declare nothing.
+fn declarations(t: &Tree, name: &str) -> Vec<Declaration> {
+    let mut paths = vec![t.pkg.join(name), t.root.join(name)];
+    paths.dedup();
+    let mut out = Vec::new();
+    for p in paths {
+        for (n, raw) in read(&p).lines().enumerate() {
+            let (entry, reason) = raw.split_once('#').unwrap_or((raw, ""));
+            if !entry.trim().is_empty() {
+                out.push(Declaration {
+                    file: t.rel(&p),
+                    line: n + 1,
+                    entry: entry.trim().to_string(),
+                    reason: reason.trim().to_string(),
+                });
+            }
+        }
+    }
+    out
+}
 
 struct Doc {
     name: String,
