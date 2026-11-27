@@ -39,6 +39,8 @@ mod single_count;
 mod support;
 #[path = "frappe_desk/table_section.rs"]
 mod table_section;
+#[path = "frappe_desk/template_literals.rs"]
+mod template_literals;
 #[path = "frappe_desk/version_endpoint.rs"]
 mod version_endpoint;
 
@@ -118,6 +120,11 @@ const ITEMS: &[Item] = &[
         explain: &print_var::EXPLAIN,
         run: print_var::run,
         cases: print_var::cases,
+    },
+    Item {
+        explain: &template_literals::EXPLAIN,
+        run: template_literals::run,
+        cases: template_literals::cases,
     },
 ];
 
