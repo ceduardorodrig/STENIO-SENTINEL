@@ -15,6 +15,7 @@ mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
 mod privacy_lists; // FRAPPE-PRIVACY-LIST-NAMES-EXIST
+mod sidebar_lists; // FRAPPE-SIDEBAR-ALLOWLIST-PARITY
 mod test_cleanup; // FRAPPE-TEST-CLEANUP-DEFERRED
 mod test_verdict; // FRAPPE-TEST-VERDICT
 
@@ -30,6 +31,7 @@ pub(crate) static ITEMS: &[&Item] = &[
     &dead_except::ITEM,
     &masked_literal::ITEM,
     &privacy_lists::ITEM,
+    &sidebar_lists::ITEM,
     &test_cleanup::ITEM,
     &test_verdict::ITEM,
 ];
