@@ -4,6 +4,7 @@
 //! reports carry paths, line numbers, key names and counts only.
 
 mod drift;
+mod dumps;
 mod env_example;
 mod env_stack;
 mod env_wired;
@@ -66,7 +67,10 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
 }
 
 /// Host subcommands of the suite.
-const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[("secrets-drift", drift::run_cli)];
+const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[
+    ("secrets-drift", drift::run_cli),
+    ("secret-dumps", dumps::run_cli),
+];
 
 /// Runs `argv[1]` when it is a suite subcommand; `None` lets the engine parse the line.
 pub fn dispatch(argv: &[String]) -> Option<i32> {
@@ -116,6 +120,7 @@ pub(crate) fn fixture(tag: &str, files: &[(&str, &str)]) -> PathBuf {
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut cases = store_recipients::self_test_cases();
     cases.extend(drift::self_test_cases());
+    cases.extend(dumps::self_test_cases());
     cases.extend(env_wired::self_test_cases());
     cases.extend(env_stack::self_test_cases());
     cases.extend(env_example::self_test_cases());

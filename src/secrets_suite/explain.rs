@@ -58,4 +58,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: ".env.example: APP_KEY=",
         remediation: "Declare the variable in .env.example and set it in the host .env.",
     },
+    RuleExplanation {
+        id: "SEC-SECRET-WRITTEN-TO-DISK",
+        name: "Secret Written To Scratch Space",
+        severity: "ERROR",
+        tag: "sec",
+        summary: "`stenio secret-dumps --root DIR [--allow PREFIX]` fails on a data file named after a secret key or on any file carrying a literal credential; reports path, line and key name only.",
+        rationale: "26 world-readable `e_<KEY>.txt` files, one per variable of the homelab env, were left in an agent scratch directory (2026-11-06) and no gate looked there.",
+        bad_example: "scratch/e_POSTGRES_PASSWORD.txt",
+        good_example: "rg -o '^[A-Z_]+=' left.env   # compare names, never values (or `stenio secrets-drift`)",
+        remediation: "`shred -u` the file, rotate if it left the host, compare names only.",
+    },
 ];
