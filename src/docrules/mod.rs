@@ -36,6 +36,7 @@ mod panel_parity;
 mod publish_cover;
 mod quote_source;
 mod raci;
+mod research_cite;
 mod route_drift;
 mod rule_count;
 mod sources;
@@ -51,6 +52,7 @@ pub static RULES: &[&DocRule] = &[
     &raci::RULE,
     &quote_source::RULE,
     &count_drift::RULE,
+    &research_cite::RULE,
     &publish_cover::RULE,
     &panel_parity::RULE,
     &panel_label::RULE,
