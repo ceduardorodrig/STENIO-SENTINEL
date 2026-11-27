@@ -72,6 +72,25 @@ fn tree_path(raw: &str, value: &str) -> HubResult<String> {
         .ok_or_else(|| bad(raw, "the path is not UTF-8"))
 }
 
+/// The spelling a `tree:` claim of this path would have: `..` folded, symlinks of the existing
+/// part resolved. `None` when it is not an absolute UTF-8 path.
+pub fn resolved_path(path: &Path) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut folded = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                folded.pop();
+            }
+            other => folded.push(other),
+        }
+    }
+    let text = folded.to_str()?;
+    tree_path(text, text).ok()
+}
+
 impl Resource {
     pub fn parse(raw: &str) -> HubResult<Self> {
         let raw = raw.trim();

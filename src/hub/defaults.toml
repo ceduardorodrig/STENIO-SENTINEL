@@ -31,13 +31,27 @@ command_timeout_secs = 30
 claude-code = "anthropic"
 opencode = "opencode-go"
 
+# How many attempts a row gets (a lease left to expire or a `failed` hand-back). Over the limit a
+# claim is refused until the owner resets the row.
+[attempts]
+limit = 3
+
 # The harness session id: variables its shell commands see, and fields of its hook payloads.
 # `join` binds the worker to it, so `beat --from-hook` and `guard` need no exported worker id.
+# A harness listed in [session.harness] binds through its own variable only (a harness started
+# from another harness's shell inherits that one's variables); any other tries `env` in order.
 [session]
-env = ["CLAUDE_CODE_SESSION_ID"]
+env = ["CLAUDE_CODE_SESSION_ID", "HERMES_SESSION_ID", "OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"]
 fields = ["session_id", "sessionId", "conversationId"]
 # Names the sub-agent in a hook payload (sub-agents share the session id).
 agent_fields = ["agent_id"]
+
+[session.harness]
+claude-code = "CLAUDE_CODE_SESSION_ID"
+hermes = "HERMES_SESSION_ID"
+opencode = "OPENCODE_SESSION_ID"
+antigravity = "ANTIGRAVITY_CONVERSATION_ID"
+agy = "ANTIGRAVITY_CONVERSATION_ID"
 
 [backup]
 # `hub status` and `hub backup --check` report a ledger backup older than this.

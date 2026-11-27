@@ -159,6 +159,46 @@ pub fn hand_edit_refusal(
     }
 }
 
+/// Why a file edit of `path` (spelled as claims are) is refused for a caller that speaks for
+/// `mine`: it lies in a live tree claim of another worker. A holder that is bound to no harness
+/// session is not enforced: its own edits could not be told apart, and the guard must not lock
+/// the holder out.
+pub fn tree_refusal(conn: &Connection, path: &str, mine: &[String]) -> HubResult<Option<HubError>> {
+    let live = ledger::claims(
+        conn,
+        "WHERE released IS NULL AND resource LIKE 'tree:%'",
+        [],
+    )?;
+    let now = super::now_ms();
+    for claim in live
+        .iter()
+        .filter(|c| c.live(now) && !mine.contains(&c.holder))
+    {
+        let Some(tree) = claim.resource.strip_prefix("tree:") else {
+            continue;
+        };
+        if !Path::new(path).starts_with(tree) || !ledger::session_bound(conn, &claim.holder)? {
+            continue;
+        }
+        return Ok(Some(
+            HubError::refused(
+                "held",
+                format!(
+                    "{} is held by {} until {}; {path} not edited",
+                    claim.resource,
+                    claim.holder,
+                    super::iso(claim.expires)
+                ),
+                "work in your own tree, or wait or ask the holder (stenio hub status)",
+            )
+            .with("resource", claim.resource.clone())
+            .with("holder", claim.holder.clone())
+            .with("expires", super::iso(claim.expires)),
+        ));
+    }
+    Ok(None)
+}
+
 fn ledger_file(given: Option<&Path>) -> HubResult<PathBuf> {
     match given {
         Some(p) => Ok(p.to_path_buf()),

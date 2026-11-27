@@ -267,3 +267,85 @@ fn queue_writes_honor_the_served_claim_and_stop_without_the_server() -> Fallible
     assert!(!f.root.join("home/.local/state/stenio/hub.db").exists());
     Ok(())
 }
+
+#[test]
+fn served_guard_protects_trees_and_binds_sub_agents() -> Fallible {
+    let mut f = Fixture::new("tree")?;
+    let join = |f: &Fixture, session: &str| -> Made<String> {
+        let out = f.ok(
+            "alpha",
+            &[
+                "join",
+                "--harness",
+                "claude-code",
+                "--account",
+                "alpha",
+                "--session",
+                session,
+            ],
+        )?;
+        Ok(out["worker"].as_str().ok_or("no worker")?.to_string())
+    };
+    let hook = |f: &Fixture, args: &[&str], payload: &Value| -> Made<(i32, String)> {
+        let mut c = f.client("alpha");
+        c.arg("hub")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = c.spawn()?;
+        child
+            .stdin
+            .take()
+            .ok_or("no stdin")?
+            .write_all(payload.to_string().as_bytes())?;
+        let out = child.wait_with_output()?;
+        Ok((
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
+    };
+    let main = join(&f, "s")?;
+    let child = join(&f, "s")?;
+    join(&f, "s-other")?;
+    // The hook of each agent reports its own join.
+    for (worker, agent) in [(&main, ""), (&child, "a1")] {
+        let seen = json!({"session_id": "s", "agent_id": agent, "tool_name": "Bash",
+            "tool_input": {"command": "stenio hub join --harness t"},
+            "tool_response": {"stdout": format!("worker: {worker}")}});
+        assert_eq!(hook(&f, &["beat", "--from-hook"], &seen)?.0, 0);
+    }
+    let tree = f.root.join("clone");
+    fs::create_dir_all(&tree)?;
+    let name = format!("tree:{}", tree.display());
+    f.ok("alpha", &["claim", "--worker", &child, &name])?;
+    let edit = |session: &str, agent: &str| {
+        json!({"session_id": session, "agent_id": agent, "tool_name": "Edit",
+            "tool_input": {"file_path": tree.join("a.rs").display().to_string()}})
+    };
+    assert_eq!(hook(&f, &["guard"], &edit("s", "a1"))?.0, 0);
+    let (code, err) = hook(&f, &["guard"], &edit("s-other", ""))?;
+    assert_eq!(code, 2, "{err}");
+    assert!(err.contains(&child), "{err}");
+    // The sub-agent holds it: neither the main thread nor a sibling edits there.
+    assert_eq!(hook(&f, &["guard"], &edit("s", ""))?.0, 2);
+    assert_eq!(hook(&f, &["guard"], &edit("s", "a2"))?.0, 2);
+    // Without the server nothing is blocked.
+    f.stop();
+    assert_eq!(hook(&f, &["guard"], &edit("s-other", ""))?.0, 0);
+    Ok(())
+}
+
+#[test]
+fn only_an_owner_client_may_reset_attempts() -> Fallible {
+    let f = Fixture::new("attempts")?;
+    // The terminal check comes first on a client, so neither role passes from a script.
+    for name in ["alpha", "boss"] {
+        f.refused(
+            name,
+            &["reset-attempts", "--row", "GB-001", "--reason", "x"],
+            "owner_only",
+        )?;
+    }
+    Ok(())
+}

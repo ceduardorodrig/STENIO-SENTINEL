@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use super::config::{self, Config};
 use super::ledger::{self, BeatRequest};
 use super::store::{self, Store};
-use super::{HubError, HubResult, guard, now_ms, remote};
+use super::{HubError, HubResult, guard, now_ms, remote, resource};
 use crate::backlog::queue_index::present_queues;
 
 /// Hook payloads are small; anything larger is not read further.
@@ -50,6 +50,18 @@ pub fn session_of(cfg: &Config, payload: &Value) -> Option<String> {
         .find(|s| !s.trim().is_empty())
 }
 
+/// The session `join` binds a worker of `harness` to, from the declared variables.
+pub fn join_session(cfg: &Config, harness: &str) -> Option<String> {
+    let names = match cfg.session.harness.get(harness) {
+        Some(own) => std::slice::from_ref(own),
+        None => cfg.session.env.as_slice(),
+    };
+    names
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|s| !s.trim().is_empty())
+}
+
 /// The sub-agent a payload comes from; empty for the main thread and for harnesses that do not
 /// report one.
 fn agent_of(cfg: &Config, payload: &Value) -> String {
@@ -63,12 +75,12 @@ fn agent_of(cfg: &Config, payload: &Value) -> String {
 
 /// Sub-agents share their parent's session id, and only the hook payload tells them apart. So the
 /// hook that reports a join binds the new worker to the agent that ran it.
-fn learn_join(store: &mut Store, session: &str, agent: &str, payload: &Value) -> HubResult<()> {
-    let text = |key: &str| payload.get(key).map(Value::to_string).unwrap_or_default();
-    if !(text("tool_input").contains("hub join") || text("tool_name").contains("hub_join")) {
-        return Ok(());
-    }
-    let said = text("tool_response");
+pub(super) fn learn_join(
+    store: &mut Store,
+    session: &str,
+    agent: &str,
+    said: &str,
+) -> HubResult<()> {
     store.write(|tx| {
         for worker in ledger::session_workers(tx, session)? {
             if said.contains(&worker) {
@@ -79,9 +91,44 @@ fn learn_join(store: &mut Store, session: &str, agent: &str, payload: &Value) ->
     })
 }
 
+/// The answer of a tool call that ran a join, when the payload reports one.
+fn join_report(payload: &Value) -> Option<String> {
+    let text = |key: &str| payload.get(key).map(Value::to_string).unwrap_or_default();
+    (text("tool_input").contains("hub join") || text("tool_name").contains("hub_join"))
+        .then(|| text("tool_response"))
+}
+
+/// Whose trees `agent` may edit inside its session: its own workers and the unbound ones; a
+/// helper that never joined also acts for the main thread.
+pub(super) fn tree_speakers(
+    conn: &rusqlite::Connection,
+    session: &str,
+    agent: &str,
+) -> HubResult<Vec<String>> {
+    let mut bound = Vec::new();
+    for worker in ledger::session_workers(conn, session)? {
+        let owner = ledger::worker_agent(conn, &worker)?;
+        bound.push((worker, owner));
+    }
+    let joined = bound.iter().any(|(_, a)| a.as_deref() == Some(agent));
+    Ok(bound
+        .into_iter()
+        .filter(|(_, a)| {
+            a.as_deref()
+                .is_none_or(|a| a == agent || (a.is_empty() && !joined))
+        })
+        .map(|(w, _)| w)
+        .collect())
+}
+
 /// The workers of a session that `agent` may speak for: its own, plus the unbound ones when
 /// `unbound` says so.
-fn speakers(store: &mut Store, session: &str, agent: &str, unbound: bool) -> Vec<String> {
+pub(super) fn speakers(
+    store: &mut Store,
+    session: &str,
+    agent: &str,
+    unbound: bool,
+) -> Vec<String> {
     store
         .read(|c| {
             let mut mine = Vec::new();
@@ -117,7 +164,9 @@ fn renew(who: Option<&str>, fence: Option<i64>) -> HubResult<()> {
     let workers = match (config::worker_or_env(who), session) {
         (Some(named), _) => vec![named],
         (None, Some(session)) => {
-            learn_join(&mut store, &session, &agent, &payload)?;
+            if let Some(said) = join_report(&payload) {
+                learn_join(&mut store, &session, &agent, &said)?;
+            }
             // An unbound worker is renewed by the main thread only, so a dead sub-agent
             // cannot be kept alive by its parent once bound, and never by a sibling.
             speakers(&mut store, &session, &agent, agent.is_empty())
@@ -166,11 +215,21 @@ fn beat_due(cfg: &Config, key: &str) -> bool {
     true
 }
 
-fn served_workers(server: &remote::Remote, session: Option<&str>) -> HubResult<Vec<String>> {
+/// The workers of a session on the server. With `agent` the server answers only for that
+/// sub-agent, after learning the join it is told about.
+fn served_workers(
+    server: &remote::Remote,
+    session: Option<&str>,
+    agent: Option<&str>,
+    said: Option<String>,
+) -> HubResult<Vec<String>> {
     let Some(session) = session else {
         return Ok(Vec::new());
     };
-    let reply = server.call("session_workers", json!({"session": session}))?;
+    let reply = server.call(
+        "session_workers",
+        json!({"session": session, "agent": agent, "said": said}),
+    )?;
     Ok(reply["workers"]
         .as_array()
         .map(|list| {
@@ -194,12 +253,15 @@ fn renew_served(
     let Some(key) = named.as_deref().or(session.as_deref()) else {
         return Ok(());
     };
-    if !beat_due(cfg, key) {
+    let agent = agent_of(cfg, payload);
+    let said = join_report(payload);
+    // A join is reported once, so it is never throttled; each sub-agent has its own interval.
+    if said.is_none() && !beat_due(cfg, &format!("{key}{agent}")) {
         return Ok(());
     }
     let workers = match &named {
         Some(worker) => vec![worker.clone()],
-        None => served_workers(&server, session.as_deref())?,
+        None => served_workers(&server, session.as_deref(), Some(&agent), said)?,
     };
     for worker in workers {
         let request = json!({"worker": worker, "fence": fence, "from_hook": true});
@@ -218,37 +280,84 @@ pub fn beat_hook(who: Option<&str>, fence: Option<i64>) -> i32 {
     0
 }
 
-/// The file a write tool is about to change, for the payload shapes of the wired harnesses.
-fn edited_file(payload: &Value) -> Option<PathBuf> {
+/// Argument names that hold the file of a write tool, compared without case and underscores.
+const PATH_KEYS: [&str; 6] = [
+    "filepath",
+    "path",
+    "targetfile",
+    "absolutepath",
+    "notebookpath",
+    "filename",
+];
+/// Argument names that can hold a patch, whose headers name the files.
+const PATCH_KEYS: [&str; 4] = ["patch", "patchtext", "input", "command"];
+
+fn patched_files(patch: &str) -> impl Iterator<Item = &str> {
+    patch.lines().filter_map(|line| {
+        let line = line.trim_start().strip_prefix("*** ")?;
+        ["Add File:", "Update File:", "Delete File:", "Move to:"]
+            .iter()
+            .find_map(|head| line.strip_prefix(head))
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+    })
+}
+
+/// The files a write tool is about to change, for the payload shapes of the wired harnesses.
+fn edited_files(payload: &Value) -> Vec<PathBuf> {
     let (tool, args) = match payload.get("toolCall") {
         Some(call) => (call.get("name"), call.get("args")),
         None => (payload.get("tool_name"), payload.get("tool_input")),
     };
-    let tool = tool.and_then(Value::as_str)?.to_ascii_lowercase();
-    if !["write", "edit", "patch", "replace", "create"]
-        .iter()
-        .any(|verb| tool.contains(verb))
-    {
-        return None;
+    let Some(tool) = tool.and_then(Value::as_str).map(str::to_ascii_lowercase) else {
+        return Vec::new();
+    };
+    let writes = [
+        "write", "edit", "patch", "replace", "create", "delete", "sed_file",
+    ];
+    if !writes.iter().any(|verb| tool.contains(verb)) {
+        return Vec::new();
     }
-    let args = args?;
-    let file = [
-        "file_path",
-        "path",
-        "filePath",
-        "TargetFile",
-        "AbsolutePath",
-    ]
-    .iter()
-    .find_map(|k| args.get(k).and_then(Value::as_str))
-    .map(PathBuf::from)?;
-    if file.is_absolute() {
-        return Some(file);
+    let Some(args) = args else {
+        return Vec::new();
+    };
+    // An editor tool that is asked to show a file changes nothing.
+    if args.get("command").and_then(Value::as_str) == Some("view") {
+        return Vec::new();
     }
-    match payload.get("cwd").and_then(Value::as_str) {
-        Some(cwd) => Some(Path::new(cwd).join(file)),
-        None => std::env::current_dir().ok().map(|d| d.join(file)),
+    let mut named: Vec<&str> = Vec::new();
+    let patch_of = |key: &str, value: &str| {
+        PATCH_KEYS.contains(&key) && value.trim_start().starts_with("*** ")
+    };
+    if let Some(text) = args.as_str() {
+        named.extend(patched_files(text));
     }
+    for (key, value) in args.as_object().into_iter().flatten() {
+        let key = key.replace('_', "").to_ascii_lowercase();
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if PATH_KEYS.contains(&key.as_str()) {
+            named.push(value);
+        } else if patch_of(&key, value) {
+            named.extend(patched_files(value));
+        }
+    }
+    let cwd = payload.get("cwd").and_then(Value::as_str);
+    named
+        .into_iter()
+        .filter(|f| !f.is_empty())
+        .filter_map(|f| {
+            let file = Path::new(f);
+            if file.is_absolute() {
+                return Some(file.to_path_buf());
+            }
+            match cwd {
+                Some(cwd) => Some(Path::new(cwd).join(file)),
+                None => std::env::current_dir().ok().map(|d| d.join(file)),
+            }
+        })
+        .collect()
 }
 
 /// The queue root and prefix when `file` is a backlog or archive file of a declared queue.
@@ -267,15 +376,114 @@ fn queue_of(file: &Path) -> Option<(PathBuf, String)> {
 }
 
 fn refusal_of(payload: &Value) -> HubResult<Option<String>> {
-    let Some((root, prefix)) = edited_file(payload).and_then(|f| queue_of(&f)) else {
+    let files = edited_files(payload);
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let cfg = Config::load()?;
+    let server = remote::declared()?.map(|s| s.with_timeout(remote::HOOK_TIMEOUT_SECS));
+    for file in &files {
+        if let Some((root, prefix)) = queue_of(file)
+            && let Some(reason) = queue_refusal(&cfg, server.as_ref(), payload, &root, &prefix)?
+        {
+            return Ok(Some(reason));
+        }
+    }
+    let paths: Vec<String> = files
+        .iter()
+        .filter_map(|f| resource::resolved_path(f))
+        .collect();
+    tree_refusal(&cfg, server.as_ref(), payload, &paths)
+}
+
+/// Why a file lies in another worker's claimed tree. A caller that names neither a session nor a
+/// worker cannot be told from the holder, so nothing is refused.
+fn tree_refusal(
+    cfg: &Config,
+    server: Option<&remote::Remote>,
+    payload: &Value,
+    paths: &[String],
+) -> HubResult<Option<String>> {
+    let session = session_of(cfg, payload);
+    let named = config::worker_or_env(None);
+    if paths.is_empty() || (session.is_none() && named.is_none()) {
+        return Ok(None);
+    }
+    let agent = agent_of(cfg, payload);
+    let mut mine: Vec<String> = named.into_iter().collect();
+    if let Some(server) = server {
+        // This runs before every edit: after a failure the server is left alone for a while.
+        if server_was_down(cfg) {
+            return Ok(None);
+        }
+        let check = json!({"paths": paths, "mine": mine, "session": session, "agent": agent});
+        return match server.call("tree_check", check) {
+            Ok(_) => Ok(None),
+            Err(e @ HubError::Refused(_)) => Ok(Some(e.to_string())),
+            Err(e) => {
+                if matches!(e, HubError::Store(_)) {
+                    mark_server_down();
+                }
+                Err(e)
+            }
+        };
+    }
+    let Some(store) = existing_ledger()? else {
         return Ok(None);
     };
-    let cfg = Config::load()?;
-    if let Some(server) = remote::declared()? {
-        let server = server.with_timeout(remote::HOOK_TIMEOUT_SECS);
+    let mut store = store;
+    store.read(|c| {
+        if let Some(session) = &session {
+            mine.extend(tree_speakers(c, session, &agent)?);
+        }
+        for path in paths {
+            if let Some(refused) = guard::tree_refusal(c, path, &mine)? {
+                return Ok(Some(refused.to_string()));
+            }
+        }
+        Ok(None)
+    })
+}
+
+fn down_stamp() -> Option<PathBuf> {
+    config::db_path()
+        .ok()?
+        .parent()
+        .map(|d| d.join("guard-server-down.stamp"))
+}
+
+fn server_was_down(cfg: &Config) -> bool {
+    down_stamp()
+        .and_then(|s| std::fs::metadata(s).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|age| age.as_secs() < cfg.lease.hook_beat_min_secs)
+}
+
+fn mark_server_down() {
+    let Some(stamp) = down_stamp() else {
+        return;
+    };
+    let made = stamp
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&stamp, b""));
+    if let Err(e) = made {
+        eprintln!("stenio hub guard: cannot write {}: {e}", stamp.display());
+    }
+}
+
+fn queue_refusal(
+    cfg: &Config,
+    server: Option<&remote::Remote>,
+    payload: &Value,
+    root: &Path,
+    prefix: &str,
+) -> HubResult<Option<String>> {
+    if let Some(server) = server {
         let mine: Vec<String> = config::worker_or_env(None).into_iter().collect();
         let check = json!({"prefixes": [prefix], "mine": mine,
-            "session": session_of(&cfg, payload)});
+            "session": session_of(cfg, payload)});
         return match server.call("queue_check", check) {
             Ok(_) => Ok(None),
             Err(e @ HubError::Refused(_)) => Ok(Some(format!("{e} ({})", root.display()))),
@@ -285,14 +493,14 @@ fn refusal_of(payload: &Value) -> HubResult<Option<String>> {
     let Some(mut store) = existing_ledger()? else {
         return Ok(None);
     };
-    let session = session_of(&cfg, payload);
-    let agent = agent_of(&cfg, payload);
+    let session = session_of(cfg, payload);
+    let agent = agent_of(cfg, payload);
     let mut mine = match session {
         Some(session) => speakers(&mut store, &session, &agent, true),
         None => Vec::new(),
     };
     mine.extend(config::worker_or_env(None));
-    store.read(|c| Ok(guard::hand_edit_refusal(c, &root, &prefix, &mine)))
+    store.read(|c| Ok(guard::hand_edit_refusal(c, root, prefix, &mine)))
 }
 
 /// `stenio hub guard`: exit 2 with the reason on stderr blocks the edit (Claude Code, Hermes); an
@@ -346,7 +554,7 @@ fn require_served_release(
 ) -> HubResult<Result<String, String>> {
     let mine = match config::worker_or_env(worker) {
         Some(w) => vec![w],
-        None => served_workers(server, session_of(cfg, &Value::Null).as_deref())?,
+        None => served_workers(server, session_of(cfg, &Value::Null).as_deref(), None, None)?,
     };
     let reply = server.call("claim_holder", json!({"resource": resource}))?;
     Ok(release_verdict(resource, reply["holder"].as_str(), &mine))

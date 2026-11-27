@@ -19,6 +19,7 @@ pub const GENESIS: &str = "00000000000000000000000000000000000000000000000000000
 pub struct Faults {
     pub skip_fence_check: bool,
     pub drop_unique_claim: bool,
+    pub skip_attempt_budget: bool,
 }
 
 const SCHEMA: &str = "
