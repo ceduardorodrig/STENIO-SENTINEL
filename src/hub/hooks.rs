@@ -50,16 +50,48 @@ pub fn session_of(cfg: &Config, payload: &Value) -> Option<String> {
         .find(|s| !s.trim().is_empty())
 }
 
-/// The workers this hook speaks for: the named one, else every worker of the session.
-fn speakers(store: &mut Store, named: Option<String>, session: Option<&str>) -> Vec<String> {
-    if let Some(worker) = named {
-        return vec![worker];
+/// The sub-agent a payload comes from; empty for the main thread and for harnesses that do not
+/// report one.
+fn agent_of(cfg: &Config, payload: &Value) -> String {
+    cfg.session
+        .agent_fields
+        .iter()
+        .find_map(|f| payload.get(f).and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Sub-agents share their parent's session id, and only the hook payload tells them apart. So the
+/// hook that reports a join binds the new worker to the agent that ran it.
+fn learn_join(store: &mut Store, session: &str, agent: &str, payload: &Value) -> HubResult<()> {
+    let text = |key: &str| payload.get(key).map(Value::to_string).unwrap_or_default();
+    if !(text("tool_input").contains("hub join") || text("tool_name").contains("hub_join")) {
+        return Ok(());
     }
-    let Some(session) = session else {
-        return Vec::new();
-    };
+    let said = text("tool_response");
+    store.write(|tx| {
+        for worker in ledger::session_workers(tx, session)? {
+            if said.contains(&worker) {
+                ledger::bind_agent(tx, &worker, agent)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// The workers of a session that `agent` may speak for: its own, plus the unbound ones when
+/// `unbound` says so.
+fn speakers(store: &mut Store, session: &str, agent: &str, unbound: bool) -> Vec<String> {
     store
-        .read(|c| ledger::session_workers(c, session))
+        .read(|c| {
+            let mut mine = Vec::new();
+            for worker in ledger::session_workers(c, session)? {
+                if ledger::worker_agent(c, &worker)?.map_or(unbound, |a| a == agent) {
+                    mine.push(worker);
+                }
+            }
+            Ok(mine)
+        })
         .unwrap_or_default()
 }
 
@@ -81,8 +113,18 @@ fn renew(who: Option<&str>, fence: Option<i64>) -> HubResult<()> {
         return Ok(());
     };
     let session = session_of(&cfg, &payload);
-    let named = config::worker_or_env(who);
-    for worker in speakers(&mut store, named, session.as_deref()) {
+    let agent = agent_of(&cfg, &payload);
+    let workers = match (config::worker_or_env(who), session) {
+        (Some(named), _) => vec![named],
+        (None, Some(session)) => {
+            learn_join(&mut store, &session, &agent, &payload)?;
+            // An unbound worker is renewed by the main thread only, so a dead sub-agent
+            // cannot be kept alive by its parent once bound, and never by a sibling.
+            speakers(&mut store, &session, &agent, agent.is_empty())
+        }
+        (None, None) => Vec::new(),
+    };
+    for worker in workers {
         let request = BeatRequest {
             worker: worker.clone(),
             fence,
@@ -244,13 +286,19 @@ fn refusal_of(payload: &Value) -> HubResult<Option<String>> {
         return Ok(None);
     };
     let session = session_of(&cfg, payload);
-    let mut mine = speakers(&mut store, None, session.as_deref());
+    let agent = agent_of(&cfg, payload);
+    let mut mine = match session {
+        Some(session) => speakers(&mut store, &session, &agent, true),
+        None => Vec::new(),
+    };
     mine.extend(config::worker_or_env(None));
     store.read(|c| Ok(guard::hand_edit_refusal(c, &root, &prefix, &mine)))
 }
 
 /// `stenio hub guard`: exit 2 with the reason on stderr blocks the edit (Claude Code, Hermes); an
-/// Antigravity payload gets its JSON decision. Any internal problem allows the edit.
+/// Antigravity payload gets its JSON decision. The guard never grants permission: its Antigravity
+/// answer for an edit it does not block is `ask` (the normal prompt, honouring "Always Allow"),
+/// because `allow` there approves the call. Any internal problem blocks nothing.
 pub fn guard_hook() -> i32 {
     let payload = read_payload();
     let antigravity = payload.get("toolCall").is_some();
@@ -269,7 +317,7 @@ pub fn guard_hook() -> i32 {
         }
         None => {
             if antigravity {
-                println!("{}", json!({"decision": "allow"}));
+                println!("{}", json!({"decision": "ask"}));
             }
             0
         }
@@ -320,7 +368,12 @@ pub fn require_release(name: &str, worker: Option<&str>) -> Result<String, Strin
     let session = session_of(&cfg, &Value::Null);
     let mine = match config::worker_or_env(worker) {
         Some(w) => vec![w],
-        None => speakers(&mut store, None, session.as_deref()),
+        None => match &session {
+            Some(session) => store
+                .read(|c| ledger::session_workers(c, session))
+                .map_err(|e| e.to_string())?,
+            None => Vec::new(),
+        },
     };
     let held = store
         .read(|c| {
