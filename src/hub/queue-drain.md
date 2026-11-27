@@ -17,8 +17,10 @@ unavailable.
 
 ## Cycle
 
-1. `join --harness <name> [--account <quota account>]`. Keep the worker id; export
-   `STENIO_HUB_WORKER=<id>` where your harness allows. `claude-code` and `opencode` have a
+1. `join --harness <name> [--account <quota account>]`. Keep the worker id. The join binds the
+   worker to the harness session (`--session`, else the declared variable of that harness). A
+   `warning` in the answer means it is NOT bound: nothing will renew it. Join again with
+   `--session <id>` or export `STENIO_HUB_WORKER=<id>` where your harness allows. `claude-code` and `opencode` have a
    declared account, so they may omit `--account`.
 2. `status`. A claim of a row or slot reads the declared source of your account when no fresh
    sample exists (`quota refresh` reads them all). An unknown or stale quota allows one working
@@ -30,8 +32,11 @@ unavailable.
    or the declared session variable). Sub-agents share that session: the hook that sees a join
    binds the worker to the payload's `agent_id`, so run `join` with its output visible; only that
    agent's calls renew it. A hook before each file edit runs `stenio hub guard`:
-   exit 2 refuses a hand edit of a queue file whose write claim another worker holds. The guard
-   never grants permission (Antigravity gets `ask` or `deny`).
+   exit 2 refuses a file edit (also each file of a patch) inside a live `tree:` claim of another
+   worker, and a hand edit of a queue file whose write claim another worker holds. A holder that
+   is bound to no session, a caller that names neither session nor worker, and shell commands are
+   not judged. The guard never grants permission (Antigravity gets `ask` or `deny`) and fails
+   open when the ledger cannot answer.
 5. `event --type checkpoint --fence <n> --clone <dir> --branch <b> --next-step <text>` at every
    stop. Whoever takes over an expired lease receives it.
 6. Need the owner: `ask --row <ID> --text <question> --option <a> --option <b> --recommend <a>`,
@@ -41,6 +46,8 @@ unavailable.
    A fence without a row (queue, release, deploy) is handed back the same way, without
    `--row`.
 8. `lease_lost` or `stale_fence`: stop writing; someone else may own the row now.
+9. `attempts`: the row was left to expire or handed back `failed` too often (default 3). Take
+   another row; only the owner runs `reset-attempts --row <ID> --reason <why>`.
 
 ## Coordinator duties
 

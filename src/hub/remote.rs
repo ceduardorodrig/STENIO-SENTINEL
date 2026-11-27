@@ -255,6 +255,10 @@ fn push_quota(server: &Remote, cfg: &Config, account: Option<&str>) -> HubResult
     result
 }
 
+fn text_of<'a>(args: &'a Map<String, Value>, key: &str) -> &'a str {
+    args.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
 /// An operation of the CLI or of the stdio MCP server, run against the declared server.
 pub fn operate(server: &Remote, op: &str, mut args: Map<String, Value>) -> HubResult<Value> {
     args.retain(|_, v| !v.is_null());
@@ -274,8 +278,9 @@ pub fn operate(server: &Remote, op: &str, mut args: Map<String, Value>) -> HubRe
     match op {
         "hub_join" => {
             let cfg = Config::load()?;
+            let harness = text_of(&args, "harness").trim().to_lowercase();
             if !args.contains_key("session")
-                && let Some(session) = super::hooks::session_of(&cfg, &Value::Null)
+                && let Some(session) = super::hooks::join_session(&cfg, &harness)
             {
                 args.insert("session".to_string(), json!(session));
             }

@@ -56,6 +56,7 @@ mod release_engine;
 mod release_file_gate;
 mod release_order;
 pub mod remote;
+mod rollout;
 mod rule;
 mod secrets_guard;
 mod secrets_suite;

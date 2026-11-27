@@ -122,6 +122,26 @@ fn fenced(dir: &Path, faults: Faults) -> HubResult<bool> {
     Ok(new > old && matches!(stale, Err(e) if e.code() == "stale_fence"))
 }
 
+/// After the allowed attempts expire, the row is refused until the owner resets it.
+fn budget(dir: &Path, faults: Faults) -> HubResult<bool> {
+    let cfg = Config::embedded()?;
+    let mut store = Store::open_with(&dir.join("hub.db"), faults)?;
+    let worker = joined(&mut store, &cfg, "first")?;
+    for _ in 0..cfg.attempts.limit {
+        claim_row(&mut store, &cfg, &worker, 1)?;
+        std::thread::park_timeout(std::time::Duration::from_millis(1100));
+        while ledger::sweep_now(&mut store)? == 0 {
+            std::thread::park_timeout(std::time::Duration::from_millis(100));
+        }
+    }
+    let over = claim_row(&mut store, &cfg, &worker, 60);
+    if !matches!(over, Err(e) if e.code() == "attempts") {
+        return Ok(false);
+    }
+    ledger::reset_attempts(&mut store, "GB-001", "self-test", true)?;
+    Ok(claim_row(&mut store, &cfg, &worker, 60).is_ok())
+}
+
 /// An edited event is reported with its sequence number.
 fn tamper_evident(dir: &Path) -> HubResult<bool> {
     let cfg = Config::embedded()?;
@@ -150,6 +170,10 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         skip_fence_check: true,
         ..Faults::default()
     };
+    let no_budget = Faults {
+        skip_attempt_budget: true,
+        ..Faults::default()
+    };
     // A mutation case passes only when the guarantee visibly breaks without its mechanism.
     let broken = |label: &str, run: &dyn Fn(&Path) -> HubResult<bool>| {
         let dir = scratch(label);
@@ -171,6 +195,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (
             "hub: mutation, no fence check is red".to_string(),
             broken("no-fence", &|d| fenced(d, no_fence)),
+        ),
+        (
+            "hub: a row over its attempt budget is refused".to_string(),
+            case("budget", |d| budget(d, Faults::default())),
+        ),
+        (
+            "hub: mutation, no attempt budget is red".to_string(),
+            broken("no-budget", &|d| budget(d, no_budget)),
         ),
         (
             "hub: an edited event fails the audit".to_string(),

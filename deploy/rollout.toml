@@ -1,0 +1,22 @@
+# Binaries a release updates after its own host and the container, in this order: the ledger
+# server first, so that a failure there leaves the clients on the previous version.
+
+[[target]]
+host = "kavure"
+path = "/usr/local/lib/stenio-hub/stenio"
+sudo = true
+backup_unit = "stenio-hub-backup.service"
+restart = "stenio-hub.service"
+health = "http://127.0.0.1:8797/healthz"
+
+[[target]]
+host = "kavure"
+path = "~/.local/bin/stenio"
+
+[[target]]
+host = "kuaray"
+path = "~/.local/bin/stenio"
+
+[[target]]
+host = "ybytu"
+path = "~/.local/bin/stenio"

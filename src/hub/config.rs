@@ -24,6 +24,21 @@ pub struct Config {
     pub session: Session,
     #[serde(default)]
     pub backup: Backup,
+    #[serde(default)]
+    pub attempts: Attempts,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attempts {
+    /// Expired or failed attempts after which a row needs the owner.
+    pub limit: u32,
+}
+
+impl Default for Attempts {
+    fn default() -> Self {
+        Attempts { limit: 3 }
+    }
 }
 
 /// Where a harness exposes its session id, to its shell commands and to its hooks.
@@ -35,6 +50,9 @@ pub struct Session {
     /// Payload fields that name the sub-agent inside a session.
     #[serde(default = "agent_fields")]
     pub agent_fields: Vec<String>,
+    /// The one variable of each listed harness.
+    #[serde(default)]
+    pub harness: BTreeMap<String, String>,
 }
 
 fn agent_fields() -> Vec<String> {
@@ -44,13 +62,16 @@ fn agent_fields() -> Vec<String> {
 impl Default for Session {
     fn default() -> Self {
         // An override without this section keeps the embedded declaration's behaviour.
-        Session {
-            env: vec!["CLAUDE_CODE_SESSION_ID".to_string()],
-            fields: ["session_id", "sessionId", "conversationId"]
-                .map(str::to_string)
-                .to_vec(),
-            agent_fields: agent_fields(),
-        }
+        // The embedded declaration has the section, so this cannot recurse.
+        Config::embedded().map_or_else(
+            |_| Session {
+                env: Vec::new(),
+                fields: Vec::new(),
+                agent_fields: agent_fields(),
+                harness: BTreeMap::new(),
+            },
+            |c| c.session,
+        )
     }
 }
 

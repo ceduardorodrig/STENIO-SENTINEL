@@ -210,6 +210,11 @@ pub fn bind_agent(conn: &Connection, worker: &str, agent: &str) -> HubResult<()>
     Ok(())
 }
 
+/// Whether a worker joined with a harness session.
+pub fn session_bound(conn: &Connection, worker: &str) -> HubResult<bool> {
+    Ok(super::store::meta(conn, &session_key(worker))?.is_some())
+}
+
 /// The workers bound to a harness session.
 pub fn session_workers(conn: &Connection, session: &str) -> HubResult<Vec<String>> {
     let mut stmt = conn.prepare(
@@ -252,7 +257,8 @@ pub fn join(store: &mut Store, cfg: &Config, request: &Join) -> HubResult<Value>
     let session = request
         .session
         .clone()
-        .or_else(|| super::hooks::session_of(cfg, &Value::Null));
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| super::hooks::join_session(cfg, &harness));
     store.write(|tx| {
         if let Some(parent) = &request.parent {
             worker(tx, parent)?;
@@ -289,12 +295,27 @@ pub fn join(store: &mut Store, cfg: &Config, request: &Join) -> HubResult<Value>
             },
         )?;
         let runs = open_runs(tx)?;
-        Ok(
-            json!({"ok": true, "worker": id, "account": account, "open_runs": runs,
-            "lease_secs": cfg.lease.default_ttl_secs,
-            "next": "stenio hub status, then claim; beat before the lease expires"}),
-        )
+        let mut out = json!({"ok": true, "worker": id, "account": account, "open_runs": runs,
+            "lease_secs": cfg.lease.default_ttl_secs, "bound": session.is_some(),
+            "next": "stenio hub status, then claim; beat before the lease expires"});
+        if session.is_none() {
+            out["warning"] = json!(unbound_warning(cfg, &harness, &id));
+        }
+        Ok(out)
     })
+}
+
+fn unbound_warning(cfg: &Config, harness: &str, worker: &str) -> String {
+    let wanted = match cfg.session.harness.get(harness) {
+        Some(name) => name.clone(),
+        None => cfg.session.env.join(", "),
+    };
+    format!(
+        "WORKER NOT BOUND to a harness session ({wanted} unset): no hook will EVER renew its \
+         leases and the edit guard cannot protect its trees. Join again with --session <id>, or \
+         export STENIO_HUB_WORKER={worker} in the harness environment, or run `stenio hub beat` \
+         yourself before every lease ends."
+    )
 }
 
 pub fn open_runs(conn: &Connection) -> HubResult<Vec<Value>> {
@@ -660,6 +681,7 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
         quota::refresh_stale(store, &cfg.quota, &account)?;
     }
     sweep_now(store)?;
+    let skip_budget = store.faults.skip_attempt_budget;
     store.write(|tx| {
         sweep(tx)?;
         let who = worker(tx, &request.worker)?;
@@ -683,6 +705,9 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
             };
             if wanted.kind == "row" {
                 refuse_final_row(tx, wanted.value(), run.as_deref())?;
+                if !skip_budget {
+                    refuse_spent_row(tx, wanted.value(), cfg.attempts.limit)?;
+                }
             }
             if wanted.kind == "tree" {
                 let trees = claims(tx, "WHERE released IS NULL AND resource LIKE 'tree:%'", [])?;
@@ -754,6 +779,78 @@ fn refuse_final_row(conn: &Connection, row: &str, run: Option<&str>) -> HubResul
         .with("resource", format!("row:{row}"))),
         None => Ok(()),
     }
+}
+
+/// Attempts of a row since the owner last reset it: distinct fences whose lease expired or that
+/// were handed back as failed. Derived from the events, so it spans runs and needs no counter.
+pub fn row_attempts(conn: &Connection, row: &str) -> HubResult<u32> {
+    let mut stmt = conn.prepare(
+        "SELECT type, payload FROM events WHERE resource = ?1 \
+         AND type IN ('lease_expired', 'handback', 'attempts_reset') ORDER BY seq",
+    )?;
+    let found = stmt.query_map([format!("row:{row}")], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    let mut spent = std::collections::BTreeSet::new();
+    for event in found {
+        let (kind, payload) = event?;
+        let body: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+        match kind.as_str() {
+            "attempts_reset" => spent.clear(),
+            "handback" if body["verdict"] != "failed" => {}
+            _ => {
+                spent.insert(body["fence"].as_i64().unwrap_or_default());
+            }
+        }
+    }
+    Ok(u32::try_from(spent.len()).unwrap_or(u32::MAX))
+}
+
+fn refuse_spent_row(conn: &Connection, row: &str, limit: u32) -> HubResult<()> {
+    let spent = row_attempts(conn, row)?;
+    if spent < limit {
+        return Ok(());
+    }
+    Err(HubError::refused(
+        "attempts",
+        format!("{row} used {spent} of {limit} attempts (expired or failed); it needs the owner"),
+        format!(
+            "ask the owner (stenio hub ask --row {row}); only the owner runs `stenio hub \
+             reset-attempts --row {row} --reason <why>`"
+        ),
+    )
+    .with("resource", format!("row:{row}"))
+    .with("attempts", spent))
+}
+
+/// The owner gives a row a new budget. Like a quota override: terminal or owner client only.
+pub fn reset_attempts(store: &mut Store, row: &str, reason: &str, owner: bool) -> HubResult<Value> {
+    if !owner {
+        return Err(HubError::refused(
+            "owner_only",
+            "resetting attempts is the owner's decision and needs an interactive terminal",
+            "ask the owner (stenio hub ask)",
+        ));
+    }
+    if reason.trim().is_empty() {
+        return Err(HubError::Usage("--reason must not be empty".to_string()));
+    }
+    let row = resource::row_id(row)?;
+    sweep_now(store)?;
+    store.write(|tx| {
+        let before = row_attempts(tx, &row)?;
+        append(
+            tx,
+            NewEvent {
+                worker: "",
+                run: None,
+                kind: "attempts_reset",
+                resource: &format!("row:{row}"),
+                payload: json!({"reason": reason, "attempts": before}),
+            },
+        )?;
+        Ok(json!({"ok": true, "row": row, "attempts_cleared": before}))
+    })
 }
 
 fn stale_fence(resource: &str, latest: Option<&Claim>, fence: i64) -> HubError {

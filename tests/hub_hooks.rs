@@ -306,3 +306,161 @@ fn backup_restores_and_reports_staleness() -> Fallible {
     );
     Ok(())
 }
+
+#[test]
+fn guard_refuses_edits_inside_another_workers_tree() -> Fallible {
+    let f = Fixture::new("tree")?;
+    let holder = f.join("s-holder")?;
+    f.join("s-other")?;
+    let tree = f.0.join("clone");
+    fs::create_dir_all(&tree)?;
+    let name = format!("tree:{}", tree.display());
+    assert_eq!(f.claim(&holder, &name, "5m")?.code, 0);
+    let file = tree.join("src/new.rs");
+    let guard = |payload: String| f.run(&["hub", "guard"], &payload);
+    let refused = guard(edit(&file, "s-other"))?;
+    assert_eq!(refused.code, 2, "{}", refused.err);
+    assert!(refused.err.contains(&holder), "{}", refused.err);
+    // A session that never joined is not the holder either; `..` does not leave the check.
+    assert_eq!(guard(edit(&file, "s-stranger"))?.code, 2);
+    let dotted = f.0.join("elsewhere/../clone/a.rs");
+    assert_eq!(guard(edit(&dotted, "s-other"))?.code, 2);
+    // The holder, a file outside the tree and a read pass.
+    assert_eq!(guard(edit(&file, "s-holder"))?.code, 0);
+    assert_eq!(guard(edit(&f.0.join("clone-b/x"), "s-other"))?.code, 0);
+    let read = edit(&file, "s-other").replace("\"Edit\"", "\"Read\"");
+    assert_eq!(guard(read)?.code, 0);
+    // Nobody can be told apart: nothing is refused.
+    let anonymous = json!({"tool_name": "Write",
+        "tool_input": {"file_path": file.display().to_string()}});
+    assert_eq!(guard(anonymous.to_string())?.code, 0);
+    // A holder bound to no session could not recognise its own edits: not enforced.
+    let loose = f.run(&["hub", "join", "--harness", "t", "--json"], "")?;
+    let loose: Value = serde_json::from_str(loose.out.trim())?;
+    let loose = loose["worker"].as_str().ok_or("no worker")?;
+    let free = f.0.join("loose");
+    assert_eq!(
+        f.claim(loose, &format!("tree:{}", free.display()), "5m")?
+            .code,
+        0
+    );
+    assert_eq!(guard(edit(&free.join("x"), "s-other"))?.code, 0);
+    Ok(())
+}
+
+#[test]
+fn guard_reads_every_path_key_and_every_file_of_a_patch() -> Fallible {
+    let f = Fixture::new("keys")?;
+    let holder = f.join("s-holder")?;
+    f.join("s-other")?;
+    assert_eq!(f.claim(&holder, "backlog:GB:write", "5m")?.code, 0);
+    let queue = f.backlog().display().to_string();
+    for (tool, key) in [
+        ("edit_file", "Path"),
+        ("write_file", "Path"),
+        ("sed_file", "TargetFile"),
+        ("notebook_edit", "notebook_path"),
+    ] {
+        let agy = json!({"conversationId": "s-other",
+            "toolCall": {"name": tool, "args": {key: queue}}});
+        let denied = f.run(&["hub", "guard"], &agy.to_string())?;
+        assert!(
+            denied.out.contains("\"deny\""),
+            "{tool} {key}: {}",
+            denied.out
+        );
+    }
+    let patch = "*** Begin Patch\n*** Add File: vault/governance/new.md\n+x\n\
+                 *** Update File: vault/governance/backlog.md\n@@\n-a\n+b\n*** End Patch\n";
+    for (tool, key) in [
+        ("patch", "patch"),
+        ("apply_patch", "input"),
+        ("apply_patch", "command"),
+        ("patch", "patchText"),
+    ] {
+        let payload = json!({"session_id": "s-other", "cwd": f.0.display().to_string(),
+            "tool_name": tool, "tool_input": {key: patch}});
+        let refused = f.run(&["hub", "guard"], &payload.to_string())?;
+        assert_eq!(refused.code, 2, "{tool} {key}: {}", refused.err);
+        let own = payload.to_string().replace("s-other", "s-holder");
+        assert_eq!(f.run(&["hub", "guard"], &own)?.code, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn join_binds_the_declared_session_of_each_harness_or_warns() -> Fallible {
+    let f = Fixture::new("bind")?;
+    for (harness, variable) in [
+        ("hermes", "HERMES_SESSION_ID"),
+        ("opencode", "OPENCODE_SESSION_ID"),
+        ("antigravity", "ANTIGRAVITY_CONVERSATION_ID"),
+        ("unlisted", "HERMES_SESSION_ID"),
+    ] {
+        let join = |value: &[(&str, &str)]| -> Result<(Value, String), Box<dyn std::error::Error>> {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_stenio"));
+            c.args(["hub", "join", "--harness", harness, "--json"])
+                .env_clear()
+                .env("STENIO_HUB_DB", f.db())
+                .env("STENIO_HUB_CONFIG", f.0.join("hub.toml"))
+                .envs(value.iter().copied());
+            let out = c.output()?;
+            Ok((
+                serde_json::from_slice(&out.stdout)?,
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            ))
+        };
+        let (bound, quiet) = join(&[(variable, "s-env")])?;
+        assert_eq!(bound["bound"], json!(true), "{harness}: {bound}");
+        assert!(!quiet.contains("WARNING"), "{quiet}");
+        let (loose, loud) = join(&[])?;
+        assert_eq!(loose["bound"], json!(false), "{harness}: {loose}");
+        assert!(loud.contains("NOT BOUND"), "{loud}");
+        // Another harness's variable, inherited from its shell, is not this harness's session.
+        if harness != "unlisted" {
+            let (inherited, _) = join(&[("CLAUDE_CODE_SESSION_ID", "s-parent")])?;
+            assert_eq!(inherited["bound"], json!(false), "{harness}: {inherited}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_closed_pipe_ends_the_answer_without_a_panic() -> Fallible {
+    let f = Fixture::new("pipe")?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_stenio"))
+        .args(["hub", "guide"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("STENIO_HUB_DB", f.db())
+        .spawn()?;
+    // The reader is gone before the first byte is written.
+    drop(child.stdout.take());
+    let out = child.wait_with_output()?;
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("panicked"), "{err}");
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    Ok(())
+}
+
+#[test]
+fn a_spent_row_waits_for_the_owner() -> Fallible {
+    let f = Fixture::new("budget")?;
+    let worker = f.join("s")?;
+    for _ in 0..3 {
+        let claim = f.claim(&worker, "row:GB-001", "1s")?;
+        assert_eq!(claim.code, 0, "{}", claim.err);
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+    let over = f.claim(&worker, "row:GB-001", "1m")?;
+    assert_eq!(over.code, 1);
+    assert!(over.err.contains("[attempts]"), "{}", over.err);
+    let reset = f.run(
+        &["hub", "reset-attempts", "--row", "GB-001", "--reason", "x"],
+        "",
+    )?;
+    assert_eq!(reset.code, 1);
+    assert!(reset.err.contains("owner_only"), "{}", reset.err);
+    Ok(())
+}

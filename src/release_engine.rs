@@ -2,7 +2,7 @@
 //!
 //! Replaces the hand-typed release sequence: local tag, origin tag, CI/Docker/Release runs,
 //! release build, install with a rollback copy, kuaray image retag/pull/up and version parity,
-//! then the engine self-test and the two delivery scopes. Every step prints one PASS/FAIL/SKIP
+//! the rollout of the binary to every declared target (see [`crate::rollout`]), then the engine self-test and the two delivery scopes. Every step prints one PASS/FAIL/SKIP
 //! line and the command exits non-zero on any FAIL. Commands are argv vectors (never a shell),
 //! every value is validated first, and the [`Runner`] trait keeps the sequence testable offline.
 
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::rollout;
 use crate::verify_release::{Out, safe};
 
 const DEFAULT_IMAGE_REPO: &str = "ghcr.io/ceduardorodrig/stenio-sentinel";
@@ -49,6 +50,11 @@ struct RelArgs {
     build_timeout_secs: u64,
     #[arg(long, help = "Installation directory (default: $HOME/.cargo/bin)")]
     install_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Declaration of the other binary targets (default: <repo>/deploy/rollout.toml)"
+    )]
+    rollout: Option<PathBuf>,
     #[arg(
         long,
         help = "Do not wait for the GitHub runs (offline or already green)"
@@ -115,6 +121,42 @@ fn skip(name: &'static str, detail: impl Into<String>) -> Line {
         name,
         detail: detail.into(),
     }
+}
+
+/// The rollout of the released binary and its parity over every declared target. Nothing is
+/// touched on another host once a step of this release has failed.
+fn rollout_lines(r: &dyn Runner, a: &RelArgs, version: &str, sound: bool) -> [Line; 2] {
+    const NAMES: [&str; 2] = ["rollout", "rollout-parity"];
+    let skipped = |why: &str| NAMES.map(|name| skip(name, why));
+    if !sound {
+        return skipped("an earlier step failed: no other target was touched");
+    }
+    let file = a
+        .rollout
+        .clone()
+        .unwrap_or_else(|| a.repo.join(rollout::DECLARATION));
+    if a.rollout.is_none() && !file.exists() {
+        return skipped("no rollout declaration: only this host and the container were updated");
+    }
+    let built = a.repo.join("target/release/stenio");
+    let (targets, sha) = match rollout::load(&file).and_then(|t| Ok((t, rollout::digest(&built)?)))
+    {
+        Ok(found) => found,
+        Err(e) => return NAMES.map(|name| fail(name, e.clone())),
+    };
+    let release = rollout::Release {
+        binary: &built,
+        version,
+        sha256: &sha,
+    };
+    let line = |name, outcome: Result<String, String>| match outcome {
+        Ok(detail) => pass(name, detail),
+        Err(detail) => fail(name, detail),
+    };
+    [
+        line(NAMES[0], rollout::apply(r, &targets, &release)),
+        line(NAMES[1], rollout::parity(r, &targets, &release)),
+    ]
 }
 
 fn warn(name: &'static str, detail: impl Into<String>) -> Line {
@@ -1020,6 +1062,8 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     out.push(check_pull(r, a, &version));
     out.push(check_up(r, a));
     out.push(check_remote_version(r, a, &version));
+    let sound = out.iter().all(|l| l.status != Status::Fail);
+    out.extend(rollout_lines(r, a, &version, sound));
     out.push(check_rollback(r, a, &version, &old, retag_ran));
     out.push(check_self_test(r, a));
     let vault = crate::opportunity::vault_root(None);
@@ -1080,6 +1124,8 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
         ("kuaray-version", format!("ssh {} docker exec {} stenio --version", a.host, a.container)),
+        ("rollout", "for each target of the rollout declaration: scp, version check, rollback copy <path>.prev-<previous>, swap, restart and health; restore on failure and stop".to_string()),
+        ("rollout-parity", "ssh <target> sha256sum <path> && <path> --version (every declared target runs the released binary)".to_string()),
         ("rollback-kept", format!("test -f <install-dir>/stenio.prev-<previous> && ssh {} docker image inspect stenio-sentinel:prev-<previous> (FAIL if either is missing)", a.host)),
         ("self-test", "~/.cargo/bin/stenio --self-test".to_string()),
         ("hook-fixtures", format!("bash <vault>/{} (last-but-one line N/N cases, last line MUTATION OK)", crate::hook_fixtures::SCRIPT_REL)),
@@ -1212,6 +1258,7 @@ fn fixture_tree(old: &str, new: &str) -> (RelArgs, PathBuf) {
         wait_secs: 0,
         build_timeout_secs: 1,
         install_dir: Some(install.clone()),
+        rollout: None,
         skip_ci: true,
         dry_run: false,
         worker: None,
@@ -1490,7 +1537,24 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     // walks every step, so its Line names must equal the plan's names — same set, same order.
     let executed: Vec<&str> = good.iter().map(|l| l.name).collect();
     let same_sequence = executed == planned;
+    let rolled = rollout_cases();
     vec![
+        (
+            "release-engine rollout updates every target and proves parity".to_string(),
+            rolled[0],
+        ),
+        (
+            "release-engine rollout restores a failing target and stops".to_string(),
+            rolled[1],
+        ),
+        (
+            "release-engine rollout parity names a target that differs".to_string(),
+            rolled[2],
+        ),
+        (
+            "release-engine rollout touches nothing after a failed step".to_string(),
+            rolled[3],
+        ),
         (
             "release-engine bad tag stops the sequence".to_string(),
             missing.len() == 1 && missing.first().is_some_and(|l| l.status == Status::Fail),
@@ -1612,6 +1676,71 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             hook_fixture_step_cases(),
         ),
     ]
+}
+
+/// The rollout over a scripted pair of targets: a service and a plain client.
+fn rollout_cases() -> [bool; 4] {
+    let (a, tree) = fixture_tree("4.17.0", "4.18.0");
+    let declaration = "[[target]]\nhost = \"srv\"\npath = \"/opt/s/stenio\"\nsudo = true\n\
+        backup_unit = \"s-backup.service\"\nrestart = \"s.service\"\n\
+        health = \"http://127.0.0.1:1/healthz\"\n\
+        [[target]]\nhost = \"cli\"\npath = \"~/.local/bin/stenio\"\n";
+    let file = a.repo.join(rollout::DECLARATION);
+    let made = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&file, declaration));
+    let built = a.repo.join("target/release/stenio");
+    let (Ok(()), Ok(targets), Ok(sha)) = (made, rollout::load(&file), rollout::digest(&built))
+    else {
+        return [false; 4];
+    };
+    let release = rollout::Release {
+        binary: &built,
+        version: "4.18.0",
+        sha256: &sha,
+    };
+    let mut good = scripted(&a, "4.18.0");
+    for t in &targets {
+        for (argv, answer) in rollout::scripted(t, &release, "4.17.0") {
+            good.insert(key(&argv), (0, answer));
+        }
+    }
+    let find = |lines: &[Line], name: &str| lines.iter().find(|l| l.name == name).cloned();
+    let is = |lines: &[Line], name: &str, status: Status, text: &str| {
+        find(lines, name).is_some_and(|l| l.status == status && l.detail.contains(text))
+    };
+    let run = run_steps(&Fake(good.clone()), &a);
+    let all =
+        is(&run, "rollout", Status::Pass, "2/2") && is(&run, "rollout-parity", Status::Pass, "2/2");
+    let Some(server) = targets.first() else {
+        return [false; 4];
+    };
+    let mut sick = good.clone();
+    sick.insert(
+        key(&rollout::activate_argv(server, &release)),
+        (1, String::new()),
+    );
+    let run = run_steps(&Fake(sick), &a);
+    let restored = is(&run, "rollout", Status::Fail, "restored 4.17.0")
+        && is(&run, "rollout", Status::Fail, "1 target(s) not updated");
+    let mut drifted = good.clone();
+    drifted.insert(
+        key(&rollout::parity_argv(server)),
+        (0, "0000  /opt/s/stenio\nstenio 4.18.0\n".to_string()),
+    );
+    let run = run_steps(&Fake(drifted), &a);
+    let named = is(&run, "rollout-parity", Status::Fail, "1/2")
+        && is(&run, "rollout-parity", Status::Fail, "srv:/opt/s/stenio");
+    let mut broken = good;
+    broken.insert(
+        key(&[built.display().to_string(), "--guardian".to_string()]),
+        (1, String::new()),
+    );
+    let run = run_steps(&Fake(broken), &a);
+    let untouched = is(&run, "rollout", Status::Skip, "no other target");
+    let _ = std::fs::remove_dir_all(&tree);
+    [all, restored, named, untouched]
 }
 
 /// Rule 12.3: the step count is derived from `plan()`, never typed. What is pinned instead is the

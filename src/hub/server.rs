@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::config::Config;
 use super::resource::{self, Resource};
 use super::store::{NewEvent, Store, append, meta, next_counter, set_meta};
-use super::{HubError, HubResult, audit, iso, ledger, mcp, now_ms, quota, view};
+use super::{HubError, HubResult, audit, guard, hooks, iso, ledger, mcp, now_ms, quota, view};
 
 /// How long the queue write claim of one engine write lasts if its end never arrives.
 const WRITE_LEASE_MS: i64 = 120_000;
@@ -332,8 +332,51 @@ pub fn dispatch(
         }
         "session_workers" => {
             let session = required(&args, "session")?;
-            let found = store.read(|c| ledger::session_workers(c, &session))?;
+            // Without `agent` every worker of the session; with it, those the sub-agent that
+            // runs the hook may renew.
+            let found = match text(&args, "agent") {
+                Some(agent) => {
+                    if let Some(said) = text(&args, "said") {
+                        hooks::learn_join(&mut store, &session, &agent, &said)?;
+                    }
+                    hooks::speakers(&mut store, &session, &agent, agent.is_empty())
+                }
+                None => store.read(|c| ledger::session_workers(c, &session))?,
+            };
             return Ok(json!({"ok": true, "workers": found}));
+        }
+        "tree_check" => {
+            ledger::sweep_now(&mut store)?;
+            let session = text(&args, "session");
+            let agent = text(&args, "agent").unwrap_or_default();
+            let mut mine = strings(&args, "mine");
+            return store.read(|c| {
+                if let Some(session) = &session {
+                    mine.extend(hooks::tree_speakers(c, session, &agent)?);
+                }
+                for path in strings(&args, "paths") {
+                    let own = format!("/@{}{path}", client.name);
+                    if let Some(refused) = guard::tree_refusal(c, &own, &mine)? {
+                        return Err(refused);
+                    }
+                }
+                Ok(json!({"ok": true}))
+            });
+        }
+        "attempts_reset" => {
+            if client.role != Role::Owner {
+                return Err(HubError::refused(
+                    "owner_only",
+                    "only a client with the owner role may reset the attempts of a row",
+                    "the owner runs it from an owner client or on the server host",
+                ));
+            }
+            return ledger::reset_attempts(
+                &mut store,
+                &required(&args, "row")?,
+                &required(&args, "reason")?,
+                true,
+            );
         }
         "claim_holder" => {
             ledger::sweep_now(&mut store)?;

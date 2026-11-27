@@ -249,6 +249,13 @@ enum Cmd {
         #[arg(long)]
         recommend: Option<String>,
     },
+    /// Owner only, at a terminal: give a row a new attempt budget
+    ResetAttempts {
+        #[arg(long)]
+        row: String,
+        #[arg(long)]
+        reason: String,
+    },
     /// Record the owner's answer (command line only; grants nothing)
     Answer {
         #[arg(long)]
@@ -525,6 +532,16 @@ fn execute_remote(server: &remote::Remote, command: Cmd) -> HubResult<Value> {
         Cmd::Answer { id, text, via } => {
             send("answer", json!({"id": id, "text": text, "via": via}))
         }
+        Cmd::ResetAttempts { row, reason } => {
+            if !std::io::stdin().is_terminal() {
+                return Err(HubError::refused(
+                    "owner_only",
+                    "resetting attempts is the owner's decision and needs an interactive terminal",
+                    "ask the owner (stenio hub ask)",
+                ));
+            }
+            send("attempts_reset", json!({"row": row, "reason": reason}))
+        }
         Cmd::Questions { all, cursor } => send("questions", json!({"all": all, "cursor": cursor})),
         local @ Cmd::Backlog { .. } => execute_local(local),
         Cmd::Quota { command } => match command {
@@ -763,6 +780,9 @@ fn execute_local(command: Cmd) -> HubResult<Value> {
             ledger::ask(&mut open()?, &request)
         }
         Cmd::Answer { id, text, via } => ledger::answer(&mut open()?, id, &text, &via),
+        Cmd::ResetAttempts { row, reason } => {
+            ledger::reset_attempts(&mut open()?, &row, &reason, std::io::stdin().is_terminal())
+        }
         Cmd::Questions { all, cursor } => view::questions_view(&mut open()?, all, cursor),
         Cmd::Backlog {
             id,
@@ -873,6 +893,18 @@ fn plain(value: &Value) -> String {
     out.trim_end().to_string()
 }
 
+/// Writes the answer. A reader that closes the pipe early (`| head`) ends the output quietly
+/// instead of panicking; the command itself already happened.
+fn emit(text: &str) {
+    use std::io::{ErrorKind, Write};
+    let mut out = std::io::stdout().lock();
+    if let Err(e) = out.write_all(text.as_bytes()).and_then(|()| out.flush())
+        && e.kind() != ErrorKind::BrokenPipe
+    {
+        eprintln!("stenio hub: cannot write the answer: {e}");
+    }
+}
+
 /// `args` are the words after `stenio hub`.
 pub fn run_cli(args: &[String]) -> i32 {
     let argv = std::iter::once("stenio hub".to_string()).chain(args.iter().cloned());
@@ -892,21 +924,25 @@ pub fn run_cli(args: &[String]) -> i32 {
     }
     match execute(parsed.command) {
         Ok(Value::String(text)) => {
-            print!("{text}");
+            emit(&text);
             0
         }
         Ok(value) => {
+            // The warning of an unbound join must be seen even when stdout is captured.
+            if let Some(warning) = value["warning"].as_str() {
+                eprintln!("WARNING: {warning}");
+            }
             if parsed.json {
-                println!("{value}");
+                emit(&format!("{value}\n"));
             } else {
-                println!("{}", plain(&value));
+                emit(&format!("{}\n", plain(&value)));
             }
             // An audit that found a problem is a completed command with a negative answer.
             i32::from(value["ok"] == json!(false))
         }
         Err(e) => {
             if parsed.json {
-                println!("{}", e.to_json());
+                emit(&format!("{}\n", e.to_json()));
             } else {
                 eprintln!("{e}");
             }
