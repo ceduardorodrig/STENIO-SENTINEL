@@ -9,6 +9,7 @@ mod env_example;
 mod env_stack;
 mod env_wired;
 pub mod explain;
+mod helper_check;
 mod identities;
 mod redact;
 mod store;
@@ -74,6 +75,7 @@ const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[
     ("secret-dumps", dumps::run_cli),
     ("secret-identities", identities::run_cli),
     ("redact", redact::run_cli),
+    ("secrets-helper-check", helper_check::run_cli),
 ];
 
 /// Runs `argv[1]` when it is a suite subcommand; `None` lets the engine parse the line.
@@ -127,6 +129,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     cases.extend(dumps::self_test_cases());
     cases.extend(identities::self_test_cases());
     cases.extend(redact::self_test_cases());
+    cases.extend(helper_check::self_test_cases());
     cases.extend(env_wired::self_test_cases());
     cases.extend(env_stack::self_test_cases());
     cases.extend(env_example::self_test_cases());

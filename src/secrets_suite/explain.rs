@@ -102,4 +102,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "some-command | stenio redact --store store.enc.env --decrypt --tool some-command",
         remediation: "Pipe tool output through the filter in the harness hook; rotate any value the scan finds (owner decision).",
     },
+    RuleExplanation {
+        id: "SECRETS-HELPER-HAS-NO-FALLBACK",
+        name: "Secrets Helper Yields Nothing Silently",
+        severity: "ERROR",
+        tag: "sec",
+        summary: "`stenio secrets-helper-check [--min N] [--state F] [--accept] [--copy P --vault D] -- <helper>` fails with one warning naming the helper when it yields zero keys, fewer than the floor or the last known count, or when the outside-vault encrypted copy is missing, plaintext, inside the vault or short.",
+        rationale: "A helper with a short timeout and discarded stderr booted the agent with no credentials and said nothing; its store lives in a synced, movable folder.",
+        bad_example: "secrets.command points at a moved path: zero secrets, no message",
+        good_example: "stenio secrets-helper-check --min 100 --state ~/.cache/helper.count -- sops -d --output-type dotenv <store>",
+        remediation: "Run it in the consumer's startup hook, fix the helper path or the age key, keep an encrypted copy outside the vault.",
+    },
 ];
