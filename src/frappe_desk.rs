@@ -9,6 +9,8 @@ use crate::explain::RuleExplanation;
 
 #[path = "frappe_desk/po_resolves.rs"]
 mod po_resolves;
+#[path = "frappe_desk/reqd_messages.rs"]
+mod reqd_messages;
 #[path = "frappe_desk/support.rs"]
 mod support;
 
@@ -18,11 +20,18 @@ pub(super) struct Item {
     cases: fn() -> Vec<(String, bool)>,
 }
 
-const ITEMS: &[Item] = &[Item {
-    explain: &po_resolves::EXPLAIN,
-    run: po_resolves::run,
-    cases: po_resolves::cases,
-}];
+const ITEMS: &[Item] = &[
+    Item {
+        explain: &po_resolves::EXPLAIN,
+        run: po_resolves::run,
+        cases: po_resolves::cases,
+    },
+    Item {
+        explain: &reqd_messages::EXPLAIN,
+        run: reqd_messages::run,
+        cases: reqd_messages::cases,
+    },
+];
 
 fn severity(e: &RuleExplanation) -> Severity {
     if e.severity == "ERROR" {
