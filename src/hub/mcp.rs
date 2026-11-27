@@ -48,6 +48,7 @@ pub fn tool_definitions() -> Vec<Value> {
             &["harness"],
             json!({"harness": text("e.g. claude, hermes, opencode"),
                 "harness_version": text("Harness version"), "model": text("Model name"),
+                "session": text("Harness session id that hooks report"),
                 "host": text("Host name (default: this machine)"),
                 "parent": text("Coordinator's worker id"),
                 "account": text("Quota account")}),
@@ -207,6 +208,7 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
             &ledger::Join {
                 harness: args.required("harness")?,
                 harness_version: args.text("harness_version")?,
+                session: args.text("session")?,
                 model: args.text("model")?,
                 host: args.text("host")?,
                 parent: args.text("parent")?,

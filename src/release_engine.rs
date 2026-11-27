@@ -8,6 +8,7 @@
 
 use clap::Parser;
 use serde_json::Value;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -53,6 +54,22 @@ struct RelArgs {
         help = "Do not wait for the GitHub runs (offline or already green)"
     )]
     skip_ci: bool,
+    #[arg(
+        long,
+        help = "Ledger worker that holds the release claim (or $STENIO_HUB_WORKER)"
+    )]
+    worker: Option<String>,
+    #[arg(
+        long,
+        default_value = "stenio",
+        help = "Name of the release:<name> claim"
+    )]
+    release_name: String,
+    #[arg(
+        long,
+        help = "Owner only: release without the claim; accepted from an interactive terminal"
+    )]
+    without_lease: bool,
     #[arg(
         long,
         help = "Print the plan and the commands without running anything"
@@ -1027,6 +1044,24 @@ fn valid(a: &RelArgs) -> bool {
         && a.compose_dir.starts_with('/')
 }
 
+/// No release without the `release:<name>` claim. The only way around it is the owner, at a
+/// terminal, so a broken ledger cannot lock the owner out.
+fn lease_gate(a: &RelArgs, terminal: bool) -> Result<(), String> {
+    if a.without_lease {
+        if !terminal {
+            return Err("--without-lease is accepted only from an interactive terminal".into());
+        }
+        println!(
+            "WARN {:<16} skipped by the owner (--without-lease)",
+            "lease"
+        );
+        return Ok(());
+    }
+    let held = crate::hub::hooks::require_release(&a.release_name, a.worker.as_deref())?;
+    println!("PASS {:<16} {held}", "lease");
+    Ok(())
+}
+
 /// The commands the run would execute, for `--dry-run`.
 fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
     let version = a.tag.trim_start_matches('v').to_string();
@@ -1079,6 +1114,10 @@ pub fn run_cli(argv: &[String]) -> i32 {
             println!("PLAN {:<16} {cmd}", name);
         }
         return 0;
+    }
+    if let Err(why) = lease_gate(&a, std::io::stdin().is_terminal()) {
+        println!("FAIL {:<16} {why}", "lease");
+        return 1;
     }
     println!(
         "stenio release-engine tag={} repo={} host={} container={}",
@@ -1175,6 +1214,9 @@ fn fixture_tree(old: &str, new: &str) -> (RelArgs, PathBuf) {
         install_dir: Some(install.clone()),
         skip_ci: true,
         dry_run: false,
+        worker: None,
+        release_name: "stenio".to_string(),
+        without_lease: false,
     };
     let _ = std::fs::write(repo.join("target/release/stenio"), new);
     let _ = std::fs::write(install.join("stenio"), old);

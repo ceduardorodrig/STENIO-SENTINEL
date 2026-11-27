@@ -24,8 +24,11 @@ unavailable.
    sample exists (`quota refresh` reads them all). An unknown or stale quota allows one working
    worker per account; 60% or more allows two; 80% or more allows no new row.
 3. `claim row:<ID> tree:<absolute path of your clone>` (all or nothing). Keep the `fence`.
-4. `beat` before the lease ends (default 20 minutes). A hook after each tool call may run
-   `stenio hub beat --from-hook`.
+4. `beat` before the lease ends (default 20 minutes). A hook after each tool call runs
+   `stenio hub beat --from-hook` (payload on stdin, always exit 0). It renews the worker named by
+   `STENIO_HUB_WORKER`, else every worker joined from the same harness session (`join --session`
+   or the declared session variable). A hook before each file edit runs `stenio hub guard`:
+   exit 2 refuses a hand edit of a queue file whose write claim another worker holds.
 5. `event --type checkpoint --fence <n> --clone <dir> --branch <b> --next-step <text>` at every
    stop. Whoever takes over an expired lease receives it.
 6. Need the owner: `ask --row <ID> --text <question> --option <a> --option <b> --recommend <a>`,
@@ -50,6 +53,14 @@ While a worker holds `backlog:<prefix>:write`, only `stenio backlog close --work
 selects another queue than GB and needs `--ref`; `--json` prints the id or the refusal). A dry
 run reports the same refusal. The claim covers every directory unless it was taken with
 `--path <root>`; then a scratch copy elsewhere stays writable.
+
+## Release and backup
+
+`release-engine` refuses without a live `release:stenio` claim of the caller (`--worker`). Only
+the owner, at a terminal, may pass `--without-lease`.
+
+`stenio hub backup --out <dir>` writes a snapshot and the event export and restore-tests them;
+`backup --check <dir>` fails when the newest is older than 26 hours; `status` reports a stale one.
 
 ## Limits of this release
 

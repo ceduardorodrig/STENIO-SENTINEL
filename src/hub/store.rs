@@ -339,6 +339,24 @@ impl Store {
         Ok(value)
     }
 
+    /// Writes a consistent copy of the live database to `target`, which must not exist.
+    pub fn snapshot(&mut self, target: &Path) -> HubResult<()> {
+        let target = target
+            .to_str()
+            .ok_or_else(|| HubError::Usage("the backup path is not UTF-8".to_string()))?;
+        retry_busy(|| self.conn.execute("VACUUM INTO ?1", [target]))?;
+        Ok(())
+    }
+
+    /// Leaves a copy as one self-contained file (no write-ahead log beside it).
+    pub fn seal(&mut self) -> HubResult<()> {
+        retry_busy(|| {
+            self.conn
+                .query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))
+        })?;
+        Ok(())
+    }
+
     /// A consistent read snapshot.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> HubResult<T>) -> HubResult<T> {
         let tx = self

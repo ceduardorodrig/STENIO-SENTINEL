@@ -198,6 +198,16 @@ pub fn status(
             let n = counts.get(&key).and_then(Value::as_u64).unwrap_or(0);
             counts.insert(key, json!(n + 1));
         }
+        if super::hooks::older_than(conn, cfg.backup.max_age_secs)?
+            && let Some(why) = super::config::db_path()
+                .ok()
+                .and_then(|db| super::backup::overdue(&db, cfg.backup.max_age_secs))
+        {
+            items.insert(
+                0,
+                json!({"kind": "backup", "state": "stale", "reason": why}),
+            );
+        }
         let (page, next) = paginate(items, cursor);
         Ok(
             json!({"ok": true, "open_runs": runs.len(), "counts": counts, "items": page,

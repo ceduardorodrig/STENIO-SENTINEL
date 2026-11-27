@@ -136,6 +136,29 @@ fn refuse_held(
     Ok(())
 }
 
+/// Why a hand edit of the `prefix` queue under `root` is refused for a caller that speaks for
+/// `mine`: another worker holds its write claim.
+pub fn hand_edit_refusal(
+    conn: &Connection,
+    root: &Path,
+    prefix: &str,
+    mine: &[String],
+) -> Option<String> {
+    let prefixes = [prefix.to_string()];
+    let mut last = None;
+    for who in mine.iter().map(|w| Some(w.as_str())).chain([None]) {
+        match refuse_held(conn, root, &prefixes, who) {
+            Ok(()) => return None,
+            Err(e) => last = Some(e),
+        }
+    }
+    // A ledger that cannot answer does not block an ordinary edit.
+    match last {
+        Some(e @ HubError::Refused(_)) => Some(e.to_string()),
+        _ => None,
+    }
+}
+
 fn ledger_file(given: Option<&Path>) -> HubResult<PathBuf> {
     match given {
         Some(p) => Ok(p.to_path_buf()),

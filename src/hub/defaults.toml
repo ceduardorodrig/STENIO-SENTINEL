@@ -31,6 +31,16 @@ command_timeout_secs = 30
 claude-code = "anthropic"
 opencode = "opencode-go"
 
+# The harness session id: variables its shell commands see, and fields of its hook payloads.
+# `join` binds the worker to it, so `beat --from-hook` and `guard` need no exported worker id.
+[session]
+env = ["CLAUDE_CODE_SESSION_ID"]
+fields = ["session_id", "sessionId", "conversationId"]
+
+[backup]
+# `hub status` and `hub backup --check` report a ledger backup older than this.
+max_age_secs = 93600
+
 # Read-only commands that report account limits. Stenio never reads key files.
 [[quota.source]]
 account = "anthropic"

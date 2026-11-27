@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::config::{self, Config, WORKER_ENV};
 use super::store::Store;
-use super::{HubError, HubResult, audit, ledger, quota, view};
+use super::{HubError, HubResult, audit, backup, hooks, ledger, quota, view};
 
 /// The one-page instructions for workers draining a queue.
 pub const GUIDE: &str = include_str!("queue-drain.md");
@@ -113,6 +113,24 @@ enum Cmd {
             help = "Quota account (default: declared per harness, else its name)"
         )]
         account: Option<String>,
+        #[arg(
+            long,
+            help = "Harness session id that hooks report (default: declared variable)"
+        )]
+        session: Option<String>,
+    },
+    /// Renew nothing, check a pending file edit (hook payload on stdin; exit 2 blocks)
+    Guard,
+    /// Snapshot the ledger into a directory, or check the newest snapshot there
+    Backup {
+        #[arg(long, required_unless_present = "check", conflicts_with = "check")]
+        out: Option<std::path::PathBuf>,
+        #[arg(long, default_value_t = 14, help = "Snapshots kept in --out")]
+        keep: usize,
+        #[arg(long, help = "Fail unless the newest snapshot is recent and restores")]
+        check: Option<std::path::PathBuf>,
+        #[arg(long, help = "Limit for --check: seconds, or with s, m, h")]
+        max_age: Option<String>,
     },
     /// Open, inspect and close runs
     Run {
@@ -349,6 +367,7 @@ fn execute(command: Cmd) -> HubResult<Value> {
             host,
             parent,
             account,
+            session,
         } => ledger::join(
             &mut open()?,
             &cfg,
@@ -359,8 +378,23 @@ fn execute(command: Cmd) -> HubResult<Value> {
                 host,
                 parent,
                 account,
+                session,
             },
         ),
+        Cmd::Guard => Err(HubError::Usage("guard runs as a hook".to_string())),
+        Cmd::Backup {
+            out,
+            keep,
+            check,
+            max_age,
+        } => match (check, out) {
+            (Some(dir), _) => {
+                let limit = max_age.as_deref().map(parse_ttl).transpose()?;
+                backup::check(&dir, limit.unwrap_or(cfg.backup.max_age_secs))
+            }
+            (None, Some(dir)) => backup::backup(&dir, keep),
+            (None, None) => Err(HubError::Usage("give --out or --check".to_string())),
+        },
         Cmd::Run { command } => match command {
             RunCmd::Start {
                 rows,
@@ -571,22 +605,15 @@ pub fn run_cli(args: &[String]) -> i32 {
         Ok(p) => p,
         Err(e) => return crate::util::usage_exit(&e),
     };
-    let quiet = matches!(
-        parsed.command,
+    // Hooks have their own exit contract and never fail the tool call by accident.
+    match &parsed.command {
         Cmd::Beat {
+            who,
+            fence,
             from_hook: true,
-            ..
-        }
-    );
-    // A hook of a session that never joined has nothing to renew.
-    if let Cmd::Beat {
-        who,
-        from_hook: true,
-        ..
-    } = &parsed.command
-        && who.id().is_err()
-    {
-        return 0;
+        } => return hooks::beat_hook(who.worker.as_deref(), *fence),
+        Cmd::Guard => return hooks::guard_hook(),
+        _ => {}
     }
     match execute(parsed.command) {
         Ok(Value::String(text)) => {
@@ -596,7 +623,7 @@ pub fn run_cli(args: &[String]) -> i32 {
         Ok(value) => {
             if parsed.json {
                 println!("{value}");
-            } else if !quiet {
+            } else {
                 println!("{}", plain(&value));
             }
             // An audit that found a problem is a completed command with a negative answer.
