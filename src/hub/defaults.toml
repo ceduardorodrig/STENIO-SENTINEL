@@ -36,6 +36,8 @@ opencode = "opencode-go"
 [session]
 env = ["CLAUDE_CODE_SESSION_ID"]
 fields = ["session_id", "sessionId", "conversationId"]
+# Names the sub-agent in a hook payload (sub-agents share the session id).
+agent_fields = ["agent_id"]
 
 [backup]
 # `hub status` and `hub backup --check` report a ledger backup older than this.

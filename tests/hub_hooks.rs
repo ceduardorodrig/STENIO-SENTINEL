@@ -130,6 +130,15 @@ fn guard_refuses_only_a_non_holder() -> Fallible {
         "args": {"TargetFile": f.backlog().display().to_string()}}});
     let denied = f.run(&["hub", "guard"], &agy.to_string())?;
     assert!(denied.out.contains("\"deny\""), "{}", denied.out);
+    // The guard never grants: an edit it does not block keeps the normal permission prompt.
+    for payload in [
+        agy.to_string().replace("s-other", "s-holder"),
+        "{\"toolCall\": {\"name\": \"view_file\"}}".to_string(),
+    ] {
+        let passed = f.run(&["hub", "guard"], &payload)?;
+        assert!(passed.out.contains("\"ask\""), "{}", passed.out);
+        assert!(!passed.out.contains("allow"), "{}", passed.out);
+    }
     Ok(())
 }
 
@@ -165,6 +174,41 @@ fn hook_heartbeat_keeps_the_lease_and_its_absence_loses_it() -> Fallible {
     let other = f.join("s-new")?;
     assert_eq!(f.claim(&other, "branch:kept", "1m")?.code, 1);
     assert_eq!(f.claim(&other, "branch:lost", "1m")?.code, 0);
+    Ok(())
+}
+
+#[test]
+fn a_dead_sub_agent_expires_while_its_session_works() -> Fallible {
+    let f = Fixture::new("agents")?;
+    let main = f.join("s")?;
+    let child = f.join("s")?;
+    let seen = |worker: &str, agent: Option<&str>| {
+        let mut payload = json!({"session_id": "s", "tool_name": "Bash",
+            "tool_input": {"command": "stenio hub join --harness t"},
+            "tool_response": {"stdout": format!("worker: {worker}")}});
+        if let Some(agent) = agent {
+            payload["agent_id"] = json!(agent);
+        }
+        f.run(&["hub", "beat", "--from-hook"], &payload.to_string())
+    };
+    assert_eq!(seen(&main, None)?.code, 0);
+    assert_eq!(seen(&child, Some("a1"))?.code, 0);
+    assert_eq!(f.claim(&main, "branch:main", "3s")?.code, 0);
+    assert_eq!(f.claim(&child, "branch:child", "3s")?.code, 0);
+    // The sub-agent is gone: only the main thread and a sibling keep calling tools.
+    for round in 0..4 {
+        std::thread::sleep(Duration::from_millis(1100));
+        let mut payload = json!({"session_id": "s"});
+        if round % 2 == 1 {
+            payload["agent_id"] = json!("a2");
+            f.run(&["hub", "beat", "--from-hook"], &payload.to_string())?;
+            payload = json!({"session_id": "s"});
+        }
+        f.run(&["hub", "beat", "--from-hook"], &payload.to_string())?;
+    }
+    let other = f.join("s-new")?;
+    assert_eq!(f.claim(&other, "branch:main", "1m")?.code, 1);
+    assert_eq!(f.claim(&other, "branch:child", "1m")?.code, 0);
     Ok(())
 }
 

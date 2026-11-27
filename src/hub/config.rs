@@ -32,6 +32,13 @@ pub struct Config {
 pub struct Session {
     pub env: Vec<String>,
     pub fields: Vec<String>,
+    /// Payload fields that name the sub-agent inside a session.
+    #[serde(default = "agent_fields")]
+    pub agent_fields: Vec<String>,
+}
+
+fn agent_fields() -> Vec<String> {
+    vec!["agent_id".to_string()]
 }
 
 impl Default for Session {
@@ -42,6 +49,7 @@ impl Default for Session {
             fields: ["session_id", "sessionId", "conversationId"]
                 .map(str::to_string)
                 .to_vec(),
+            agent_fields: agent_fields(),
         }
     }
 }
