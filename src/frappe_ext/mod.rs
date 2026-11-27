@@ -15,6 +15,7 @@ mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
 mod test_cleanup; // FRAPPE-TEST-CLEANUP-DEFERRED
+mod test_verdict; // FRAPPE-TEST-VERDICT
 
 pub(crate) struct Item {
     pub severity: Severity,
@@ -28,6 +29,7 @@ pub(crate) static ITEMS: &[&Item] = &[
     &dead_except::ITEM,
     &masked_literal::ITEM,
     &test_cleanup::ITEM,
+    &test_verdict::ITEM,
 ];
 
 /// `(id, name, severity)` of every rule here, in the shape of `frappe::RULES`.
