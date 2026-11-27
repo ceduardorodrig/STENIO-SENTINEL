@@ -75,7 +75,8 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
 }
 
 /// Host subcommands of the suite.
-const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[
+type Command = fn(&[String]) -> i32;
+const COMMANDS: &[(&str, Command)] = &[
     ("secrets-drift", drift::run_cli),
     ("secret-dumps", dumps::run_cli),
     ("secret-identities", identities::run_cli),
