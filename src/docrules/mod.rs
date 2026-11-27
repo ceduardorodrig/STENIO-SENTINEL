@@ -23,6 +23,7 @@ pub struct DocRule {
 }
 
 mod incident;
+mod inline_style;
 mod rule_count;
 
 pub static RULES: &[&DocRule] = &[&incident::RULE, &rule_count::RULE, &inline_style::RULE];
