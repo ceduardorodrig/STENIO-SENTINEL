@@ -11,6 +11,7 @@ use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 use std::path::{Path, PathBuf};
 
+mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
 
 pub(crate) struct Item {
@@ -21,6 +22,7 @@ pub(crate) struct Item {
 }
 
 pub(crate) static ITEMS: &[&Item] = &[
+    &dead_except::ITEM,
     &masked_literal::ITEM,
 ];
 
