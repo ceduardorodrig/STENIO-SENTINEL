@@ -131,6 +131,10 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(session_orphan::self_test_cases()); // GB-235
     all.extend(shrink_guard::self_test_cases()); // GB-236
     all.extend(socket_order::self_test_cases()); // GB-171
+    all.push(case(
+        "hostops: aggregate scope blocks on promoted lints only",
+        aggregate_grading_holds(),
+    ));
     all.extend(vdisplay::self_test_cases()); // GB-253
     all
 }
@@ -247,9 +251,58 @@ fn mirror_dirs(mirror: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Entry point of the main scan. In the aggregate homelab scope every finding is a warning (the
-/// live tree still carries known open items); an explicit `--only <RULE_ID>` keeps the
-/// severity the rule declares.
+/// Lints whose real trees are clean: they keep their declared severity in the aggregate scope.
+const BLOCKING: &[&str] = &[backup_verify::RULE_ID, socket_order::RULE_ID];
+
+/// Host directories of the configs mirror.
+const FLEET: &[&str] = &["psicopompo", "kavure", "kuaray", "ybytu", "ybyra", "kururu"];
+
+/// A mirrored repository checkout (`<host>/homelab/<repo>/…`, in the mirror or in a clone of it)
+/// lags the repository, whose own scan is the authority; deployed units and scripts do not.
+fn is_mirrored_checkout(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts
+        .windows(2)
+        .any(|w| FLEET.contains(&w[0]) && w[1] == "homelab")
+}
+
+/// In the aggregate homelab scope only [`BLOCKING`] lints keep their severity (the live tree
+/// still carries known open items of the others).
+fn grade_aggregate(found: &mut [Violation]) {
+    for v in found {
+        if !BLOCKING.contains(&v.rule_id.as_str()) || is_mirrored_checkout(&v.file_path) {
+            v.severity = Severity::Warning;
+        }
+    }
+}
+
+/// Mutation proof of [`grade_aggregate`].
+fn aggregate_grading_holds() -> bool {
+    let mk =
+        |rule: &str, path: &str| violation(rule, Severity::Error, path, 1, "x", String::new(), "x");
+    let mut v = vec![
+        mk(socket_order::RULE_ID, "u/x.socket"),
+        mk(
+            backup_verify::RULE_ID,
+            &format!("{MIRROR}/kuaray/bin/x-backup"),
+        ),
+        mk(
+            backup_verify::RULE_ID,
+            "clone/psicopompo/homelab/repo/x-backup",
+        ),
+        mk(alert_independence::RULE_ID, "m/alertmanager.yml"),
+    ];
+    grade_aggregate(&mut v);
+    v.iter().map(|v| v.severity).eq([
+        Severity::Error,
+        Severity::Error,
+        Severity::Warning,
+        Severity::Warning,
+    ])
+}
+
+/// Entry point of the main scan; an explicit `--only <RULE_ID>` keeps the severity the rule
+/// declares.
 pub fn audit(root: &Path, only: Option<&str>) -> (Vec<String>, Vec<Violation>) {
     let mut files = collect(root);
     if root.join("mnemocine").is_dir() {
@@ -259,9 +312,7 @@ pub fn audit(root: &Path, only: Option<&str>) -> (Vec<String>, Vec<Violation>) {
     }
     let mut found = lint_files(&files, only);
     if only.is_none() {
-        for v in &mut found {
-            v.severity = Severity::Warning;
-        }
+        grade_aggregate(&mut found);
     }
     let message = format!(
         "hostops: {} static lint(s) over {} file(s), {} finding(s)",

@@ -19,7 +19,7 @@ pub static RULE: DocRule = DocRule {
     explain: RuleExplanation {
         id: "DOC-PDF-COVERS-SOURCE",
         name: "Published Artifact Is Stale",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "doc",
         summary: "When `<name>.html` or `<name>.pdf` (beside the document or in `pdf/`) is published from `<name>.md`, every `## ` heading must appear in it. PDF text is read with `pdftotext`; without it the PDF is not judged.",
         rationale: "GB-141: two manuals were updated while the .html and .pdf beside them kept the previous day, and only a human opening them would notice.",
@@ -89,7 +89,7 @@ fn check(ctx: &Ctx, out: &mut Vec<Violation>) {
             if let Some((idx, heading)) = missing.first() {
                 out.push(finding(
                     &RULE.explain,
-                    Severity::Warning,
+                    Severity::Error,
                     ctx.display(&path),
                     idx + 1,
                     heading,
