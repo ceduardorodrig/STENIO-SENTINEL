@@ -419,6 +419,27 @@ pub fn dispatch(
                 &required(&args, "via")?,
             );
         }
+        "quota_override" => {
+            if client.role != Role::Owner {
+                return Err(HubError::refused(
+                    "owner_only",
+                    "only a client with the owner role may lift the quota gate",
+                    "the owner runs it from an owner client or on the server host",
+                ));
+            }
+            let secs = args
+                .get("secs")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| HubError::Usage("missing argument 'secs'".to_string()))?;
+            // The client refuses without a terminal; the owner role is what the server checks.
+            return quota::set_override(
+                &mut store,
+                &required(&args, "account")?,
+                secs,
+                &required(&args, "reason")?,
+                true,
+            );
+        }
         "audit" => {
             let final_only = args.get("require_final") == Some(&json!(true));
             return audit::audit(&mut store, text(&args, "run").as_deref(), final_only);

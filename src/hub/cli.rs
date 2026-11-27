@@ -568,6 +568,27 @@ fn execute_remote(server: &remote::Remote, command: Cmd) -> HubResult<Value> {
                 )
             }
             QuotaCmd::Show { cursor } => send("stenio_quota", json!({"cursor": cursor})),
+            QuotaCmd::Override {
+                account,
+                duration,
+                reason,
+            } => {
+                if !std::io::stdin().is_terminal() {
+                    return Err(HubError::refused(
+                        "owner_only",
+                        "a quota override is the owner's decision and needs an interactive terminal",
+                        "ask the owner (stenio hub ask)",
+                    ));
+                }
+                let secs = match duration.trim() {
+                    "0" => 0,
+                    other => parse_ttl(other)?,
+                };
+                send(
+                    "quota_override",
+                    json!({"account": account, "secs": secs, "reason": reason}),
+                )
+            }
         },
         Cmd::Audit { run, require_final } => {
             send("audit", json!({"run": run, "require_final": require_final}))
