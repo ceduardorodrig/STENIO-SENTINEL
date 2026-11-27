@@ -1,0 +1,20 @@
+[Unit]
+Description=Snapshot of the Stenio shared work ledger, proven by a restore
+OnFailure=
+
+[Service]
+Type=oneshot
+User=stenio-hub
+Group=stenio-hub
+UMask=0077
+Environment=STENIO_HUB_DB=/srv/data/stenio-hub/state/hub.db
+ExecStart=/usr/local/lib/stenio-hub/stenio hub backup --out /srv/data/stenio-hub/backup --keep 14
+ExecStart=/usr/local/lib/stenio-hub/stenio hub backup --check /srv/data/stenio-hub/backup
+# The host mirror skips *.db files: keep the newest proven snapshot under a name it copies.
+ExecStart=/bin/sh -c 'for f in /srv/data/stenio-hub/backup/hub-*.db; do :; done; cp -- "$$f" /srv/data/stenio-hub/backup/latest.snapshot'
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ReadWritePaths=/srv/data/stenio-hub

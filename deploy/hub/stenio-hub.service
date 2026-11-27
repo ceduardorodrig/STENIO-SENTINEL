@@ -1,0 +1,35 @@
+[Unit]
+Description=Stenio shared work ledger (loopback; published by the private network TLS proxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=stenio-hub
+Group=stenio-hub
+UMask=0077
+# STENIO_HUB_PUBLIC_HOST: the one extra Host name the proxy forwards.
+EnvironmentFile=/etc/stenio-hub.env
+Environment=STENIO_HUB_DB=/srv/data/stenio-hub/state/hub.db
+ExecStart=/usr/local/lib/stenio-hub/stenio hub serve --clients /srv/data/stenio-hub/clients.toml --port 8797 --allow-host ${STENIO_HUB_PUBLIC_HOST}
+Restart=on-failure
+RestartSec=5
+MemoryMax=256M
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/srv/data/stenio-hub
+
+[Install]
+WantedBy=multi-user.target
