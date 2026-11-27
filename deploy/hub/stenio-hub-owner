@@ -1,0 +1,5 @@
+#!/bin/sh
+# Owner commands on the server host (answer, quota override), at an interactive terminal:
+#   ssh -t <server> stenio-hub-owner answer --id 1 --text yes
+exec sudo -u stenio-hub env STENIO_HUB_DB=/srv/data/stenio-hub/state/hub.db \
+    /usr/local/lib/stenio-hub/stenio hub "$@"

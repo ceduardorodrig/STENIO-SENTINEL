@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::config::{self, Config, WORKER_ENV};
 use super::store::Store;
-use super::{HubError, HubResult, audit, backup, hooks, ledger, quota, view};
+use super::{HubError, HubResult, audit, backup, hooks, ledger, quota, remote, server, view};
 
 /// The one-page instructions for workers draining a queue.
 pub const GUIDE: &str = include_str!("queue-drain.md");
@@ -297,6 +297,24 @@ enum Cmd {
         #[arg(long, help = "Write to this new file instead of stdout")]
         out: Option<PathBuf>,
     },
+    /// Serve the ledger to other machines (loopback by default, token always required)
+    Serve {
+        #[arg(long, help = "TOML list of clients: name, sha256 of the token, role")]
+        clients: PathBuf,
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: std::net::IpAddr,
+        #[arg(long, default_value_t = 8797)]
+        port: u16,
+        #[arg(long = "allow-host", help = "Extra accepted Host name (repeatable)")]
+        allow_host: Vec<String>,
+    },
+    /// Create a client token in a new private file and print the entry for the client list
+    Token {
+        #[arg(long)]
+        client: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// The worker instructions
     Guide,
 }
@@ -369,7 +387,230 @@ fn put_quota(
     quota::put(&mut open()?, account, "put", &[sample])
 }
 
+/// The declared server decides where a command runs; serving and its tokens are always here.
 fn execute(command: Cmd) -> HubResult<Value> {
+    match command {
+        Cmd::Serve {
+            clients,
+            bind,
+            port,
+            allow_host,
+        } => {
+            server::serve(config::db_path()?, clients, bind, port, &allow_host)?;
+            Ok(json!({"ok": true}))
+        }
+        Cmd::Token { client, out } => server::mint(&client, &out),
+        Cmd::Guide => Ok(Value::String(GUIDE.to_string())),
+        other => match remote::declared()? {
+            Some(server) => execute_remote(&server, other),
+            None => execute_local(other),
+        },
+    }
+}
+
+fn write_export(text: &str, out: &std::path::Path) -> HubResult<Value> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .map_err(|e| HubError::Usage(format!("cannot write {}: {e}", out.display())))?;
+    Ok(json!({"ok": true, "events": text.lines().count(),
+        "file": out.display().to_string()}))
+}
+
+/// The same command as one request; only what needs this machine happens here.
+fn execute_remote(server: &remote::Remote, command: Cmd) -> HubResult<Value> {
+    let send = |op: &str, args: Value| match args {
+        Value::Object(map) => remote::operate(server, op, map),
+        _ => Err(HubError::Usage("arguments must be an object".to_string())),
+    };
+    match command {
+        Cmd::Join {
+            harness,
+            harness_version,
+            model,
+            host,
+            parent,
+            account,
+            session,
+        } => send(
+            "hub_join",
+            json!({"harness": harness, "harness_version": harness_version, "model": model,
+                "host": host, "parent": parent, "account": account, "session": session}),
+        ),
+        Cmd::Run { command } => match command {
+            RunCmd::Start {
+                rows,
+                path,
+                slots,
+                goal,
+            } => {
+                let vault = view::resolve_root(None, path.as_deref())?;
+                let ids = ledger::run_row_ids(&vault, &rows)?;
+                send(
+                    "run_start",
+                    json!({"rows": ids, "vault": vault.display().to_string(), "slots": slots,
+                        "goal": goal}),
+                )
+            }
+            RunCmd::Show { run, cursor } => send("run_show", json!({"run": run, "cursor": cursor})),
+            RunCmd::Close { run } => send("run_close", json!({"run": run})),
+        },
+        Cmd::Claim {
+            who,
+            resources,
+            run,
+            ttl,
+            path: _,
+        } => send(
+            "hub_claim",
+            json!({"worker": who.id()?, "resources": resources, "run": run,
+                "ttl_secs": ttl.as_deref().map(parse_ttl).transpose()?}),
+        ),
+        Cmd::Beat { who, fence, .. } => {
+            send("hub_beat", json!({"worker": who.id()?, "fence": fence}))
+        }
+        Cmd::Release {
+            who,
+            fence,
+            resource,
+            reason,
+        } => send(
+            "hub_release",
+            json!({"worker": who.id()?, "fence": fence, "resource": resource, "reason": reason}),
+        ),
+        Cmd::Status { run, cursor } => send("hub_status", json!({"run": run, "cursor": cursor})),
+        Cmd::Event {
+            who,
+            kind,
+            fence,
+            note,
+            clone,
+            branch,
+            next_step,
+        } => send(
+            "hub_event",
+            json!({"worker": who.id()?, "type": kind, "fence": fence, "note": note,
+                "clone": clone, "branch": branch, "next_step": next_step}),
+        ),
+        Cmd::Handback {
+            who,
+            row,
+            fence,
+            verdict,
+            branch,
+            pr,
+            proof,
+            remaining,
+            defects,
+        } => send(
+            "hub_handback",
+            json!({"worker": who.id()?, "row": row, "fence": fence, "verdict": verdict,
+                "branch": branch, "pr": pr, "proof": proof, "remaining": remaining,
+                "defects": defects}),
+        ),
+        Cmd::Ask {
+            who,
+            row,
+            text,
+            options,
+            recommend,
+        } => send(
+            "hub_ask",
+            json!({"worker": who.id()?, "row": row, "text": text, "options": options,
+                "recommendation": recommend}),
+        ),
+        Cmd::Answer { id, text, via } => {
+            send("answer", json!({"id": id, "text": text, "via": via}))
+        }
+        Cmd::Questions { all, cursor } => send("questions", json!({"all": all, "cursor": cursor})),
+        local @ Cmd::Backlog { .. } => execute_local(local),
+        Cmd::Quota { command } => match command {
+            QuotaCmd::Refresh => send("quota_refresh", json!({})),
+            QuotaCmd::Put {
+                account,
+                window,
+                used,
+                resets_at,
+                from,
+            } => {
+                if let Some(source) = from {
+                    let mut input = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut input)
+                        .map_err(|e| HubError::Usage(format!("cannot read stdin: {e}")))?;
+                    return match quota::parse_statusline(&input) {
+                        Ok(windows) => {
+                            for w in &windows {
+                                send(
+                                    "quota_put",
+                                    json!({"account": account, "source": source,
+                                        "window": w.window, "used_pct": w.used_pct,
+                                        "resets_at": w.resets_at}),
+                                )?;
+                            }
+                            Ok(json!({"ok": true, "account": account,
+                                "windows": windows.len()}))
+                        }
+                        Err(reason) => send(
+                            "quota_put",
+                            json!({"account": account, "source": source, "unknown": reason}),
+                        ),
+                    };
+                }
+                let resets = resets_at.as_deref().map(parse_instant).transpose()?;
+                send(
+                    "quota_put",
+                    json!({"account": account, "source": "put", "window": window,
+                        "used_pct": used, "resets_at": resets}),
+                )
+            }
+            QuotaCmd::Show { cursor } => send("stenio_quota", json!({"cursor": cursor})),
+            QuotaCmd::Override {
+                account,
+                duration,
+                reason,
+            } => {
+                if !std::io::stdin().is_terminal() {
+                    return Err(HubError::refused(
+                        "owner_only",
+                        "a quota override is the owner's decision and needs an interactive terminal",
+                        "ask the owner (stenio hub ask)",
+                    ));
+                }
+                let secs = match duration.trim() {
+                    "0" => 0,
+                    other => parse_ttl(other)?,
+                };
+                send(
+                    "quota_override",
+                    json!({"account": account, "secs": secs, "reason": reason}),
+                )
+            }
+        },
+        Cmd::Audit { run, require_final } => {
+            send("audit", json!({"run": run, "require_final": require_final}))
+        }
+        Cmd::Export { run, out } => {
+            let reply = send("export", json!({"run": run}))?;
+            let text = reply["events"].as_str().unwrap_or_default().to_string();
+            match out {
+                Some(path) => write_export(&text, &path),
+                None => Ok(Value::String(text)),
+            }
+        }
+        Cmd::Backup { .. } => Err(HubError::Usage(
+            "the ledger is served by a server: back it up and check it there".to_string(),
+        )),
+        Cmd::Guard | Cmd::Serve { .. } | Cmd::Token { .. } | Cmd::Guide => Err(HubError::Usage(
+            "this command runs only on this machine".to_string(),
+        )),
+    }
+}
+
+fn execute_local(command: Cmd) -> HubResult<Value> {
     let cfg = Config::load()?;
     match command {
         Cmd::Join {
@@ -530,7 +771,10 @@ fn execute(command: Cmd) -> HubResult<Value> {
             path,
             cursor,
         } => {
-            let mut store = open().ok();
+            let mut store = match remote::declared()? {
+                Some(_) => None,
+                None => open().ok(),
+            };
             let root = view::resolve_root(store.as_mut(), path.as_deref())?;
             view::backlog(
                 &root,
@@ -590,7 +834,9 @@ fn execute(command: Cmd) -> HubResult<Value> {
                 None => Ok(Value::String(text)),
             }
         }
-        Cmd::Guide => Ok(Value::String(GUIDE.to_string())),
+        Cmd::Guide | Cmd::Serve { .. } | Cmd::Token { .. } => Err(HubError::Usage(
+            "this command does not use the ledger".to_string(),
+        )),
     }
 }
 

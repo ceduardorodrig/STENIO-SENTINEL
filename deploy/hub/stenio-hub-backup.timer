@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly Stenio ledger backup, before the 05:00 host mirror
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

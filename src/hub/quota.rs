@@ -435,6 +435,25 @@ fn read_into(store: &mut Store, policy: &QuotaPolicy, source: &QuotaSource) -> H
     }
 }
 
+/// Every stored sample, as the arguments of a server `quota_put`.
+pub fn wire_samples(store: &mut Store) -> HubResult<Vec<Value>> {
+    store.read(|c| {
+        let mut stmt =
+            c.prepare("SELECT account, window, used_pct, resets_at, source, reason FROM quota")?;
+        let rows = stmt.query_map([], |r| {
+            let used: Option<f64> = r.get(2)?;
+            let reason: Option<String> = r.get(5)?;
+            Ok(
+                json!({"account": r.get::<_, String>(0)?, "window": r.get::<_, String>(1)?,
+                "used_pct": used, "resets_at": r.get::<_, Option<i64>>(3)?,
+                "source": r.get::<_, String>(4)?,
+                "unknown": if used.is_none() { reason } else { None }}),
+            )
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    })
+}
+
 /// Reads every declared source.
 pub fn refresh(store: &mut Store, policy: &QuotaPolicy) -> HubResult<Value> {
     let mut report = BTreeMap::new();

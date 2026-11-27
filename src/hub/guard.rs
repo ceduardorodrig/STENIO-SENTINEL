@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::store::{NewEvent, Store, append};
-use super::{HubError, HubResult, config, ledger};
+use super::{HubError, HubResult, config, ledger, remote};
 use crate::backlog::queue_index::present_queues;
 
 const LOCK_WAIT: Duration = Duration::from_secs(60);
@@ -187,6 +187,11 @@ pub fn backlog_write<T>(
 ) -> HubResult<T> {
     let dirs: Vec<PathBuf> = present_queues(root).into_iter().map(|q| q.dir).collect();
     let _locks = lock_dirs(&dirs)?;
+    if ledger_path.is_none()
+        && let Some(server) = remote::declared()?
+    {
+        return served_write(&server, root, prefixes, worker, write);
+    }
     let path = ledger_file(ledger_path)?;
     if !path.exists() {
         return write().map(|(value, _)| value).map_err(write_failed);
@@ -212,6 +217,36 @@ pub fn backlog_write<T>(
     })
 }
 
+/// The same lock held by the ledger server: it takes the queue claims before the files change
+/// and ends them afterwards. An unreachable server refuses the write.
+fn served_write<T>(
+    server: &remote::Remote,
+    root: &Path,
+    prefixes: &[String],
+    worker: Option<&str>,
+    write: impl FnOnce() -> Result<(T, Written), String>,
+) -> HubResult<T> {
+    let begun = server.call(
+        "guard_begin",
+        json!({"worker": worker, "prefixes": prefixes}),
+    )?;
+    let outcome = write();
+    let written = outcome.as_ref().ok().map(|(_, written)| {
+        json!({"root": root.display().to_string(), "rows": written.rows,
+            "files": written.files_json()})
+    });
+    let ended = server.call(
+        "guard_end",
+        json!({"worker": worker, "fence": begun["fence"], "prefixes": prefixes,
+            "written": written}),
+    );
+    // The files are what counts: a lost end leaves a claim that expires by itself.
+    if let Err(e) = ended {
+        eprintln!("stenio: the queue write was not recorded in the ledger: {e}");
+    }
+    outcome.map(|(value, _)| value).map_err(write_failed)
+}
+
 /// [`backlog_write`] for a command line. A dry run writes nothing and takes no lock, but it
 /// reports the same refusal the real run would.
 pub fn guarded<T>(
@@ -225,9 +260,14 @@ pub fn guarded<T>(
     if !dry_run {
         return backlog_write(root, prefixes, worker.as_deref(), None, write);
     }
-    let path = ledger_file(None)?;
-    if path.exists() {
-        Store::open(&path)?.read(|c| refuse_held(c, root, prefixes, worker.as_deref()))?;
+    if let Some(server) = remote::declared()? {
+        let mine: Vec<&str> = worker.as_deref().into_iter().collect();
+        server.call("queue_check", json!({"prefixes": prefixes, "mine": mine}))?;
+    } else {
+        let path = ledger_file(None)?;
+        if path.exists() {
+            Store::open(&path)?.read(|c| refuse_held(c, root, prefixes, worker.as_deref()))?;
+        }
     }
     write().map(|(value, _)| value).map_err(write_failed)
 }

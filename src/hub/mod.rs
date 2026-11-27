@@ -19,8 +19,10 @@ pub mod hooks;
 pub mod ledger;
 pub mod mcp;
 pub mod quota;
+pub mod remote;
 pub mod resource;
 mod selftest;
+pub mod server;
 pub mod store;
 pub mod view;
 

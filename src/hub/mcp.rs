@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::config::{self, Config};
 use super::store::Store;
-use super::{HubError, HubResult, ledger, quota, view};
+use super::{HubError, HubResult, ledger, quota, remote, view};
 use crate::mcp::{McpRequest, McpResponse};
 
 /// Lines of the server instructions shown to a client at start.
@@ -193,7 +193,21 @@ impl Arguments<'_> {
     }
 }
 
+/// One operation on the ledger file at `db`, for the server.
+pub fn call_local(name: &str, args: &Map<String, Value>, db: &Path) -> HubResult<Value> {
+    call(name, &Arguments(args), Path::new("."), Some(db))
+}
+
 fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> HubResult<Value> {
+    let server = match db {
+        Some(_) => None,
+        None => remote::declared()?,
+    };
+    if let Some(server) = &server
+        && name != "stenio_backlog"
+    {
+        return remote::operate(server, name, args.0.clone());
+    }
     let cfg = Config::load()?;
     let open = || -> HubResult<Store> {
         match db {
@@ -238,7 +252,7 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
             &ledger::BeatRequest {
                 worker: args.worker()?,
                 fence: args.number("fence")?,
-                from_hook: false,
+                from_hook: args.0.get("from_hook") == Some(&json!(true)),
             },
         ),
         "hub_release" => ledger::release(
@@ -297,7 +311,10 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
             Ok(out)
         }
         "stenio_backlog" => {
-            let mut store = open().ok();
+            let mut store = match server {
+                Some(_) => None,
+                None => open().ok(),
+            };
             let given: Option<PathBuf> = args.text("path")?.map(|p| root.join(p));
             // The server's directory counts only when it holds queues itself.
             let fallback = given.clone().or_else(|| config::discover_root(Some(root)));
@@ -314,7 +331,7 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
     }
 }
 
-fn is_ledger_tool(name: &str) -> bool {
+pub fn is_ledger_tool(name: &str) -> bool {
     tool_definitions().iter().any(|t| t["name"] == name)
 }
 
