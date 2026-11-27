@@ -26,6 +26,7 @@ mod adr_roadmap;
 mod bind_claim;
 mod contract_parity;
 mod count_drift;
+mod english_codebase;
 mod incident;
 mod inline_style;
 mod live_claim;
@@ -46,6 +47,7 @@ pub static RULES: &[&DocRule] = &[
     &raci::RULE,
     &quote_source::RULE,
     &count_drift::RULE,
+    &english_codebase::RULE,
     &route_drift::RULE,
     &adr_roadmap::RULE,
 ];
