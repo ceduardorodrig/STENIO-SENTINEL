@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
+mod test_cleanup; // FRAPPE-TEST-CLEANUP-DEFERRED
 
 pub(crate) struct Item {
     pub severity: Severity,
@@ -26,6 +27,7 @@ pub(crate) static ITEMS: &[&Item] = &[
     &access_log::ITEM,
     &dead_except::ITEM,
     &masked_literal::ITEM,
+    &test_cleanup::ITEM,
 ];
 
 /// `(id, name, severity)` of every rule here, in the shape of `frappe::RULES`.
