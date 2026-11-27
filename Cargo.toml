@@ -16,6 +16,9 @@ name = "stenio"
 path = "src/main.rs"
 
 [dependencies]
+# The shared work ledger (`stenio hub`). `bundled` compiles SQLite into the binary, so the engine
+# does not depend on the host's library version.
+rusqlite = { version = "0.43", features = ["bundled"] }
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
 ignore = "0.4"

@@ -20,6 +20,11 @@ fn bin() -> &'static str {
 fn run(args: &[&str]) -> Output {
     Command::new(bin())
         .args(args)
+        // A claim held on this machine's real ledger must not decide the test.
+        .env(
+            "STENIO_HUB_DB",
+            std::env::temp_dir().join("stenio-cli-no-ledger/hub.db"),
+        )
         .output()
         .unwrap_or_else(|e| panic!("cannot run {}: {e}", bin()))
 }

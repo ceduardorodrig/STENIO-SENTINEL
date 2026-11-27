@@ -1,0 +1,38 @@
+# Central declaration of the shared work ledger. This copy is embedded in the engine; a host
+# overrides it with the file named by STENIO_HUB_CONFIG, or with
+# $XDG_CONFIG_HOME/stenio/hub.toml (default ~/.config/stenio/hub.toml). An override replaces
+# the whole file, so copy every section.
+
+[lease]
+default_ttl_secs = 1200
+max_ttl_secs = 86400
+# A hook heartbeat younger than this is not repeated.
+hook_beat_min_secs = 60
+
+[fleet]
+# Ceiling of fleet:slot claims when no run declares fewer.
+ceiling = 5
+
+[quota]
+# A sample older than this is "stale" and no longer proves there is room.
+fresh_secs = 300
+# At this percentage no new row or slot is claimed.
+stop_percent = 80.0
+# At this percentage at most `throttle_workers` workers of one account hold work.
+throttle_percent = 60.0
+throttle_workers = 2
+unknown_workers = 1
+resume_margin_secs = 120
+command_timeout_secs = 30
+
+# Quota account of a harness that joins without --account. Unlisted harnesses use their own name.
+[accounts]
+
+# Read-only commands that report account limits. Stenio never reads key files.
+[[quota.source]]
+account = "anthropic"
+command = ["hermes", "usage", "--provider", "anthropic", "--json"]
+
+[[quota.source]]
+account = "opencode-go"
+command = ["hermes", "usage", "--provider", "opencode-go", "--json"]

@@ -250,6 +250,23 @@ so compare that scope by exit code.
   ERROR in every tier; a DocField-property name can be declared with a reason in
   `fieldname-shadow-allowlist.txt`, and a dead or reasonless entry is an ERROR.
 
+## Shared work ledger (`src/hub/`)
+
+`stenio hub` and the `hub_*` stdio MCP tools. Invariants a change must keep:
+
+- One live holder per resource is enforced by the unique index `claims_one_holder`, nothing else;
+  fences come from one counter and only grow; a hand-back needs the newest fence of its row.
+- Every state change appends one event inside the same write transaction; `hub audit` replays the
+  events and compares them with the tables, so a new column that carries state needs its event.
+- Fail closed: any database error is exit 3 and nothing is assumed. Unknown quota is never 0%.
+- `hub answer` is command line only. The ledger tools exist on the stdio transport only.
+- `Faults` (the deliberate defects) is settable only from code; `--self-test` proves that the
+  exclusivity and fence checks turn red when their mechanism is removed.
+- Paths, accounts, quota commands and limits come from the environment, discovery or
+  `src/hub/defaults.toml`, never from a constant naming a host.
+
+Acceptance tests: `tests/hub_ledger.rs` (design A1 to A18).
+
 ## Release 4.44.0 (English by default)
 
 - `LANG-ENGLISH-REQUIRED` is an ERROR in every scope, `--gate`, `--scope frappe` and the MCP

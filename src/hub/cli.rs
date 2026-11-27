@@ -1,0 +1,604 @@
+//! `stenio hub ...`. Exit codes: 0 done, 1 refused or invalid, 2 usage, 3 ledger unavailable.
+
+use clap::{Args, Parser, Subcommand};
+use serde_json::{Value, json};
+use std::io::Read;
+use std::path::PathBuf;
+
+use super::config::{self, Config, WORKER_ENV};
+use super::store::Store;
+use super::{HubError, HubResult, audit, ledger, quota, view};
+
+/// The one-page instructions for workers draining a queue.
+pub const GUIDE: &str = include_str!("queue-drain.md");
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "stenio hub",
+    about = "Shared work ledger: claims with fenced leases, hand-backs, owner questions and quota",
+    after_help = "Exit codes: 0 done, 1 refused or invalid, 2 usage, 3 ledger unavailable.\nLedger: $STENIO_HUB_DB, else $XDG_STATE_HOME/stenio/hub.db. Worker: --worker or $STENIO_HUB_WORKER.\nStart with `stenio hub guide`."
+)]
+struct HubArgs {
+    #[arg(long, global = true, help = "Print one JSON document")]
+    json: bool,
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Args, Debug)]
+struct Who {
+    #[arg(long, help = "Worker id from `hub join` (or $STENIO_HUB_WORKER)")]
+    worker: Option<String>,
+}
+
+impl Who {
+    fn id(&self) -> HubResult<String> {
+        config::worker_or_env(self.worker.as_deref())
+            .ok_or_else(|| HubError::Usage(format!("give --worker or set {WORKER_ENV}")))
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum RunCmd {
+    /// Open a run over a list of rows
+    Start {
+        #[arg(long, required = true, help = "Row ids, comma separated or repeated")]
+        rows: Vec<String>,
+        #[arg(long, help = "Vault or repository root (default: discovered)")]
+        path: Option<PathBuf>,
+        #[arg(long, help = "Fleet slots of this run")]
+        slots: Option<u32>,
+        #[arg(long, default_value = "drain the listed rows")]
+        goal: String,
+    },
+    /// Rows of a run and their states
+    Show {
+        #[arg(long)]
+        run: String,
+        #[arg(long, default_value_t = 0)]
+        cursor: usize,
+    },
+    /// Close a run that holds no claim
+    Close {
+        #[arg(long)]
+        run: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum QuotaCmd {
+    /// Read every declared source
+    Refresh,
+    /// Store a sample (a window, or the status line input on stdin)
+    Put {
+        #[arg(long)]
+        account: String,
+        #[arg(long, requires = "used", help = "Window name, e.g. five_hour")]
+        window: Option<String>,
+        #[arg(long, requires = "window", help = "Percentage used, 0 to 100")]
+        used: Option<f64>,
+        #[arg(long, requires = "window", help = "RFC 3339 or Unix seconds")]
+        resets_at: Option<String>,
+        #[arg(
+            long,
+            value_parser = ["claude-statusline"],
+            conflicts_with = "window",
+            help = "Read the harness record from stdin"
+        )]
+        from: Option<String>,
+    },
+    /// Known and unknown windows
+    Show {
+        #[arg(long, default_value_t = 0)]
+        cursor: usize,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum Cmd {
+    /// Register a worker and receive its id
+    Join {
+        #[arg(long)]
+        harness: String,
+        #[arg(long)]
+        harness_version: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, help = "Default: this machine's host name")]
+        host: Option<String>,
+        #[arg(long, help = "Worker id of the coordinator that started this one")]
+        parent: Option<String>,
+        #[arg(
+            long,
+            help = "Quota account (default: declared per harness, else its name)"
+        )]
+        account: Option<String>,
+    },
+    /// Open, inspect and close runs
+    Run {
+        #[command(subcommand)]
+        command: RunCmd,
+    },
+    /// Claim resources, all or nothing
+    Claim {
+        #[command(flatten)]
+        who: Who,
+        #[arg(
+            required = true,
+            help = "row:<ID> tree:<path> repo:<owner/name> branch: host: release: deploy: backlog:<P>:write fleet:slot"
+        )]
+        resources: Vec<String>,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, help = "Lease length: seconds, or with s, m, h")]
+        ttl: Option<String>,
+    },
+    /// Renew the leases
+    Beat {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long, help = "Only the claims of this fence")]
+        fence: Option<i64>,
+        #[arg(long, help = "Called by a harness hook: throttled and quiet")]
+        from_hook: bool,
+    },
+    /// Give claims back without a result
+    Release {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long)]
+        fence: i64,
+        #[arg(long, help = "Only this resource of the fence")]
+        resource: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Claims, rows of the open runs, waiting questions and quota
+    Status {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        cursor: usize,
+    },
+    /// Record progress or the checkpoint a successor will receive
+    Event {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long = "type", help = "checkpoint, progress or note")]
+        kind: String,
+        #[arg(long)]
+        fence: Option<i64>,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        clone: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        next_step: Option<String>,
+    },
+    /// Return the result of a row
+    Handback {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long)]
+        row: String,
+        #[arg(long)]
+        fence: i64,
+        #[arg(long, help = "done, partial, blocked, needs-owner or failed")]
+        verdict: String,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        pr: Option<String>,
+        #[arg(long)]
+        proof: Option<String>,
+        #[arg(long)]
+        remaining: Option<String>,
+        #[arg(long = "defect", help = "A newly found defect (repeatable)")]
+        defects: Vec<String>,
+    },
+    /// File a question for the owner
+    Ask {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long)]
+        row: Option<String>,
+        #[arg(long)]
+        text: String,
+        #[arg(long = "option")]
+        options: Vec<String>,
+        #[arg(long)]
+        recommend: Option<String>,
+    },
+    /// Record the owner's answer (command line only; grants nothing)
+    Answer {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        text: String,
+        #[arg(long, default_value = "cli")]
+        via: String,
+    },
+    /// Questions waiting for the owner
+    Questions {
+        #[arg(long, help = "Include answered ones")]
+        all: bool,
+        #[arg(long, default_value_t = 0)]
+        cursor: usize,
+    },
+    /// Read one backlog row, or search the queues
+    Backlog {
+        #[arg(long, conflicts_with = "query")]
+        id: Option<String>,
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        queue: Option<String>,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        cursor: usize,
+    },
+    /// Account limits
+    Quota {
+        #[command(subcommand)]
+        command: QuotaCmd,
+    },
+    /// Verify the event chain and the state tables
+    Audit {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, help = "Also fail while a row of the run has no final state")]
+        require_final: bool,
+    },
+    /// Print the events as JSON lines
+    Export {
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long, help = "Write to this new file instead of stdout")]
+        out: Option<PathBuf>,
+    },
+    /// The worker instructions
+    Guide,
+}
+
+/// Seconds from `90`, `90s`, `20m` or `2h`.
+pub fn parse_ttl(raw: &str) -> HubResult<u64> {
+    let raw = raw.trim();
+    let (number, factor) = match raw.char_indices().last() {
+        Some((i, 's')) => (&raw[..i], 1),
+        Some((i, 'm')) => (&raw[..i], 60),
+        Some((i, 'h')) => (&raw[..i], 3600),
+        _ => (raw, 1),
+    };
+    number
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(factor))
+        .ok_or_else(|| HubError::Usage(format!("invalid duration '{raw}'")))
+}
+
+fn parse_instant(raw: &str) -> HubResult<i64> {
+    raw.parse::<i64>()
+        .ok()
+        .map(|secs| secs.saturating_mul(1000))
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .ok()
+                .map(|t| t.timestamp_millis())
+        })
+        .ok_or_else(|| HubError::Usage(format!("invalid time '{raw}'")))
+}
+
+fn open() -> HubResult<Store> {
+    Store::open(&config::db_path()?)
+}
+
+fn put_quota(
+    account: &str,
+    window: Option<String>,
+    used: Option<f64>,
+    resets_at: Option<String>,
+    from: Option<String>,
+) -> HubResult<Value> {
+    if let Some(source) = from {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| HubError::Usage(format!("cannot read stdin: {e}")))?;
+        return match quota::parse_statusline(&input) {
+            Ok(windows) => quota::put(&mut open()?, account, &source, &windows),
+            Err(reason) => {
+                quota::put_unknown(&mut open()?, account, &source, &reason)?;
+                Ok(json!({"ok": true, "account": account, "unknown": reason}))
+            }
+        };
+    }
+    let (Some(window), Some(used_pct)) = (window, used) else {
+        return Err(HubError::Usage(
+            "give --window and --used, or --from".to_string(),
+        ));
+    };
+    if used_pct > 100.0 {
+        return Err(HubError::Usage("--used is between 0 and 100".to_string()));
+    }
+    let sample = quota::Window {
+        window,
+        used_pct,
+        resets_at: resets_at.as_deref().map(parse_instant).transpose()?,
+    };
+    quota::put(&mut open()?, account, "put", &[sample])
+}
+
+fn execute(command: Cmd) -> HubResult<Value> {
+    let cfg = Config::load()?;
+    match command {
+        Cmd::Join {
+            harness,
+            harness_version,
+            model,
+            host,
+            parent,
+            account,
+        } => ledger::join(
+            &mut open()?,
+            &cfg,
+            &ledger::Join {
+                harness,
+                harness_version,
+                model,
+                host,
+                parent,
+                account,
+            },
+        ),
+        Cmd::Run { command } => match command {
+            RunCmd::Start {
+                rows,
+                path,
+                slots,
+                goal,
+            } => {
+                let vault = view::resolve_root(None, path.as_deref())?;
+                ledger::run_start(&mut open()?, &cfg, &vault, &rows, slots, &goal)
+            }
+            RunCmd::Show { run, cursor } => view::run_show(&mut open()?, &run, cursor),
+            RunCmd::Close { run } => ledger::run_close(&mut open()?, &run),
+        },
+        Cmd::Claim {
+            who,
+            resources,
+            run,
+            ttl,
+        } => {
+            let request = ledger::ClaimRequest {
+                worker: who.id()?,
+                resources,
+                run,
+                ttl_secs: ttl.as_deref().map(parse_ttl).transpose()?,
+            };
+            ledger::claim(&mut open()?, &cfg, &request)
+        }
+        Cmd::Beat {
+            who,
+            fence,
+            from_hook,
+        } => {
+            let request = ledger::BeatRequest {
+                worker: who.id()?,
+                fence,
+                from_hook,
+            };
+            ledger::beat(&mut open()?, &cfg, &request)
+        }
+        Cmd::Release {
+            who,
+            fence,
+            resource,
+            reason,
+        } => ledger::release(
+            &mut open()?,
+            &who.id()?,
+            fence,
+            resource.as_deref(),
+            reason.as_deref(),
+        ),
+        Cmd::Status { run, cursor } => view::status(&mut open()?, &cfg, run.as_deref(), cursor),
+        Cmd::Event {
+            who,
+            kind,
+            fence,
+            note,
+            clone,
+            branch,
+            next_step,
+        } => {
+            let request = ledger::Record {
+                worker: who.id()?,
+                kind,
+                fence,
+                note,
+                clone,
+                branch,
+                next_step,
+            };
+            ledger::record(&mut open()?, &request)
+        }
+        Cmd::Handback {
+            who,
+            row,
+            fence,
+            verdict,
+            branch,
+            pr,
+            proof,
+            remaining,
+            defects,
+        } => {
+            let request = ledger::Handback {
+                worker: who.id()?,
+                row,
+                fence,
+                verdict,
+                branch,
+                pr,
+                proof,
+                remaining,
+                defects,
+            };
+            ledger::handback(&mut open()?, &request)
+        }
+        Cmd::Ask {
+            who,
+            row,
+            text,
+            options,
+            recommend,
+        } => {
+            let request = ledger::Question {
+                worker: who.id()?,
+                row,
+                text,
+                options,
+                recommendation: recommend,
+            };
+            ledger::ask(&mut open()?, &request)
+        }
+        Cmd::Answer { id, text, via } => ledger::answer(&mut open()?, id, &text, &via),
+        Cmd::Questions { all, cursor } => view::questions_view(&mut open()?, all, cursor),
+        Cmd::Backlog {
+            id,
+            query,
+            queue,
+            path,
+            cursor,
+        } => {
+            let mut store = open().ok();
+            let root = view::resolve_root(store.as_mut(), path.as_deref())?;
+            view::backlog(
+                &root,
+                id.as_deref(),
+                query.as_deref(),
+                queue.as_deref(),
+                cursor,
+            )
+        }
+        Cmd::Quota { command } => match command {
+            QuotaCmd::Refresh => quota::refresh(&mut open()?, &cfg.quota),
+            QuotaCmd::Put {
+                account,
+                window,
+                used,
+                resets_at,
+                from,
+            } => put_quota(&account, window, used, resets_at, from),
+            QuotaCmd::Show { cursor } => view::quota_view(&mut open()?, &cfg, cursor),
+        },
+        Cmd::Audit { run, require_final } => {
+            audit::audit(&mut open()?, run.as_deref(), require_final)
+        }
+        Cmd::Export { run, out } => {
+            let text = view::export(&mut open()?, run.as_deref())?;
+            match out {
+                Some(path) => {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .and_then(|mut f| f.write_all(text.as_bytes()))
+                        .map_err(|e| {
+                            HubError::Usage(format!("cannot write {}: {e}", path.display()))
+                        })?;
+                    Ok(json!({"ok": true, "events": text.lines().count(),
+                        "file": path.display().to_string()}))
+                }
+                None => Ok(Value::String(text)),
+            }
+        }
+        Cmd::Guide => Ok(Value::String(GUIDE.to_string())),
+    }
+}
+
+/// `key: value` lines, and one compact line per list item.
+fn plain(value: &Value) -> String {
+    let scalar = |v: &Value| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let Value::Object(map) = value else {
+        return scalar(value);
+    };
+    let mut out = String::new();
+    for (key, v) in map.iter().filter(|(k, v)| *k != "ok" && !v.is_null()) {
+        match v {
+            Value::Array(items) => {
+                for item in items {
+                    let fields = item.as_object().map(|o| {
+                        o.iter()
+                            .filter(|(_, v)| !v.is_null())
+                            .map(|(k, v)| format!("{k}={}", scalar(v)))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    });
+                    out.push_str(&format!(
+                        "{key}: {}\n",
+                        fields.unwrap_or_else(|| scalar(item))
+                    ));
+                }
+            }
+            other => out.push_str(&format!("{key}: {}\n", scalar(other))),
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// `args` are the words after `stenio hub`.
+pub fn run_cli(args: &[String]) -> i32 {
+    let argv = std::iter::once("stenio hub".to_string()).chain(args.iter().cloned());
+    let parsed = match HubArgs::try_parse_from(argv) {
+        Ok(p) => p,
+        Err(e) => return crate::util::usage_exit(&e),
+    };
+    let quiet = matches!(
+        parsed.command,
+        Cmd::Beat {
+            from_hook: true,
+            ..
+        }
+    );
+    // A hook of a session that never joined has nothing to renew.
+    if let Cmd::Beat {
+        who,
+        from_hook: true,
+        ..
+    } = &parsed.command
+        && who.id().is_err()
+    {
+        return 0;
+    }
+    match execute(parsed.command) {
+        Ok(Value::String(text)) => {
+            print!("{text}");
+            0
+        }
+        Ok(value) => {
+            if parsed.json {
+                println!("{value}");
+            } else if !quiet {
+                println!("{}", plain(&value));
+            }
+            // An audit that found a problem is a completed command with a negative answer.
+            i32::from(value["ok"] == json!(false))
+        }
+        Err(e) => {
+            if parsed.json {
+                println!("{}", e.to_json());
+            } else {
+                eprintln!("{e}");
+            }
+            e.exit_code()
+        }
+    }
+}

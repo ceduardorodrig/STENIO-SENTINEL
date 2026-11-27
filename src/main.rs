@@ -37,6 +37,7 @@ mod health;
 mod homelab;
 mod hook_fixtures;
 mod hostops;
+mod hub;
 mod i18n;
 mod infra;
 mod learner;
@@ -94,7 +95,7 @@ use vault::audit_vault;
     author = "Sumænimá Platform",
     version = env!("CARGO_PKG_VERSION"),
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust",
-    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  backlog close     Move rows to backlog-archive.md and drop their ids from every pending: list\n  preflight         Alias of --pre-release --static-only"
+    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  hub               Shared work ledger: claims, hand-backs, owner questions, quota (stenio hub guide)\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  backlog close     Move rows to backlog-archive.md and drop their ids from every pending: list\n  preflight         Alias of --pre-release --static-only"
 )]
 struct Args {
     #[arg(
@@ -719,6 +720,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
+        .chain(hub::self_test_cases())
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())
         .chain(docrules::self_test_cases())
@@ -2111,6 +2113,7 @@ fn main() -> Result<()> {
             rest.extend_from_slice(&argv[2..]);
             std::process::exit(compare_engines::run_cli(&rest))
         }
+        Some("hub") => std::process::exit(hub::cli::run_cli(&argv[2..])),
         Some("sweep") => {
             let mut rest = vec!["stenio sweep".to_string()];
             rest.extend_from_slice(&argv[2..]);
