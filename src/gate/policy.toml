@@ -1,0 +1,123 @@
+# The command gate's central list: irreversible or outward actions an unattended agent may not
+# take. Everything that is not listed proceeds. This copy is embedded in the engine; a host file
+# ($XDG_CONFIG_HOME/stenio/gate.toml) can only ADD paths and name the audit directory.
+#
+# Command patterns: "program word word -flag". The program is a basename (a trailing * is a
+# prefix). A word must appear among the first non-flag arguments, in order. A "-flag" must be
+# present; "!-flag" cancels the match when present. "a|b" is a choice.
+
+[[rule]]
+id = "GATE-DESTROY"
+why = "destroys data in a protected place"
+
+[[rule]]
+id = "GATE-STORAGE"
+why = "formats, wipes or repartitions storage"
+commands = [
+    "wipefs", "mkfs*", "mkswap", "blkdiscard", "sgdisk !-p !--print", "cgdisk", "gdisk !-l",
+    "fdisk !-l !--list", "sfdisk !-l !--list !-d !--dump", "cfdisk",
+    "parted mklabel|mktable|mkpart|rm|resizepart|name|set",
+    "cryptsetup luksFormat|erase|luksErase|reencrypt|luksKillSlot|luksRemoveKey",
+    "btrfs device remove|delete", "zpool destroy|labelclear", "zfs destroy|rollback",
+    "lvremove", "vgremove", "pvremove",
+]
+
+[[rule]]
+id = "GATE-BACKUP"
+why = "deletes backups, snapshots, volumes or remote data"
+commands = [
+    "btrfs subvolume delete|del", "snapper delete|remove|cleanup|delete-config|rollback|undochange",
+    "timeshift --delete|--delete-all", "restic forget|prune", "borg delete|prune|compact",
+    "kopia snapshot delete|expire", "rclone delete|deletefile|purge|cleanup|rmdirs|sync !--dry-run",
+    "docker volume rm|remove|prune", "podman volume rm|remove|prune",
+    "docker system prune --volumes", "podman system prune --volumes",
+    "docker compose down -v|--volumes", "podman compose down -v|--volumes",
+    "docker-compose down -v|--volumes", "gh repo delete", "gh release delete|delete-asset",
+]
+
+[[rule]]
+id = "GATE-HISTORY"
+why = "force-pushes or rewrites git history"
+commands = [
+    "git filter-branch", "git filter-repo", "git-filter-repo", "bfg", "git reflog expire|delete",
+    "git update-ref -d",
+]
+
+[[rule]]
+id = "GATE-SECRET"
+why = "prints or writes out a secret in clear text"
+commands = ["gh auth token", "gh auth status --show-token|-t", "secret-tool lookup|search", "pass show"]
+
+[[rule]]
+id = "GATE-POWER"
+why = "reboots or powers off a host"
+commands = [
+    "reboot !--help", "shutdown !-c !--help", "poweroff !--help", "halt !--help", "kexec",
+    "init 0|6", "telinit 0|6",
+    "systemctl reboot|poweroff|halt|kexec|soft-reboot|emergency|rescue !--help",
+    "loginctl reboot|poweroff|halt|terminate-user|terminate-session|kill-user|kill-session",
+]
+
+[[rule]]
+id = "GATE-DB"
+why = "drops, truncates or empties a database"
+commands = [
+    "dropdb", "mysqladmin drop", "mariadb-admin drop", "bench drop-site|reinstall",
+    "redis-cli flushall|flushdb|FLUSHALL|FLUSHDB",
+]
+
+[[rule]]
+id = "GATE-PUBLISH"
+why = "publishes, deploys or releases without a held release: or deploy: lease"
+lease = true
+commands = [
+    "cargo publish !--dry-run", "npm publish !--dry-run", "pnpm publish !--dry-run",
+    "yarn publish", "bun publish !--dry-run", "twine upload", "gem push", "docker push",
+    "podman push", "docker buildx build --push", "docker stack deploy", "docker service update|rm",
+    "docker stack rm", "gh release create|edit|upload", "gh workflow run", "vercel --prod",
+    "vercel deploy", "wrangler deploy|publish", "netlify deploy", "terraform apply|destroy",
+    "tofu apply|destroy", "kubectl apply|delete|replace", "helm install|upgrade|uninstall",
+    "release.sh !--dry-run", "deploy.sh !--dry-run",
+]
+
+[[rule]]
+id = "GATE-SELF"
+why = "changes the guard, its configuration, permissions or an owner-only decision"
+commands = [
+    "stenio gate override", "stenio hub quota override", "stenio hub answer",
+    "stenio hub reset-attempts", "harness.sh apply", "sync-opencode-permissions.sh",
+    "hermes config set|edit|unset", "hermes hooks revoke|accept",
+]
+
+[paths]
+# Backup and version trees: nothing inside is deleted, moved away, truncated or overwritten.
+protected_trees = ["/mnt/BACKUP", "/mnt/storage", "**/.snapshots", "**/.stversions"]
+# These directories, and a glob of their contents, are never deleted, moved or re-owned
+# recursively. Deeper paths are ordinary work.
+protected_roots = [
+    "/", "/*", "/home/*", "~", "~/*", "~/.config/*", "/mnt/*", "/mnt/*/*", "/var/*",
+    "/var/lib/*", "/etc/*", "/usr/*",
+]
+# The guard's own files and the harness permission files: read freely, never written.
+guard_files = [
+    "**/.claude/settings.json", "**/.claude/settings.local.json", "**/.claude/hooks/**",
+    "**/.claude/hooks", "~/.claude.json", "~/.hermes/config.yaml",
+    "~/.hermes/shell-hooks-allowlist.json", "~/.config/opencode/opencode.json",
+    "~/.config/opencode/opencode.jsonc", "~/.config/opencode/plugins/**",
+    "~/.config/opencode/plugins", "**/opencode.json", "**/opencode.jsonc", "**/.opencode/**",
+    "**/hooks.json", "~/.gemini/antigravity-cli/settings.json", "~/.gemini/config/config.json",
+    "**/scripts/agent-hooks/**", "**/scripts/agent-hooks", "**/scripts/agent-harness/**",
+    "**/scripts/agent-harness", "~/.config/stenio/**", "~/.config/stenio",
+    "~/.local/state/stenio/**", "~/.local/state/stenio", "~/.cargo/bin/stenio",
+    "~/.local/bin/stenio", "/usr/local/lib/stenio-hub/**", "/etc/stenio/**", "**/.gate-audit/**",
+    "**/.gate-audit",
+]
+# Test areas: guard-file names found here are copies, not the live configuration.
+scratch = ["/tmp/**", "**/.agents-work/**"]
+# Files whose content is a secret: not printed by a shell reader and not opened by a read tool.
+secret_files = [
+    "**/.env", "**/.env.*", "**/id_rsa", "**/id_ed25519", "**/id_ecdsa", "**/age/keys.txt",
+    "**/.claude/.credentials.json", "**/.hermes/auth.json", "**/*.token", "**/.netrc",
+    "**/gh/hosts.yml", "**/.git-credentials",
+]
+secret_exempt = ["**/*.example", "**/*.sample", "**/*.template", "**/*.dist", "**/*.pub"]

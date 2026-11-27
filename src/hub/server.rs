@@ -363,6 +363,18 @@ pub fn dispatch(
                 Ok(json!({"ok": true}))
             });
         }
+        "publish_lease" => {
+            ledger::sweep_now(&mut store)?;
+            let session = text(&args, "session");
+            let agent = text(&args, "agent").unwrap_or_default();
+            let mut mine = strings(&args, "mine");
+            return store.read(|c| {
+                if let Some(session) = &session {
+                    mine.extend(hooks::tree_speakers(c, session, &agent)?);
+                }
+                Ok(json!({"ok": true, "held": hooks::publish_held(c, &mine)?}))
+            });
+        }
         "attempts_reset" => {
             if client.role != Role::Owner {
                 return Err(HubError::refused(

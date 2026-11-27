@@ -18,17 +18,17 @@ const INPUT_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// The hook payload on stdin, or `Null` when there is none or it is not JSON.
 pub fn read_payload() -> Value {
+    read_payload_up_to(INPUT_LIMIT)
+}
+
+/// [`read_payload`] with an explicit size limit.
+pub fn read_payload_up_to(limit: u64) -> Value {
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
         return Value::Null;
     }
     let mut text = String::new();
-    if stdin
-        .lock()
-        .take(INPUT_LIMIT)
-        .read_to_string(&mut text)
-        .is_err()
-    {
+    if stdin.lock().take(limit).read_to_string(&mut text).is_err() {
         return Value::Null;
     }
     serde_json::from_str(&text).unwrap_or(Value::Null)
@@ -281,7 +281,7 @@ pub fn beat_hook(who: Option<&str>, fence: Option<i64>) -> i32 {
 }
 
 /// Argument names that hold the file of a write tool, compared without case and underscores.
-const PATH_KEYS: [&str; 6] = [
+pub(crate) const PATH_KEYS: [&str; 6] = [
     "filepath",
     "path",
     "targetfile",
@@ -290,7 +290,7 @@ const PATH_KEYS: [&str; 6] = [
     "filename",
 ];
 /// Argument names that can hold a patch, whose headers name the files.
-const PATCH_KEYS: [&str; 4] = ["patch", "patchtext", "input", "command"];
+pub(crate) const PATCH_KEYS: [&str; 4] = ["patch", "patchtext", "input", "command"];
 
 fn patched_files(patch: &str) -> impl Iterator<Item = &str> {
     patch.lines().filter_map(|line| {
@@ -304,7 +304,7 @@ fn patched_files(patch: &str) -> impl Iterator<Item = &str> {
 }
 
 /// The files a write tool is about to change, for the payload shapes of the wired harnesses.
-fn edited_files(payload: &Value) -> Vec<PathBuf> {
+pub(crate) fn edited_files(payload: &Value) -> Vec<PathBuf> {
     let (tool, args) = match payload.get("toolCall") {
         Some(call) => (call.get("name"), call.get("args")),
         None => (payload.get("tool_name"), payload.get("tool_input")),
@@ -558,6 +558,50 @@ fn require_served_release(
     };
     let reply = server.call("claim_holder", json!({"resource": resource}))?;
     Ok(release_verdict(resource, reply["holder"].as_str(), &mine))
+}
+
+/// Whether the caller of this hook payload holds a live `release:` or `deploy:` claim. Without
+/// a ledger to ask, the answer is an error and the caller must not publish.
+pub fn holds_publish_lease(payload: &Value) -> Result<bool, String> {
+    let said = |e: HubError| e.to_string();
+    let cfg = Config::load().map_err(said)?;
+    let session = session_of(&cfg, payload);
+    let agent = agent_of(&cfg, payload);
+    let named = config::worker_or_env(None);
+    if let Some(server) = remote::declared().map_err(said)? {
+        let server = server.with_timeout(remote::HOOK_TIMEOUT_SECS);
+        let mine: Vec<String> = named.into_iter().collect();
+        let reply = server
+            .call(
+                "publish_lease",
+                json!({"mine": mine, "session": session, "agent": agent}),
+            )
+            .map_err(said)?;
+        return Ok(reply["held"].as_bool().unwrap_or(false));
+    }
+    let Some(mut store) = existing_ledger().map_err(said)? else {
+        return Err("this host has no ledger".to_string());
+    };
+    let mut mine: Vec<String> = named.into_iter().collect();
+    if let Some(session) = session {
+        mine.extend(
+            store
+                .read(|c| tree_speakers(c, &session, &agent))
+                .map_err(said)?,
+        );
+    }
+    store.read(|c| publish_held(c, &mine)).map_err(said)
+}
+
+/// Whether one of `mine` holds a live release or deploy claim.
+pub(super) fn publish_held(conn: &rusqlite::Connection, mine: &[String]) -> HubResult<bool> {
+    let live = ledger::claims(
+        conn,
+        "WHERE released IS NULL AND (resource LIKE 'release:%' OR resource LIKE 'deploy:%')",
+        [],
+    )?;
+    let now = now_ms();
+    Ok(live.iter().any(|c| c.live(now) && mine.contains(&c.holder)))
 }
 
 /// A release needs a live `release:<name>` claim of the caller.

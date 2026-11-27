@@ -29,6 +29,7 @@ mod frappe_perm;
 mod frappe_whitelist;
 mod frontend;
 mod gaming;
+mod gate;
 mod gov;
 mod gpu;
 mod graph;
@@ -722,6 +723,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
         .chain(hub::self_test_cases())
+        .chain(gate::self_test_cases())
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())
         .chain(docrules::self_test_cases())
@@ -2115,6 +2117,11 @@ fn main() -> Result<()> {
             std::process::exit(compare_engines::run_cli(&rest))
         }
         Some("hub") => std::process::exit(hub::cli::run_cli(&argv[2..])),
+        Some("gate") => {
+            let mut rest = vec!["stenio gate".to_string()];
+            rest.extend_from_slice(&argv[2..]);
+            std::process::exit(gate::run_cli(&rest))
+        }
         Some("sweep") => {
             let mut rest = vec!["stenio sweep".to_string()];
             rest.extend_from_slice(&argv[2..]);
