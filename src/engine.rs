@@ -539,7 +539,11 @@ impl Engine {
                                 severity,
                                 file_path: path_str.clone(),
                                 line_number: line_idx + 1,
-                                snippet: line.trim().to_string(),
+                                snippet: if rule.id.starts_with("SEC-SECRET") {
+                                    crate::infra::mask_snippet(line)
+                                } else {
+                                    line.trim().to_string()
+                                },
                                 message: rule.description.clone(),
                                 suggestion: rule.suggestion.clone(),
                             });

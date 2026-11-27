@@ -91,4 +91,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "one name per credential, or an explicit `--same A=B`",
         remediation: "Delete the alias, provision the right key, or declare the alias explicitly.",
     },
+    RuleExplanation {
+        id: "SECRET-IN-AGENT-OUTPUT",
+        name: "Stored Secret In Tool Output Or Transcript",
+        severity: "ERROR",
+        tag: "sec",
+        summary: "`stenio redact --store F [--decrypt] [--tool N]` filters stdin, replacing every stored secret value with `[REDACTED:NAME]` (exit 3 when it replaced, 2 when it could not filter: drop the output). `--scan PATH` fails naming file and variable for values already persisted (transcripts, state databases, raw bytes).",
+        rationale: "A decrypted key reached a subagent transcript and the session database; the built-in prefix redactor does not know bare keys (2026-11-06).",
+        bad_example: "sops -d store.enc.env | jq ...        # value reaches the transcript",
+        good_example: "some-command | stenio redact --store store.enc.env --decrypt --tool some-command",
+        remediation: "Pipe tool output through the filter in the harness hook; rotate any value the scan finds (owner decision).",
+    },
 ];

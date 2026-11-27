@@ -10,6 +10,7 @@ mod env_stack;
 mod env_wired;
 pub mod explain;
 mod identities;
+mod redact;
 mod store;
 mod store_recipients;
 mod tree;
@@ -72,6 +73,7 @@ const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[
     ("secrets-drift", drift::run_cli),
     ("secret-dumps", dumps::run_cli),
     ("secret-identities", identities::run_cli),
+    ("redact", redact::run_cli),
 ];
 
 /// Runs `argv[1]` when it is a suite subcommand; `None` lets the engine parse the line.
@@ -124,6 +126,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     cases.extend(drift::self_test_cases());
     cases.extend(dumps::self_test_cases());
     cases.extend(identities::self_test_cases());
+    cases.extend(redact::self_test_cases());
     cases.extend(env_wired::self_test_cases());
     cases.extend(env_stack::self_test_cases());
     cases.extend(env_example::self_test_cases());
