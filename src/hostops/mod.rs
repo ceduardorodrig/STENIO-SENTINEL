@@ -19,6 +19,7 @@ mod autopilot_last; // GB-175
 mod backup_verify; // GB-051
 mod boots; // GB-155
 mod build_age; // GB-238
+mod domains; // GB-259
 mod false_alive; // GB-231
 mod fundamental_probe; // GB-232
 mod kuma; // GB-014 GB-015
@@ -64,6 +65,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     backup_verify::EXPLAIN,      // GB-051
     boots::EXPLAIN,              // GB-155
     build_age::EXPLAIN,          // GB-238
+    domains::EXPLAIN,            // GB-259
     false_alive::EXPLAIN,        // GB-231
     fundamental_probe::EXPLAIN,  // GB-232
     kuma::EXPLAIN_LOOPBACK,      // GB-014
@@ -94,6 +96,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         "autopilot-last" => autopilot_last::run_cli(rest), // GB-175
         "boots" => boots::run_cli(rest),                   // GB-155
         "build-age" => build_age::run_cli(rest),           // GB-238
+        "domains" => domains::run_cli(rest),               // GB-259
         "false-alive" => false_alive::run_cli(rest),       // GB-231
         "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "mtu" => mtu_budget::run_cli(rest),                // GB-254
@@ -114,6 +117,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(backup_verify::self_test_cases()); // GB-051
     all.extend(boots::self_test_cases()); // GB-155
     all.extend(build_age::self_test_cases()); // GB-238
+    all.extend(domains::self_test_cases()); // GB-259
     all.extend(false_alive::self_test_cases()); // GB-231
     all.extend(fundamental_probe::self_test_cases()); // GB-232
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
