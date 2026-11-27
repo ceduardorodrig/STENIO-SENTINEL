@@ -15,6 +15,8 @@ mod po_resolves;
 mod reqd_messages;
 #[path = "frappe_desk/support.rs"]
 mod support;
+#[path = "frappe_desk/table_section.rs"]
+mod table_section;
 
 pub(super) struct Item {
     explain: &'static RuleExplanation,
@@ -37,6 +39,11 @@ const ITEMS: &[Item] = &[
         explain: &fieldname_shadow::EXPLAIN,
         run: fieldname_shadow::run,
         cases: fieldname_shadow::cases,
+    },
+    Item {
+        explain: &table_section::EXPLAIN,
+        run: table_section::run,
+        cases: table_section::cases,
     },
 ];
 
