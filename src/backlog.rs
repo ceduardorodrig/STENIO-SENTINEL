@@ -35,6 +35,11 @@
 //! from the table header, so the layout can grow (e.g. `Recurrence`) without touching the
 //! engine.
 
+pub mod close;
+pub mod integrity;
+#[cfg(test)]
+mod wave_tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,6 +90,8 @@ struct Item {
     reference: Option<String>,
     severity: Severity,
     severity_known: bool,
+    /// 🔴 or 🟠: a stale `pending:` link to this item blocks the gate.
+    urgent: bool,
     state: String,
     recurrence: Vec<String>,
     recurred_by: Vec<String>,
@@ -362,23 +369,19 @@ fn audit_queue(repo_root: &Path, base_dir: &Path, q: &Queue) -> BacklogReport {
         }
     }
 
-    // ── R4. An id must live in exactly one of the two files ──────────────────
-    for id in active_ids.intersection(&archive_ids) {
-        if let Some(item) = active_by_id.get(id) {
-            violations.push(state_violation(
-                &active_display,
-                item,
-                format!(
-                    "Backlog item {} appears in both {} and {}.",
-                    id, BACKLOG_REL, ARCHIVE_REL
-                ),
-                format!(
-                    "Keep {} in exactly one file — the queue while open, the archive once closed.",
-                    id
-                ),
-            ));
-        }
-    }
+    // ── R4. The tables as data: identity, shape and cross-references ────────
+    violations.extend(integrity::audit(
+        repo_root,
+        q,
+        integrity::File {
+            display: &active_display,
+            content: &active_content,
+        },
+        integrity::File {
+            display: &archive_display,
+            content: archive_content.as_deref().unwrap_or_default(),
+        },
+    ));
 
     // ── R6. Reverse direction: a document may only declare *active* ids ──────
     // Only linked queues declare `pending:` in documents; the product queues skip this walk.
@@ -425,10 +428,17 @@ fn audit_queue(repo_root: &Path, base_dir: &Path, q: &Queue) -> BacklogReport {
                     ),
                 )
             };
+            let urgent = archive_by_id
+                .get(id.as_str())
+                .is_some_and(|item| item.urgent);
             violations.push(Violation {
                 rule_id: "DOC-BACKLOG-DRIFT".to_string(),
                 rule_name: "Backlog Traceability Drift".to_string(),
-                severity: Severity::Warning,
+                severity: if urgent {
+                    Severity::Error
+                } else {
+                    Severity::Warning
+                },
                 file_path: display_path(&path, repo_root),
                 line_number: 1,
                 snippet: id.clone(),
@@ -573,7 +583,9 @@ fn check_forward(
         return found;
     };
     let target = base_dir.join(reference.trim_start_matches("./"));
-    if !target.is_file() {
+    // A Ref ending in '/' names a directory (GB-138); any other Ref must be a file.
+    let resolves = target.is_file() || (reference.ends_with('/') && target.is_dir());
+    if !resolves {
         found.push(Violation {
             rule_id: "DOC-BACKLOG-DRIFT".to_string(),
             rule_name: "Backlog Traceability Drift".to_string(),
@@ -582,8 +594,10 @@ fn check_forward(
             line_number: item.line,
             snippet: item.id.clone(),
             message: format!(
-                "Backlog item {} points to '{}', which does not exist.",
-                item.id, reference
+                "Backlog item {} points to '{}', which does not exist (tried '{}').",
+                item.id,
+                reference,
+                display_path(&target, repo_root)
             ),
             suggestion: Some(
                 "Fix the Ref to an existing document, or remove the item.".to_string(),
@@ -658,17 +672,7 @@ fn row_at(content: &str, line: usize) -> &str {
 
 /// Splits a Markdown table row into its trimmed cells (`| a | b |` → `["a", "b"]`).
 fn split_row(line: &str) -> Vec<String> {
-    let mut cells: Vec<String> = line
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect();
-    if cells.first().map_or(false, |cell| cell.is_empty()) {
-        cells.remove(0);
-    }
-    if cells.last().map_or(false, |cell| cell.is_empty()) {
-        cells.pop();
-    }
-    cells
+    integrity::cells(line)
 }
 
 /// Normalizes a header cell for comparison (`**Ref**` → `ref`).
@@ -833,6 +837,9 @@ fn parse_table(content: &str, prefix: &str) -> Table {
                 .and_then(|cell| extract_link(cell)),
             severity,
             severity_known,
+            urgent: cells
+                .get(columns.severity)
+                .is_some_and(|cell| cell.contains('🔴') || cell.contains('🟠')),
             state: cells
                 .get(columns.state)
                 .map(|cell| normalize_state(cell))
@@ -871,24 +878,24 @@ fn collect_orphans(lines: &[&str], prefix: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// Next free id of a queue, looking at the active file **and** the archive (an id is never reused).
+/// Next free id of a queue, looking at the id cells of the active file **and** the archive (an
+/// id is never reused). Ids quoted in prose do not count, and a row far outside the series
+/// (`BACKLOG-ID-CONTIGUOUS`) does not drag the allocator with it.
 pub fn next_id_in(prefix: &str, texts: &[&str]) -> String {
     let p = prefix.trim_end_matches('-').to_uppercase();
-    let pat = format!(r"\b{}-(\d+)", regex::escape(&p));
-    let max = regex::Regex::new(&pat)
-        .map(|re| {
-            texts
-                .iter()
-                .flat_map(|t| {
-                    re.captures_iter(t)
-                        .filter_map(|c| c[1].parse::<u32>().ok())
-                        .collect::<Vec<_>>()
-                })
-                .max()
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    format!("{p}-{:03}", max + 1)
+    let used: BTreeSet<u32> = texts
+        .iter()
+        .flat_map(|t| integrity::id_numbers(t, &p))
+        .collect();
+    let top = match integrity::first_outlier(&used) {
+        Some((top, _)) => top,
+        None => used.iter().next_back().copied().unwrap_or(0),
+    };
+    let mut next = top + 1;
+    while used.contains(&next) {
+        next += 1;
+    }
+    format!("{p}-{next:03}")
 }
 
 /// `stenio --backlog --next-id MB`: the next free id of the queue with that prefix.
@@ -942,7 +949,55 @@ pub fn add_pending(doc: &str, id: &str) -> Option<String> {
     Some(format!("---{}{}", lines.join("\n"), tail))
 }
 
-/// `--backlog --fix`: adds the missing ids to the `pending:` frontmatter of the referenced documents.
+/// Removes `ids` from the inline `pending:` list of a document's frontmatter, touching nothing
+/// else. The document comes back unchanged when it declares none of them; `None` when one of them
+/// sits in a block-style list (left for a human).
+pub fn remove_pending(doc: &str, ids: &[String]) -> Option<String> {
+    let Some(rest) = doc.strip_prefix("---") else {
+        return Some(doc.to_string());
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Some(doc.to_string());
+    };
+    let (front, tail) = rest.split_at(end);
+    let mut lines: Vec<String> = front.split('\n').map(str::to_string).collect();
+    let Some(i) = lines.iter().position(|l| l.starts_with("pending:")) else {
+        return Some(doc.to_string());
+    };
+    let wanted = |t: &str| {
+        let t = t.trim().trim_matches(['"', '\'']);
+        ids.iter().any(|id| id == t)
+    };
+    let (Some(open), Some(close)) = (lines[i].find('['), lines[i].rfind(']')) else {
+        let block = lines[i + 1..]
+            .iter()
+            .map_while(|l| l.trim_start().strip_prefix("- "))
+            .any(wanted);
+        return (!block).then(|| doc.to_string());
+    };
+    if close < open {
+        return None;
+    }
+    let inner = &lines[i][open + 1..close];
+    if !inner.split(',').any(wanted) {
+        return Some(doc.to_string());
+    }
+    let kept: Vec<&str> = inner
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !wanted(t))
+        .collect();
+    lines[i] = format!(
+        "{}{}{}",
+        &lines[i][..=open],
+        kept.join(", "),
+        &lines[i][close..]
+    );
+    Some(format!("---{}{}", lines.join("\n"), tail))
+}
+
+/// `--backlog --fix`: adds the missing ids to the `pending:` frontmatter of the referenced
+/// documents and removes archived ids from every `pending:` list (GB-252).
 /// Returns (documents changed, ids that need a human).
 pub fn fix_drift(repo_root: &Path) -> (usize, Vec<String>) {
     let (mut changed, mut manual) = (0usize, Vec::new());
@@ -951,6 +1006,22 @@ pub fn fix_drift(repo_root: &Path) -> (usize, Vec<String>) {
             continue;
         };
         let report = audit_queue(repo_root, &dir, &q);
+        for v in report.violations.iter().filter(|v| {
+            v.rule_id == "DOC-BACKLOG-DRIFT"
+                && v.message.contains("but ")
+                && v.message.contains("is archived")
+        }) {
+            let path = repo_root.join(&v.file_path);
+            let stale = [v.snippet.clone()];
+            match fs::read_to_string(&path)
+                .ok()
+                .and_then(|d| remove_pending(&d, &stale).map(|n| (d, n)))
+            {
+                Some((d, n)) if d != n && fs::write(&path, &n).is_ok() => changed += 1,
+                Some(_) => {}
+                None => manual.push(format!("{} ({})", v.snippet, v.file_path)),
+            }
+        }
         for v in report
             .violations
             .iter()
