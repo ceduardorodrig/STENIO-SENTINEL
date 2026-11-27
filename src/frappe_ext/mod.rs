@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
+mod patch_order; // FRAPPE-PATCH-ORDER-DEPENDENCY
 mod privacy_lists; // FRAPPE-PRIVACY-LIST-NAMES-EXIST
 mod rules_stale; // MIRACENA-DOCTYPE-NO-RULES
 mod sidebar_lists; // FRAPPE-SIDEBAR-ALLOWLIST-PARITY
@@ -31,6 +32,7 @@ pub(crate) static ITEMS: &[&Item] = &[
     &access_log::ITEM,
     &dead_except::ITEM,
     &masked_literal::ITEM,
+    &patch_order::ITEM,
     &privacy_lists::ITEM,
     &rules_stale::ITEM,
     &sidebar_lists::ITEM,
