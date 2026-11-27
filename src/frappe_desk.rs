@@ -27,6 +27,8 @@ mod po_resolves;
 mod print_css;
 #[path = "frappe_desk/print_grid.rs"]
 mod print_grid;
+#[path = "frappe_desk/print_var.rs"]
+mod print_var;
 #[path = "frappe_desk/report_chart.rs"]
 mod report_chart;
 #[path = "frappe_desk/reqd_messages.rs"]
@@ -111,6 +113,11 @@ const ITEMS: &[Item] = &[
         explain: &print_grid::EXPLAIN,
         run: print_grid::run,
         cases: print_grid::cases,
+    },
+    Item {
+        explain: &print_var::EXPLAIN,
+        run: print_var::run,
+        cases: print_var::cases,
     },
 ];
 
