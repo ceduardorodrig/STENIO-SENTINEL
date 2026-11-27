@@ -129,7 +129,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Repository Gate For Tracked Secrets And Credential-Shaped Files",
         severity: "ERROR",
         tag: "sec",
-        summary: "`stenio secrets-guard --repo R [--baseline F] [--scope mirror]` fails (exit 1, last line `stenio: FAIL secrets-guard ...`) when (a) a tracked file has a SEC-PLAINTEXT-SECRET finding and its path is not in the baseline (one repo-relative path per line, `#` comments), (b) a tracked-but-ignored path (`git ls-files -ci --exclude-standard`, committed before its ignore rule) is credential-shaped or carries a finding outside the baseline, or (c) any tracked path has a credential-shaped name: `*.env` and `.env.*` except examples, `*.pem`, `*.key`, `*.kdbx`, `*.p12`, `*.pfx`, `*.ovpn`, `id_rsa*` / `id_ed25519*` private halves, `secrets.*.{yml,yaml,json,env}` except sops `*.enc.*`. Harmless tracked-but-ignored files are only counted. It prints paths, line numbers and rule ids only, never a value, a key name or a snippet; the baseline never excuses (c).",
+        summary: "`stenio secrets-guard --repo R [--baseline F] [--scope mirror]` fails (exit 1, last line `stenio: FAIL secrets-guard ...`) when (a) a tracked file has a SEC-PLAINTEXT-SECRET finding and its path is not in the baseline (one repo-relative path per line, `#` comments), (b) a tracked-but-ignored path (`git ls-files -ci --exclude-standard`, committed before its ignore rule) is credential-shaped or carries a finding outside the baseline, or (c) any tracked path has a credential-shaped name: `*.env` and `.env.*` except examples, `*.pem`, `*.key`, `*.kdbx`, `*.p12`, `*.pfx`, `*.ovpn`, `id_rsa*` / `id_ed25519*` private halves, `secrets.*.{yml,yaml,json,env}` except sops `*.enc.*`. Harmless tracked-but-ignored files are only counted. It prints paths, line numbers and rule ids only, never a value, a key name or a snippet; the baseline never excuses (c). A baseline entry may pin a count (`path count=N`): one more finding in that file fails; `--require-counts` rejects bare entries. `--history` judges every commit of `git log --all` and fails on a `commit:path` absent from `--history-baseline` (history that is not rewritten stays listed there, a new leak fails even if deleted in the next commit).",
         rationale: "GB-285: the daily config-backup job pushed a mirror to GitHub with a size guard and no secret guard; four real secrets in `*.env` files got through because the exclude was the exact basename `.env`. A gate that prints values would re-leak what it finds, so the output is paths only.",
         bad_example: "# repo tracks kavure/n8n.env\n# stenio secrets-guard --repo /mnt/BACKUP/configs-homelab\n# FAIL (c) credential-shaped path tracked: kavure/n8n.env\n# stenio: FAIL secrets-guard files=1200 fails=2 ...",
         good_example: "# the same repo with `*.env` and `.env.*` excluded and untracked\n# stenio: PASS secrets-guard files=1190 fails=0 tracked-ignored-harmless=14 baseline=0",
@@ -327,7 +327,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Backlog Traceability Drift",
         severity: "WARN",
         tag: "doc",
-        summary: "Every pending item must have a single, traceable source: the index `mnemocine/backlog.md` and the area document must agree bidirectionally. A drift on a 🔴 (critical) item escalates to a blocking ERROR; any other drift stays a Warning.",
+        summary: "Every pending item must have a single, traceable source: the index `mnemocine/backlog.md` and the area document must agree bidirectionally. A drift on a 🔴 (critical) item escalates to a blocking ERROR; any other drift stays a Warning. Always an ERROR: one id in two rows across the queue and its archive, and a `pending:` list still naming an archived 🔴/🟠 item (`stenio backlog close` and `--backlog --fix` remove it). A `Ref` ending in `/` resolves to a directory.",
         rationale: "Pending work used to live hidden inside each server/service note, so it was forgotten and duplicated. Moving it to a single index only fixes the problem while both sides stay in sync — an index nobody updates becomes a second, disconnected list. This rule turns that contract into an automated cross-check: a `Ref` must resolve, the referenced document must declare `pending: [ID]`, and any declared ID must exist in the index. The vocabulary (states and severities) is read from the rows themselves, so the governance header can evolve without touching the engine.",
         bad_example: "| **HB-007** | watchdog | [`guides/gone.md`](guides/gone.md) | 🟡 | open | 2026-10-12 |\n# Or a note that declares 'pending: [HB-042]' for an item the index never opened.",
         good_example: "| **HB-007** | watchdog | [`guides/oracle-arm-capture.md`](guides/oracle-arm-capture.md) | 🟡 | open | 2026-10-12 |\n# guides/oracle-arm-capture.md frontmatter:\n---\ntags: [homelab, oracle, oci, cloud, tutorial, todo]\npending: [HB-007, HB-008]\n---",
@@ -387,6 +387,72 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         bad_example: "| **HB-019** | eno1 drops again | [`network/topology.md`](network/topology.md) | 🔵 | open | 2026-10-15 | ↻ HB-007 |\n# ...but the archived HB-007 row carries no 'Recurred-by: HB-019'.",
         good_example: "| **HB-019** | eno1 drops again | [`network/topology.md`](network/topology.md) | 🔵 | open | 2026-10-15 | ↻ HB-007 |\n| **HB-007** | eno1 drops | [`network/topology.md`](network/topology.md) | 🔵 | resolved | 2026-10-12 | HB-019 |",
         remediation: "Make the pair agree: the active row carries 'Recurrence: <archived id>' and the archived row carries 'Recurred-by: <active id>'.",
+    },
+    RuleExplanation {
+        id: "BACKLOG-TABLE-INTEGRITY",
+        name: "Backlog Table Integrity",
+        severity: "ERROR",
+        tag: "doc",
+        summary: "A blank or non-row line must not interrupt a queue table, and every id row has exactly as many cells as the header (Error in backlog.md, Warning in backlog-archive.md). Runs on every queue and on `--path <queue>.md`.",
+        rationale: "On 2026-11-06 a blank line split 26 MB rows into two tables and `--path` answered zero violations.",
+        bad_example: "| **MB-039** | a |\n\n| **MB-041** | detached |",
+        good_example: "| **MB-039** | a |\n| **MB-041** | in the table |",
+        remediation: "Delete the interrupting line; escape a literal pipe.",
+    },
+    RuleExplanation {
+        id: "DOC-BACKLOG-FOREIGN-ROW",
+        name: "Foreign Backlog Row",
+        severity: "WARN",
+        tag: "doc",
+        summary: "Every row of a queue file carries the prefix of that queue.",
+        rationale: "On 2026-11-09 a Miracena row sat in the governance archive and its relative link was broken.",
+        bad_example: "# governance/backlog-archive.md\n| **MB-046** | ... |",
+        good_example: "# clients/miracena/backlog-archive.md\n| **MB-046** | ... |",
+        remediation: "Move the row to the queue of its prefix.",
+    },
+    RuleExplanation {
+        id: "BACKLOG-ID-CONTIGUOUS",
+        name: "Backlog Id Out Of Series",
+        severity: "ERROR",
+        tag: "doc",
+        summary: "No id may jump more than 50 above its predecessor (across the queue and its archive). `--next-id` reads id cells only and ignores such outliers.",
+        rationale: "On 2026-11-06 an id quoted in prose pushed the allocator into the 900 range and four agents followed.",
+        bad_example: "| GB-009 | a |\n| GB-900 | b |",
+        good_example: "| GB-009 | a |\n| GB-010 | b |",
+        remediation: "Renumber the row with `stenio backlog --next-id`.",
+    },
+    RuleExplanation {
+        id: "BACKLOG-DUPLICATE-DEFECT",
+        name: "Duplicate Backlog Defect",
+        severity: "ERROR",
+        tag: "doc",
+        summary: "Two open rows must not describe one defect: an identical `Stenio:` slug or a declared duplicate is an Error; a slug that extends another, or a shared file:line in the evidence, is a Warning unless one row records `Related: <id>`.",
+        rationale: "Two agents filed the same defect within an hour and only a manual read noticed.",
+        bad_example: "**Stenio: ARCH-NO-PYTHON.** (two open rows)",
+        good_example: "One open row; the duplicate archived with its evidence folded in.",
+        remediation: "Keep the older id, fold the evidence, archive the other; or record `Related:`.",
+    },
+    RuleExplanation {
+        id: "BACKLOG-DEDUP-FOLD-LOSSLESS",
+        name: "Lossy Duplicate Fold",
+        severity: "ERROR",
+        tag: "doc",
+        summary: "A row archived as `duplicate of <id>` must not carry a commit sha, rc= value, file:line or count that the open surviving row lacks.",
+        rationale: "A fold copied by eye cannot be told apart from one that dropped a measurement.",
+        bad_example: "archive: duplicate of GB-001, cites 910a8e8\nsurvivor: no sha",
+        good_example: "survivor: removal commit 910a8e8",
+        remediation: "Copy the missing measurement into the surviving row.",
+    },
+    RuleExplanation {
+        id: "BACKLOG-CROSS-REF",
+        name: "Broken Cross-Queue Reference",
+        severity: "WARN",
+        tag: "doc",
+        summary: "An item citing an id of another queue must find it in that queue or its archive. Inert when that queue is not under the audited path; at most one finding per cited id per queue.",
+        rationale: "A reference to a deleted or renumbered id reads as true forever.",
+        bad_example: "| **GB-001** | waits for MB-999 (exists nowhere) |",
+        good_example: "| **GB-001** | waits for MB-004 (open or archived) |",
+        remediation: "Fix the id or restore the archived row.",
     },
     RuleExplanation {
         id: "INFRA-BASH-STRICT",
@@ -1084,18 +1150,18 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "FRAPPE-WHITELIST-METHODS",
         name: "State-Changing Endpoint Without A Methods List",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "frappe",
         summary: "A @frappe.whitelist() function whose body calls .save(), .insert(), .delete(), .db_set(), frappe.delete_doc(), frappe.db.set_value() or frappe.db.delete() and declares no `methods` (GB-052). Reads the decorator over several lines and the `@whitelist` alias; a pure reader without methods is not accused. A write hidden behind a helper function is not seen.",
         rationale: "Without `methods` Frappe accepts GET, POST, PUT and DELETE (frappe/__init__.py:453-454), so a link, a prefetch or an <img> tag can change state. Audit 2026-11-05 found nine of 31 endpoints in that state, one of them (offboard_member) deactivating an account; FRAPPE-WHITELIST-PERMISSION returned 0 because it only matches a marker substring in the body. A gate is a path, not a statement (agent-global-rules.md 12): the verbs are read from the decorator by a machine.",
-        bad_example: "@frappe.whitelist()\ndef offboard_member(member):\n    doc = frappe.get_doc(\"Member\", member)\n    doc.save()\n# WARN [FRAPPE-WHITELIST-METHODS] changes state (`.save()` at line 4) but declares no `methods`",
+        bad_example: "@frappe.whitelist()\ndef offboard_member(member):\n    doc = frappe.get_doc(\"Member\", member)\n    doc.save()\n# ERROR [FRAPPE-WHITELIST-METHODS] changes state (`.save()` at line 4) but declares no `methods`",
         good_example: "@frappe.whitelist(methods=[\"POST\"])\ndef offboard_member(member):\n    ...",
         remediation: "Declare methods=[\"POST\"] on the decorator.",
     },
     RuleExplanation {
         id: "FRAPPE-WHITELIST-WRITE-POST",
         name: "State-Changing Endpoint Reachable By A Verb Other Than POST",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "frappe",
         summary: "Companion of FRAPPE-WHITELIST-METHODS (GB-056): the writer declares `methods` explicitly but the list holds a verb other than POST (for example [\"GET\", \"POST\"] or [\"PUT\"]). Together the two rules enforce: a state-changing whitelisted function is `methods=[\"POST\"]` exactly. A `methods` expression the reader cannot resolve (a variable) is left alone.",
         rationale: "Same incident class as FRAPPE-WHITELIST-METHODS (nine writers reachable by GET, 2026-11-05): widening the list to make a button work re-opens the hole with the rule satisfied by the letter. The split keeps each message actionable: no list at all, versus a list that is too wide.",
@@ -1185,7 +1251,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         name: "Permission-Sensitive Read Inside A Write Hook",
         severity: "ERROR",
         tag: "frappe",
-        summary: "A function reached from a write hook of hooks.py (validate, before_validate, before_save, after_save, on_update — directly or one import hop away) calls `frappe.get_doc(\"<DocType>\", ...)` with a literal DocType while no system context is open (no `ignore_permissions`, no `frappe.set_user(\"Administrator\")`, no `with` helper that does either). A computed DocType and a hook written as a list keep the rule silent.",
+        summary: "A function reached from a write hook of hooks.py (validate, before_validate, before_save, after_save, on_update — directly or one import hop away) calls `frappe.get_doc(\"<DocType>\", ...)` with a literal DocType while no system context is open (no `ignore_permissions`, no `frappe.set_user(\"Administrator\")`, no `with` helper that does either). Hooks written as a string or a list of strings are followed (GB-077); a computed DocType or hook value keeps the rule silent.",
         rationale: "`miracena/functions.py:62` read `frappe.get_doc(\"User\", user)` inside `sync_function_roles`, bound to the save of a Cabal. doc_events run in the session of whoever saved, so a Structure Steward — who may edit a cabal but holds no `write` on User — got PermissionError the moment the handler saved the User, and the cabal edit died on derived data the steward never touched. The read is the moment to decide: `frappe.db.get_value` reads only what the handler needs, with no permission check and no save, while an explicit `frappe.set_user(\"Administrator\")` in a try/finally says in the source that the elevation is deliberate and narrow. The rule is static: it reads hooks.py and the handler bodies as text (the engine never imports the app), it stops at one hop, and it only reads a DocType written as a literal string.",
         bad_example: "def sync_function_roles(doc=None, method=None):\n\tuser = frappe.get_doc(\"User\", user)\n\tuser.add_roles(\"Steward\")",
         good_example: "def sync_function_roles(doc=None, method=None):\n\twith system_session():   # frappe.set_user(\"Administrator\") in try/finally\n\t\tuser = frappe.get_doc(\"User\", user)\n\t\tuser.add_roles(\"Steward\")",
@@ -1245,6 +1311,94 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         bad_example: "~/.gemini/GEMINI.md without the path agent-global-rules.md",
         good_example: "~/.gemini/GEMINI.md contains @/mnt/NVME_PCI/agentic-ai/governance/agent-global-rules.md",
         remediation: "Add the missing reference to the entry file with a surgical edit, or correct governance/agent-entrypoints.toml when the harness changed.",
+    },
+    RuleExplanation {
+        id: "AGENT-FANOUT-WIRED",
+        name: "Harness Must Run The Fan-Out Reminder And Gate",
+        severity: "ERROR",
+        tag: "agent",
+        summary: "Each [[fanout]] line of governance/agent-entrypoints.toml says which script a harness runs on which event; the hook file is parsed and checked, the canonical vault script must exist and carry its marker, and every name in fanout_harnesses needs a line.",
+        rationale: "A substring in the file does not prove the script runs on the right event, nor that a disabled block is off (GB-046).",
+        bad_example: "[[fanout]]\nevent = \"SessionStart\"   # the hook is declared on UserPromptSubmit",
+        good_example: "[[fanout]]\nharness = \"claude-code\"\nfile = \"~/.claude/settings.json\"\nevent = \"UserPromptSubmit\"\nscript = \"fan-out-reminder.sh\"",
+        remediation: "Wire the script on the declared event, or fix the line when the harness changed.",
+    },
+    RuleExplanation {
+        id: "HOOK-EVENT-COVERAGE",
+        name: "Harness Hook Event Must Run Its Script",
+        severity: "ERROR",
+        tag: "agent",
+        summary: "The same check as AGENT-FANOUT-WIRED for [[hook]] lines, such as a turn ledger on subagent_stop and on_session_end.",
+        rationale: "An event nobody hooks loses what a child delivered and how a turn ended; a deleted script must be reported, not silently skipped (GB-163).",
+        bad_example: "[[hook]]\nevent = \"subagent_stop\"   # no such key in config.yaml",
+        good_example: "hooks:\n  subagent_stop:\n    - command: scripts/agent-hooks/turn-ledger.sh",
+        remediation: "Declare the hook in the harness and keep the script in the vault.",
+    },
+    RuleExplanation {
+        id: "HOOK-STDIN-UNBOUNDED",
+        name: "Hook Reads Stdin Without A Bound",
+        severity: "ERROR",
+        tag: "shell",
+        summary: "A script under a *hooks* directory assigning $(cat) or $(</dev/stdin) at top level.",
+        rationale: "An inherited harness stdin has no EOF; on 2026-11-06 the hook was killed after 15 s (GB-224).",
+        bad_example: "payload=\"$(cat)\"",
+        good_example: "payload=\"$(timeout 1 cat || true)\"",
+        remediation: "Resolve the mode from argv first and bound the read.",
+    },
+    RuleExplanation {
+        id: "INFRA-BASH-PIPEFAIL-QUIET-MATCH",
+        name: "Quiet Match Closes The Pipe Under pipefail",
+        severity: "WARN",
+        tag: "shell",
+        summary: "Under set -o pipefail, a pipeline into rg -q, grep -q or head used as a condition (if, while, &&). echo, printf and head -n1 producers are exempt.",
+        rationale: "The producer dies of SIGPIPE and the pipeline fails although the match was found (GB-249).",
+        bad_example: "if stenio pre-release --help | rg -q X; then",
+        good_example: "help=$(stenio pre-release --help)\nif rg -q X <<<\"$help\"; then",
+        remediation: "Capture the output, then match it.",
+    },
+    RuleExplanation {
+        id: "SH-SERIAL-CHAIN-NO-STOP",
+        name: "Publish Runs After A Failed Build",
+        severity: "WARN",
+        tag: "shell",
+        summary: "`build; git commit|tag|push` in a script without set -e, and pkill -f inside ssh or sh -c without the [x] bracket form.",
+        rationale: "A failed cargo build still tagged and pushed; pkill -f killed its own shell (GB-248).",
+        bad_example: "cargo build --release; git push",
+        good_example: "cargo build --release && git push",
+        remediation: "Chain with && or set -euo pipefail; write the pkill pattern as '[n]ame'.",
+    },
+    RuleExplanation {
+        id: "SH-DEPLOY-CONVERGENCE",
+        name: "Stack Deploy Without A Convergence Check",
+        severity: "ERROR",
+        tag: "shell",
+        summary: "docker stack deploy with neither --detach=false nor a later read of RUNNING/DESIRED (captured stack services Replicas) or UpdateStatus, in the flow or in a called function.",
+        rationale: "--detach defaults to true: the command returns before anything runs (GB-212, GB-221).",
+        bad_example: "docker stack deploy -c core.yml core\necho \"Deploy complete\"",
+        good_example: "docker stack deploy --detach=false -c core.yml core",
+        remediation: "Pass --detach=false or poll the replicas with a timeout.",
+    },
+    RuleExplanation {
+        id: "DEPLOY-SUCCESS-AFTER-WARN",
+        name: "Success Marker Reachable After A Failure",
+        severity: "ERROR",
+        tag: "shell",
+        summary: "In deploy, failover, release, swarm and *-ctl scripts: a failure branch that only prints, `cmd || echo warning`, `|| true` followed by a check mark, a warning followed by exit 0, an unreadable value reported as absent, or a deploy banner in a script that deploys nothing. A branch that exits non-zero or records the failure in a variable is handled.",
+        rationale: "The operator reads the banner; deploy-swarm.sh printed success with the API unhealthy (GB-222, GB-212).",
+        bad_example: "else\n  echo \"WARN api down\"\nfi\necho \"Deploy complete\"",
+        good_example: "else\n  echo \"WARN api down\"\n  exit 1\nfi",
+        remediation: "Exit non-zero, or record it and print a non-success marker.",
+    },
+    RuleExplanation {
+        id: "LOCK-VERSION-PARITY",
+        name: "Cargo.lock Behind Cargo.toml",
+        severity: "ERROR",
+        tag: "deps",
+        summary: "The [package] version of every Cargo.toml (workspace inheritance included) equals the one its local entry has in the nearest Cargo.lock.",
+        rationale: "cargo build --locked exits 101 and leaves the old binary, while cargo metadata --locked --no-deps exits 0 (GB-070).",
+        bad_example: "Cargo.toml 0.2.0, Cargo.lock 0.1.0",
+        good_example: "both 0.2.0",
+        remediation: "cargo update --workspace and commit Cargo.lock.",
     },
     RuleExplanation {
         id: "DEPENDABOT-LOCKFILE-COVERAGE",
@@ -1414,13 +1568,13 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL",
         name: "Release Tag Published Before The Rehearsal",
-        severity: "WARNING",
+        severity: "ERROR",
         tag: "frappe",
-        summary: "Detector half of GB-196: the first `git push ... refs/tags` call of the release script comes before the call to rehearse.sh, so a red rehearsal still spends a number that is already public. WARNING, not ERROR: the real fix (publish the tag only after the rehearsal, which needs the image built from an unpublished tag) is a release.sh + Dockerfile change tracked in GB-196.",
-        rationale: "rc125 spent its number this way: the tag push sat before the minutes-long rehearsal that decides whether the image is deployable. The warning keeps the debt visible on every audit until the order is changed; it is deliberately not blocking because the fix is outside the engine.",
+        summary: "Detector half of GB-196: the first `git push ... refs/tags` call of the release script comes before the call to rehearse.sh, so a red rehearsal still spends a number that is already public. ERROR since the release script publishes the tag only after the rehearsal; `stenio --path release.sh` judges one script alone as RELEASE-TAG-PUBLISHED-AFTER-REHEARSAL and RELEASE-BATTERY-BEFORE-TAG.",
+        rationale: "rc125 spent its number this way: the tag push sat before the minutes-long rehearsal that decides whether the image is deployable. The order is fixed in the Miracena orchestrator, so a regression now blocks.",
         bad_example: "git push origin \"refs/tags/$VTAG\"\nbash rehearse.sh \"$IMG\"\n# WARNING [FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL] the tag is pushed at line 1 before the rehearsal call at line 2",
         good_example: "bash rehearse.sh \"$IMG\"\ngit push origin \"refs/tags/$VTAG\"",
-        remediation: "Reorder release.sh so the tag push follows a green rehearsal (GB-196); until then the warning is the reminder.",
+        remediation: "Reorder release.sh so the tag push follows a green rehearsal (GB-196); build the image from a candidate branch meanwhile.",
     },
     RuleExplanation {
         id: "FRAPPE-REHEARSAL-VERDICT",
@@ -1592,6 +1746,11 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     EXPLANATIONS
         .iter()
         .chain(crate::hostops::EXPLANATIONS)
+        .chain(crate::secrets_suite::explain::EXPLANATIONS)
+        .chain(crate::frappe::ext::explanations())
+        .chain(crate::release_file_gate::EXPLANATIONS)
+        .chain(crate::frappe_perm::explanations())
+        .chain(crate::frappe::desk::explanations())
         .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 
@@ -1688,7 +1847,15 @@ pub fn format_explanation_plain(exp: &RuleExplanation) -> String {
 pub fn list_all_explanations() -> String {
     let mut s = String::new();
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
-    for exp in EXPLANATIONS.iter().chain(crate::hostops::EXPLANATIONS) {
+    for exp in EXPLANATIONS
+        .iter()
+        .chain(crate::hostops::EXPLANATIONS)
+        .chain(crate::secrets_suite::explain::EXPLANATIONS)
+        .chain(crate::frappe::ext::explanations())
+        .chain(crate::release_file_gate::EXPLANATIONS)
+        .chain(crate::frappe_perm::explanations())
+        .chain(crate::frappe::desk::explanations())
+    {
         s.push_str(&format!(
             "  • {:<26} [{:<5}] {:<7} - {}\n",
             exp.id, exp.tag, exp.severity, exp.name

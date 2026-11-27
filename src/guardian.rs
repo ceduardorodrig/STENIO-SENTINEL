@@ -603,13 +603,8 @@ fn token_pattern() -> Option<&'static regex::Regex> {
 
 /// Redacts the matched value so the report never re-leaks the credential it just found.
 fn mask_secret_snippet(line: &str) -> String {
-    let trimmed = line.trim();
-    let head: String = trimmed.chars().take(24).collect();
-    if trimmed.chars().count() > 24 {
-        format!("{}…[REDACTED]", head)
-    } else {
-        format!("{head}[REDACTED]")
-    }
+    // GB-184: a prefix of the line used to travel into reports and agent transcripts.
+    crate::infra::mask_snippet(line)
 }
 
 #[allow(dead_code)]
@@ -864,6 +859,22 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             ],
         ),
         (
+            "secrets_suite/explain.rs",
+            &[
+                "SEC-SOPS-STORE-RECIPIENTS",
+                "SECRETS-STORE-DRIFT",
+                "ENV-VAR-WIRED",
+                "STACK-ENV-REQUIRED-HAS-CONSUMER",
+                "COMPOSE-ENV-EXAMPLE-PARITY",
+                "SEC-SECRET-WRITTEN-TO-DISK",
+                "HARNESS-ENV-SNAPSHOT-REDACTS-SECRETS",
+                "SEC-ONE-VALUE-MANY-NAMES",
+                "SECRET-IN-AGENT-OUTPUT",
+                "SECRETS-HELPER-HAS-NO-FALLBACK",
+                "PROVIDER-ERROR-NO-EMPTY-DETAIL",
+            ],
+        ),
+        (
             "vault.rs",
             &[
                 "PROJECT-AUTO-COLD-STORAGE",
@@ -933,6 +944,21 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["gained_error", "SKIP", "list_branches", "ci_branches"],
         ),
         (
+            "frappe_perm.rs",
+            &[
+                "docperm_row::RULE",
+                "permlevel_row::RULE",
+                "permlevel_write::RULE",
+                "permlevel_list_view::RULE",
+                "public_reason::RULE",
+                "public_drift::RULE",
+                "perm_matrix::RULE",
+                "whitelist_guest::RULE",
+                "patch_owned::RULE",
+                "wired_into_scope",
+            ],
+        ),
+        (
             "frappe.rs",
             &[
                 "FRAPPE-DOCTYPE-CONTROLLER",
@@ -955,6 +981,19 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
                 "HOMELAB-BACKLOG-LIFECYCLE",
             ],
         ),
+        (
+            "backlog/integrity.rs",
+            &[
+                "BACKLOG-TABLE-INTEGRITY",
+                "DOC-BACKLOG-FOREIGN-ROW",
+                "BACKLOG-ID-CONTIGUOUS",
+                "BACKLOG-DUPLICATE-DEFECT",
+                "BACKLOG-DEDUP-FOLD-LOSSLESS",
+                "BACKLOG-CROSS-REF",
+                "duplicate_ids",
+            ],
+        ),
+        ("backlog/close.rs", &["nothing written", "remove_pending"]),
         (
             "baseline.rs",
             &[
