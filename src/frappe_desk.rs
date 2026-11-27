@@ -15,6 +15,8 @@ mod fieldname_shadow;
 mod list_filter_fields;
 #[path = "frappe_desk/po_resolves.rs"]
 mod po_resolves;
+#[path = "frappe_desk/report_chart.rs"]
+mod report_chart;
 #[path = "frappe_desk/reqd_messages.rs"]
 mod reqd_messages;
 #[path = "frappe_desk/support.rs"]
@@ -58,6 +60,11 @@ const ITEMS: &[Item] = &[
         explain: &list_filter_fields::EXPLAIN,
         run: list_filter_fields::run,
         cases: list_filter_fields::cases,
+    },
+    Item {
+        explain: &report_chart::EXPLAIN,
+        run: report_chart::run,
+        cases: report_chart::cases,
     },
 ];
 
