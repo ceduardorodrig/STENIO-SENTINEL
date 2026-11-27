@@ -933,6 +933,21 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &["gained_error", "SKIP", "list_branches", "ci_branches"],
         ),
         (
+            "frappe_perm.rs",
+            &[
+                "docperm_row::RULE",
+                "permlevel_row::RULE",
+                "permlevel_write::RULE",
+                "permlevel_list_view::RULE",
+                "public_reason::RULE",
+                "public_drift::RULE",
+                "perm_matrix::RULE",
+                "whitelist_guest::RULE",
+                "patch_owned::RULE",
+                "wired_into_scope",
+            ],
+        ),
+        (
             "frappe.rs",
             &[
                 "FRAPPE-DOCTYPE-CONTROLLER",

@@ -28,8 +28,13 @@ pub static RULE: Rule = Rule {
     },
 };
 
-/// (DocType, level, role) entries and the file lines that are not in that shape or lack a reason.
-fn deny_map(t: &Tree) -> (Vec<(String, i64, String)>, Vec<(String, usize, String)>) {
+/// (DocType, level, role).
+type Entry = (String, i64, String);
+/// (file, line, text).
+type BadLine = (String, usize, String);
+
+/// Deny entries and the file lines that are not in that shape or lack a reason.
+fn deny_map(t: &Tree) -> (Vec<Entry>, Vec<BadLine>) {
     let (mut entries, mut bad) = (Vec::new(), Vec::new());
     let mut paths = vec![t.pkg.join(DENY_FILE), t.root.join(DENY_FILE)];
     paths.dedup();
