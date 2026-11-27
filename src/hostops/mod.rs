@@ -14,6 +14,7 @@ use crate::engine::Violation;
 use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
+mod kuma; // GB-014 GB-015
 mod ports_vs_ss; // GB-013
 
 
@@ -30,6 +31,8 @@ const LINTS: &[(&str, Lint)] = &[
 ];
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
+    kuma::EXPLAIN_LOOPBACK,      // GB-014
+    kuma::EXPLAIN_NOTIFY,        // GB-015
     ports_vs_ss::EXPLAIN,        // GB-013
 ];
 
@@ -43,6 +46,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let rest = &argv[1..];
     match name.as_str() {
         "lint" => lint_cli(rest),
+        "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "ports" => ports_vs_ss::run_cli(rest),             // GB-013
         _ => {
             eprintln!("unknown check '{name}'\n{USAGE}");
@@ -53,6 +57,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut all = Vec::new();
+    all.extend(kuma::self_test_cases()); // GB-014 GB-015
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
     all
 }
