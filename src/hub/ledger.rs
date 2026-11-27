@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::config::Config;
 use super::resource::{self, Resource};
@@ -131,6 +131,15 @@ fn end_claim(conn: &Connection, claim: &Claim, reason: &str, note: Option<&str>)
         .checkpoint
         .as_deref()
         .and_then(|c| serde_json::from_str::<Value>(c).ok());
+    // Only an expiry has "expired"; a voluntary end names when the lease would have ended.
+    let ends = if reason == EXPIRED {
+        "expired_at"
+    } else {
+        "lease_until"
+    };
+    let mut payload = json!({"fence": claim.fence, "reason": reason, "note": note,
+        "checkpoint": checkpoint});
+    payload[ends] = json!(iso(claim.expires));
     append(
         conn,
         NewEvent {
@@ -142,8 +151,7 @@ fn end_claim(conn: &Connection, claim: &Claim, reason: &str, note: Option<&str>)
                 "release"
             },
             resource: &claim.resource,
-            payload: json!({"fence": claim.fence, "reason": reason, "note": note,
-                "expired_at": iso(claim.expires), "checkpoint": checkpoint}),
+            payload,
         },
     )?;
     Ok(())
@@ -525,6 +533,47 @@ pub struct ClaimRequest {
     pub resources: Vec<String>,
     pub run: Option<String>,
     pub ttl_secs: Option<u64>,
+    /// Binds the `backlog:` claims of this request to the queues under this directory.
+    pub path: Option<PathBuf>,
+}
+
+/// The queue directory a `backlog:` claim is bound to, as recorded in its event.
+pub fn claim_scope(conn: &Connection, fence: i64, resource: &str) -> HubResult<Option<PathBuf>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload FROM events WHERE type = 'claim' AND resource = ?1 ORDER BY seq DESC",
+    )?;
+    let payloads = stmt.query_map([resource], |r| r.get::<_, String>(0))?;
+    for payload in payloads {
+        let body: Value = serde_json::from_str(&payload?).unwrap_or(Value::Null);
+        if body["fence"].as_i64() == Some(fence) {
+            return Ok(body["scope"].as_str().map(PathBuf::from));
+        }
+    }
+    Ok(None)
+}
+
+/// `name -> queue directory` for the `backlog:` resources of a request that names a path.
+fn scopes(
+    wanted: &[Resource],
+    path: Option<&Path>,
+) -> HubResult<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    let Some(path) = path else {
+        return Ok(out);
+    };
+    for resource in wanted.iter().filter(|r| r.kind == "backlog") {
+        let prefix = resource.value().trim_end_matches(":write");
+        let dir = super::guard::queue_dir(path, prefix).ok_or_else(|| {
+            HubError::Usage(format!("no {prefix} queue under {}", path.display()))
+        })?;
+        out.insert(resource.name.clone(), dir.display().to_string());
+    }
+    if out.is_empty() {
+        return Err(HubError::Usage(
+            "--path binds a backlog:<P>:write claim; none was requested".to_string(),
+        ));
+    }
+    Ok(out)
 }
 
 /// All-or-nothing claim of every listed resource under one new fence.
@@ -539,6 +588,12 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
     }
     let ttl_ms = i64::try_from(ttl.saturating_mul(1000))
         .map_err(|_| HubError::Usage("the lease is too long".to_string()))?;
+    let bound = scopes(&wanted, request.path.as_deref())?;
+    if wanted.iter().any(Resource::starts_work) {
+        // The source command runs here, outside any write transaction.
+        let account = store.read(|c| Ok(worker(c, &request.worker)?.account))?;
+        quota::refresh_stale(store, &cfg.quota, &account)?;
+    }
     sweep_now(store)?;
     store.write(|tx| {
         sweep(tx)?;
@@ -602,7 +657,8 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
                     run: run.as_deref(),
                     kind: "claim",
                     resource: &name,
-                    payload: json!({"fence": fence, "expires": expires, "ttl_ms": ttl_ms}),
+                    payload: json!({"fence": fence, "expires": expires, "ttl_ms": ttl_ms,
+                        "scope": bound.get(&name)}),
                 },
             )?;
             taken.push(name);
@@ -841,6 +897,9 @@ fn check_handback(h: &Handback) -> HubResult<()> {
 /// late hand-back is still accepted when nobody took the row over.
 pub fn handback(store: &mut Store, request: &Handback) -> HubResult<Value> {
     check_handback(request)?;
+    if request.row.trim().is_empty() {
+        return handback_claim(store, request);
+    }
     let row = resource::row_id(request.row.trim().trim_start_matches("row:"))?;
     let name = format!("row:{row}");
     sweep_now(store)?;
@@ -960,6 +1019,76 @@ pub fn handback(store: &mut Store, request: &Handback) -> HubResult<Value> {
             json!({"ok": true, "row": row, "verdict": request.verdict, "run": run,
             "late": late, "replayed": false,
             "note": "recorded, not replayed: a reviewer verifies the proof before closing"}),
+        )
+    })
+}
+
+/// The result of a claim that holds no row (a queue writer, a release, a deploy): accepted from
+/// the holder of the newest fence of every resource, then those claims end.
+fn handback_claim(store: &mut Store, request: &Handback) -> HubResult<Value> {
+    sweep_now(store)?;
+    store.write(|tx| {
+        let who = worker(tx, &request.worker)?;
+        let group = claims(tx, "WHERE fence = ?1", [request.fence])?;
+        if group.is_empty() {
+            return Err(stale_fence("that fence", None, request.fence));
+        }
+        if group.iter().any(|c| c.resource.starts_with("row:")) {
+            return Err(HubError::Usage(format!(
+                "fence {} holds a row: give --row",
+                request.fence
+            )));
+        }
+        let mut open = Vec::new();
+        for claim in &group {
+            let latest = latest_claim(tx, &claim.resource)?;
+            let owns = latest.as_ref().is_some_and(|l| {
+                l.id == claim.id
+                    && l.holder == who.id
+                    && l.reason.as_deref().is_none_or(|r| r == EXPIRED)
+            });
+            if owns {
+                open.push(claim);
+            }
+        }
+        if open.is_empty() {
+            let first = &group[0].resource;
+            let latest = latest_claim(tx, first)?;
+            return Err(stale_fence(first, latest.as_ref(), request.fence));
+        }
+        let mut resources = Vec::new();
+        let mut late = false;
+        for claim in open {
+            late |= claim.released.is_some();
+            append(
+                tx,
+                NewEvent {
+                    worker: &who.id,
+                    run: claim.run.as_deref(),
+                    kind: "claim_handback",
+                    resource: &claim.resource,
+                    payload: json!({"fence": request.fence, "verdict": request.verdict,
+                        "branch": request.branch, "pr": request.pr, "proof": request.proof,
+                        "remaining": request.remaining, "defects": request.defects,
+                        "late": claim.released.is_some()}),
+                },
+            )?;
+            if claim.released.is_none() {
+                end_claim(tx, claim, HANDBACK, None)?;
+            } else {
+                // Bookkeeping: the holder knows the lease ended, so it is not reported again.
+                tx.execute(
+                    "UPDATE claims SET loss_reported = 1 WHERE id = ?1",
+                    [claim.id],
+                )?;
+            }
+            resources.push(claim.resource.clone());
+        }
+        touch(tx, &who.id)?;
+        Ok(
+            json!({"ok": true, "resources": resources, "verdict": request.verdict,
+            "late": late,
+            "note": "recorded, not replayed: a reviewer verifies the proof"}),
         )
     })
 }

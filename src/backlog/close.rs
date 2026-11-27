@@ -476,16 +476,28 @@ pub fn run_cli(argv: &[String]) -> i32 {
     prefixes.dedup();
     // Planned and applied under one lock, so no other writer changes a file in between.
     let written =
-        crate::hub::guard::cli_write(&root, &prefixes, a.worker.as_deref(), a.dry_run, || {
+        crate::hub::guard::guarded(&root, &prefixes, a.worker.as_deref(), a.dry_run, || {
             let p = plan(&root, &items, &date)?;
             if !a.dry_run {
                 apply(&p)?;
             }
-            Ok(p)
+            let changed = crate::hub::guard::Written {
+                rows: p.rows.iter().map(|(id, _)| id.clone()).collect(),
+                files: p
+                    .changes
+                    .iter()
+                    .filter(|c| c.before != c.after)
+                    .map(|c| c.path.clone())
+                    .collect(),
+            };
+            Ok((p, changed))
         });
     let p = match written {
         Ok(p) => p,
-        Err(code) => return code,
+        Err(e) => {
+            eprintln!("{}", crate::hub::guard::failure_text(&e));
+            return e.exit_code();
+        }
     };
     let verb = if a.dry_run { "would close" } else { "closed" };
     for (id, row) in &p.rows {

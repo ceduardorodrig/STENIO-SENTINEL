@@ -18,9 +18,11 @@ unavailable.
 ## Cycle
 
 1. `join --harness <name> [--account <quota account>]`. Keep the worker id; export
-   `STENIO_HUB_WORKER=<id>` where your harness allows.
-2. `quota refresh`, then `status`. An unknown or stale quota allows one working worker per
-   account; 60% or more allows two; 80% or more allows no new row.
+   `STENIO_HUB_WORKER=<id>` where your harness allows. `claude-code` and `opencode` have a
+   declared account, so they may omit `--account`.
+2. `status`. A claim of a row or slot reads the declared source of your account when no fresh
+   sample exists (`quota refresh` reads them all). An unknown or stale quota allows one working
+   worker per account; 60% or more allows two; 80% or more allows no new row.
 3. `claim row:<ID> tree:<absolute path of your clone>` (all or nothing). Keep the `fence`.
 4. `beat` before the lease ends (default 20 minutes). A hook after each tool call may run
    `stenio hub beat --from-hook`.
@@ -30,6 +32,8 @@ unavailable.
    then hand back `needs-owner` and take another row.
 7. `handback --row <ID> --fence <n> --verdict done|partial|blocked|needs-owner|failed` with
    `--proof` (done) or `--remaining` (partial, blocked, failed); add `--defect` for new findings.
+   A fence without a row (queue, release, deploy) is handed back the same way, without
+   `--row`.
 8. `lease_lost` or `stale_fence`: stop writing; someone else may own the row now.
 
 ## Coordinator duties
@@ -42,7 +46,10 @@ starting a sub-agent, and let the sub-agent join with `--parent`.
 --require-final`, `export --run <id>`, and `run close`.
 
 While a worker holds `backlog:<prefix>:write`, only `stenio backlog close --worker <id>` and
-`stenio opportunity add --worker <id>` of that worker write the queue.
+`stenio opportunity add --worker <id>` of that worker write the queue (`--queue HB|MB|SB`
+selects another queue than GB and needs `--ref`; `--json` prints the id or the refusal). A dry
+run reports the same refusal. The claim covers every directory unless it was taken with
+`--path <root>`; then a scratch copy elsewhere stays writable.
 
 ## Limits of this release
 

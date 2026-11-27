@@ -7,12 +7,14 @@
 //! `pending:` list of the referenced document and runs the backlog audit.
 
 use clap::Parser;
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::backlog;
+use crate::backlog::{self, queue_index::present_queues};
 use crate::engine::Violation;
+use crate::hub::{HubError, guard::Written};
 use crate::rule::Severity;
 
 pub const FORMAT_RULE_ID: &str = "STENIO-ITEM-FORMAT";
@@ -23,7 +25,9 @@ const FIELDS: [&str; 5] = [
     "Origin:",
     "Status:",
 ];
+/// Marks a vault root, and the queue written without `--queue`.
 const BACKLOG_REL: &str = "governance/backlog.md";
+const DEFAULT_QUEUE: &str = "GB";
 const DEFAULT_REF: &str = "governance/stenio-troubleshooting.md";
 const DEFAULT_VAULT: &str = "/mnt/NVME_PCI/agentic-ai";
 
@@ -64,10 +68,13 @@ pub fn check_format(display: &str, row: &str, id: &str, line: usize) -> Vec<Viol
 #[derive(Parser, Debug)]
 #[command(
     name = "stenio opportunity add",
-    about = "Log a Stenio opportunity as a formatted GB backlog row"
+    about = "Add one formatted backlog row (default queue GB: a Stenio opportunity)"
 )]
 struct AddArgs {
-    #[arg(long, help = "RULE-ID or subcommand (the `Stenio: ` prefix is added)")]
+    #[arg(
+        long,
+        help = "RULE-ID or subcommand (in GB the `Stenio: ` prefix is added)"
+    )]
     title: String,
     #[arg(long)]
     evidence: String,
@@ -79,8 +86,15 @@ struct AddArgs {
     origin: String,
     #[arg(long, default_value = "🟡")]
     priority: String,
-    #[arg(long = "ref", default_value = DEFAULT_REF, help = "Vault-relative document that gets `pending: [id]`")]
-    doc: String,
+    #[arg(
+        long = "ref",
+        help = "Vault-relative document of the row; a linked queue gets `pending: [id]` in it (required outside GB)"
+    )]
+    doc: Option<String>,
+    #[arg(long, default_value = DEFAULT_QUEUE, help = "Queue prefix: GB, HB, MB, SB, ...")]
+    queue: String,
+    #[arg(long, help = "Print one JSON document, also on refusal")]
+    json: bool,
     #[arg(
         long,
         help = "Vault root (default: the vault found from the cwd, else the standard one)"
@@ -103,6 +117,8 @@ struct AddArgs {
 /// Input of [`add`], independent from the clap surface so tests can drive the writer.
 #[derive(Clone, Debug)]
 pub struct AddRequest {
+    /// Queue prefix without the dash.
+    pub queue: String,
     pub title: String,
     pub evidence: String,
     pub desired: String,
@@ -122,6 +138,8 @@ pub enum Pending {
     AlreadyPresent,
     /// The document is missing, has no frontmatter or uses a block list.
     Manual,
+    /// The queue keeps no `pending:` links.
+    NotLinked,
 }
 
 /// What [`add`] wrote (or would write, under `dry_run`).
@@ -130,6 +148,8 @@ pub struct Added {
     pub id: String,
     pub row: String,
     pub pending: Pending,
+    /// The queue file, and the document when it changed.
+    pub files: Vec<PathBuf>,
 }
 
 fn clean(s: &str) -> String {
@@ -152,7 +172,19 @@ pub(crate) fn vault_root(given: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_VAULT))
 }
 
-fn build_row(id: &str, a: &AddRequest) -> String {
+/// The link from a queue directory (`queue` and `doc` are both relative to the root).
+fn relative_link(queue: &Path, doc: &str) -> String {
+    let doc = Path::new(doc);
+    let queue: Vec<_> = queue.components().collect();
+    let parts: Vec<_> = doc.components().collect();
+    let shared = queue.iter().zip(&parts).take_while(|(a, b)| a == b).count();
+    let mut out = "../".repeat(queue.len() - shared);
+    let rest: PathBuf = parts[shared..].iter().collect();
+    out.push_str(&rest.to_string_lossy());
+    out
+}
+
+fn build_row(id: &str, a: &AddRequest, link: &str) -> String {
     let title = clean(&a.title);
     let title = title
         .strip_prefix("Stenio:")
@@ -167,8 +199,13 @@ fn build_row(id: &str, a: &AddRequest) -> String {
         .map_or(String::new(), |r| {
             format!(" Related: {r} (overlap acknowledged).")
         });
+    let kind = if a.queue == DEFAULT_QUEUE {
+        "Stenio: "
+    } else {
+        ""
+    };
     format!(
-        "| **{id}** | **Stenio: {title}.** Evidence: {}. Desired behaviour: {}. Acceptance: {}.{related} Origin: {origin}. Status: open. | [`{name}`]({name}) | {} | open | {origin} | — |",
+        "| **{id}** | **{kind}{title}.** Evidence: {}. Desired behaviour: {}. Acceptance: {}.{related} Origin: {origin}. Status: open. | [`{name}`]({link}) | {} | open | {origin} | — |",
         clean(&a.evidence),
         clean(&a.desired),
         clean(&a.acceptance),
@@ -176,23 +213,31 @@ fn build_row(id: &str, a: &AddRequest) -> String {
     )
 }
 
-/// Inserts `row` after the last `GB-` table row; None when there is no such row.
-fn insert_row(content: &str, row: &str) -> Option<String> {
+/// True for a table row of the queue `prefix`.
+fn is_row(line: &str, prefix: &str) -> bool {
+    line.starts_with(&format!("| **{prefix}-")) || line.starts_with(&format!("| {prefix}-"))
+}
+
+/// Inserts `row` after the last table row of the queue; None when there is no such row.
+fn insert_row(content: &str, prefix: &str, row: &str) -> Option<String> {
     let lines: Vec<&str> = content.split('\n').collect();
-    let last = lines
-        .iter()
-        .rposition(|l| l.starts_with("| **GB-") || l.starts_with("| GB-"))?;
+    let last = lines.iter().rposition(|l| is_row(l, prefix))?;
     let mut out: Vec<&str> = lines[..=last].to_vec();
     out.push(row);
     out.extend_from_slice(&lines[last + 1..]);
     Some(out.join("\n"))
 }
 
-/// Title of a `GB` row: the text between `**Stenio: ` and the closing `.**`.
-fn row_title(row: &str) -> Option<&str> {
-    let cell = row.split('|').nth(2)?.trim();
-    let rest = cell.strip_prefix("**Stenio:")?.trim_start();
-    Some(rest.split(".**").next().unwrap_or(rest).trim())
+/// Title of a row: the leading bold text of its item cell. A `GB` row must carry `Stenio:`.
+fn row_title<'a>(row: &'a str, prefix: &str) -> Option<&'a str> {
+    let cell = row.split('|').nth(2)?.trim().strip_prefix("**")?;
+    let rest = if prefix == DEFAULT_QUEUE {
+        cell.strip_prefix("Stenio:")?.trim_start()
+    } else {
+        cell
+    };
+    let title = rest.split("**").next().unwrap_or(rest).trim();
+    Some(title.trim_end_matches('.'))
 }
 
 /// Comparison key: the `Stenio:` prefix and the trailing period are formatting, not identity.
@@ -205,13 +250,13 @@ fn title_key(title: &str) -> String {
 
 /// Id of the active row already carrying this title. The archive is not consulted on purpose:
 /// an archived problem that comes back is a *new* item linked with `Recurrence:` (§4).
-fn find_duplicate(content: &str, title: &str) -> Option<String> {
+fn find_duplicate(content: &str, prefix: &str, title: &str) -> Option<String> {
     let wanted = title_key(title);
     content.lines().find_map(|line| {
-        if !line.starts_with("| **GB-") {
+        if !is_row(line, prefix) {
             return None;
         }
-        if title_key(row_title(line)?) != wanted {
+        if title_key(row_title(line, prefix)?) != wanted {
             return None;
         }
         line.split('|')
@@ -255,14 +300,14 @@ fn row_evidence(row: &str) -> &str {
     rest.split("Desired behaviour:").next().unwrap_or(rest)
 }
 
-/// Open GB rows that look like the new one (GB-265): at least two shared title tokens covering
+/// Open rows that look like the new one (GB-265): at least two shared title tokens covering
 /// at least 60% of the shorter title, or at least six shared evidence words (5+ chars) covering
 /// at least half of the shorter evidence. Returns `(id, reason)` pairs; the archive is not read.
-fn similar_rows(content: &str, title: &str, evidence: &str) -> Vec<(String, String)> {
+fn similar_rows(content: &str, prefix: &str, title: &str, evidence: &str) -> Vec<(String, String)> {
     let nt = tokens(&title_key(title), 3);
     let ne = tokens(evidence, 5);
     let mut out = Vec::new();
-    for line in content.lines().filter(|l| l.starts_with("| **GB-")) {
+    for line in content.lines().filter(|l| is_row(l, prefix)) {
         let cells: Vec<&str> = line.split('|').collect();
         let state = cells.get(5).map_or("", |c| c.trim());
         if state.contains("closed") || state.contains("done") {
@@ -271,7 +316,7 @@ fn similar_rows(content: &str, title: &str, evidence: &str) -> Vec<(String, Stri
         let Some(id) = cells.get(1).map(|c| c.trim().trim_matches('*').to_string()) else {
             continue;
         };
-        let (ts, tr) = overlap(&nt, &tokens(row_title(line).unwrap_or(""), 3));
+        let (ts, tr) = overlap(&nt, &tokens(row_title(line, prefix).unwrap_or(""), 3));
         let (es, er) = overlap(&ne, &tokens(row_evidence(line), 5));
         if ts >= 2 && tr >= 0.6 {
             out.push((id, format!("title shares {ts} word(s)")));
@@ -296,17 +341,27 @@ fn validate(req: &AddRequest) -> Result<(), String> {
     Ok(())
 }
 
-/// The single writer behind `stenio opportunity add`: allocates the next `GB-` id with the same
-/// allocator as `--next-id`, refuses a title already open, inserts one row after the last `GB-`
-/// row (read → insert → guarded write, so the rest of the file is byte-identical) and links the
-/// id into the `pending:` frontmatter of `req.doc`.
+/// The single writer behind `stenio opportunity add`: allocates the next id of the queue with the
+/// same allocator as `--next-id`, refuses a title already open, inserts one row after the last row
+/// of the queue (read, insert, guarded write, so the rest of the file is byte-identical) and, for a
+/// linked queue, adds the id to the `pending:` frontmatter of `req.doc`.
 pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String> {
     validate(req)?;
-    let id = backlog::next_id(root, "GB")?;
-    let bpath = root.join(BACKLOG_REL);
+    let prefix = req.queue.as_str();
+    let queue = present_queues(root)
+        .into_iter()
+        .find(|q| q.prefix == prefix)
+        .ok_or_else(|| {
+            format!(
+                "no {prefix} queue under {}: give --path; nothing written",
+                root.display()
+            )
+        })?;
+    let id = backlog::next_id(root, prefix)?;
+    let bpath = queue.active();
     let original =
         fs::read_to_string(&bpath).map_err(|e| format!("cannot read {}: {e}", bpath.display()))?;
-    if let Some(existing) = find_duplicate(&original, &req.title) {
+    if let Some(existing) = find_duplicate(&original, prefix, &req.title) {
         return Err(format!(
             "duplicate: {existing} already has the title \"{}\"; nothing written",
             clean(&req.title)
@@ -323,11 +378,11 @@ pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String
             .any(|l| l.starts_with(&format!("| **{h}**")));
         if !known {
             return Err(format!(
-                "--duplicate-of {h}: no such GB row; nothing written"
+                "--duplicate-of {h}: no such {prefix} row; nothing written"
             ));
         }
     } else {
-        let similar = similar_rows(&original, &req.title, &req.evidence);
+        let similar = similar_rows(&original, prefix, &req.title, &req.evidence);
         if !similar.is_empty() {
             let names: Vec<String> = similar
                 .iter()
@@ -340,18 +395,33 @@ pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String
             ));
         }
     }
-    let row = build_row(&id, req);
+    let queue_rel = queue.dir.strip_prefix(root).unwrap_or(Path::new(""));
+    let row = build_row(&id, req, &relative_link(queue_rel, &req.doc));
     if dry_run {
         return Ok(Added {
             id,
             row,
             pending: Pending::Manual,
+            files: vec![bpath],
         });
     }
-    let new = insert_row(&original, &row)
-        .ok_or_else(|| format!("no GB row found in {}; nothing written", bpath.display()))?;
+    let new = insert_row(&original, prefix, &row).ok_or_else(|| {
+        format!(
+            "no {prefix} row found in {}; nothing written",
+            bpath.display()
+        )
+    })?;
     guarded_write(&bpath, &original, &new)?;
+    let mut files = vec![bpath];
 
+    if !backlog::queue_index::is_linked(prefix) {
+        return Ok(Added {
+            id,
+            row,
+            pending: Pending::NotLinked,
+            files,
+        });
+    }
     let dpath = root.join(&req.doc);
     let pending = match fs::read_to_string(&dpath)
         .ok()
@@ -359,12 +429,20 @@ pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String
     {
         Some((d, n)) if d == n => Pending::AlreadyPresent,
         Some((d, n)) => match guarded_write(&dpath, &d, &n) {
-            Ok(()) => Pending::Added,
+            Ok(()) => {
+                files.push(dpath);
+                Pending::Added
+            }
             Err(_) => Pending::Manual,
         },
         None => Pending::Manual,
     };
-    Ok(Added { id, row, pending })
+    Ok(Added {
+        id,
+        row,
+        pending,
+        files,
+    })
 }
 
 /// Writes `new` over `path` only when the file still equals `original`, through a sibling temp
@@ -394,18 +472,29 @@ pub(crate) fn guarded_write(path: &Path, original: &str, new: &str) -> Result<()
 }
 
 impl AddArgs {
-    fn request(&self) -> AddRequest {
+    fn request(&self, queue: String, doc: String) -> AddRequest {
         AddRequest {
+            queue,
             title: self.title.clone(),
             evidence: self.evidence.clone(),
             desired: self.desired.clone(),
             acceptance: self.acceptance.clone(),
             origin: self.origin.clone(),
             priority: self.priority.clone(),
-            doc: self.doc.clone(),
+            doc,
             duplicate_of: self.duplicate_of.clone(),
         }
     }
+}
+
+/// Prints a refusal or failure (JSON on stdout when asked) and returns its exit code.
+fn refuse(error: &HubError, json: bool) -> i32 {
+    if json {
+        println!("{}", error.to_json());
+    } else {
+        eprintln!("{}", crate::hub::guard::failure_text(error));
+    }
+    error.exit_code()
 }
 
 pub fn run_cli(argv: &[String]) -> i32 {
@@ -420,54 +509,88 @@ pub fn run_cli(argv: &[String]) -> i32 {
             };
         }
     };
+    let queue = a.queue.trim().trim_end_matches('-').to_uppercase();
+    let default_doc = (queue == DEFAULT_QUEUE).then(|| DEFAULT_REF.to_string());
+    let Some(doc) = a.doc.clone().or(default_doc) else {
+        let why = format!("--ref is required for the {queue} queue");
+        return refuse(&HubError::Usage(why), a.json);
+    };
     let root = vault_root(a.path.as_deref());
-    let req = a.request();
-    let written = crate::hub::guard::cli_write(
+    let req = a.request(queue.clone(), doc);
+    let written = crate::hub::guard::guarded(
         &root,
-        &["GB".to_string()],
+        std::slice::from_ref(&queue),
         a.worker.as_deref(),
         a.dry_run,
-        || add(&root, &req, a.dry_run),
+        || {
+            add(&root, &req, a.dry_run).map(|done| {
+                let changed = Written {
+                    rows: vec![done.id.clone()],
+                    files: done.files.clone(),
+                };
+                (done, changed)
+            })
+        },
     );
     let done = match written {
         Ok(d) => d,
-        Err(code) => return code,
+        Err(e) => return refuse(&e, a.json),
     };
+    let mine: Vec<Violation> = if a.dry_run {
+        Vec::new()
+    } else {
+        let audit = backlog::audit_backlog(&root);
+        audit
+            .violations
+            .into_iter()
+            .filter(|v| v.snippet == done.id)
+            .collect()
+    };
+    let code = i32::from(mine.iter().any(|v| v.severity == Severity::Error));
+    let file = done.files.first().map(|f| f.display().to_string());
+    if a.json {
+        let findings: Vec<_> = mine
+            .iter()
+            .map(|v| json!({"rule": v.rule_id, "message": v.message}))
+            .collect();
+        let pending = match done.pending {
+            Pending::Added => "added",
+            Pending::AlreadyPresent => "present",
+            Pending::NotLinked => "not_linked",
+            Pending::Manual => "manual",
+        };
+        println!(
+            "{}",
+            json!({"ok": code == 0, "queue": queue, "id": done.id, "row": done.row,
+                "file": file, "dry_run": a.dry_run, "pending": pending, "findings": findings})
+        );
+        return code;
+    }
     if a.dry_run {
         println!("{}\n{}", done.id, done.row);
         return 0;
     }
-    let bpath = root.join(BACKLOG_REL);
-    println!("row written to {}", bpath.display());
+    println!("row written to {}", file.unwrap_or_default());
     match done.pending {
         Pending::Added => println!("pending: [{}] added to {}", done.id, req.doc),
         Pending::AlreadyPresent => println!("pending: {} already in {}", done.id, req.doc),
+        Pending::NotLinked => println!("the {queue} queue keeps no pending: links"),
         Pending::Manual => eprintln!(
             "manual: add {} to the pending: list of {}",
             done.id, req.doc
         ),
     }
-    let audit = backlog::audit_backlog(&root);
-    let mine: Vec<_> = audit
-        .violations
-        .iter()
-        .filter(|v| v.snippet == done.id)
-        .collect();
     println!("{}", done.id);
-    println!(
-        "audit: {} violation(s) in the GB/HB queues, {} about {}",
-        audit.violations.len(),
-        mine.len(),
-        done.id
-    );
+    println!("audit: {} finding(s) about {}", mine.len(), done.id);
     for v in &mine {
         println!("  {} {}", v.rule_id, v.message);
     }
-    i32::from(mine.iter().any(|v| v.severity == Severity::Error))
+    code
 }
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let args = |t: &str| AddRequest {
+        queue: DEFAULT_QUEUE.into(),
         title: t.into(),
         evidence: "seen.".into(),
         desired: "do it".into(),
@@ -477,12 +600,12 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         doc: DEFAULT_REF.into(),
         duplicate_of: None,
     };
-    let row = build_row("GB-099", &args("Stenio: X-RULE"));
+    let row = build_row("GB-099", &args("Stenio: X-RULE"), "x.md");
     let broken = row.replace("Acceptance:", "Accept:");
     let table = "| ID |\n| **GB-001** | a |\n| **GB-002** | b |\n\ntext\n";
     let backlog = "| **GB-247** | **Stenio: RELEASE-ENGINE-FMT-BEFORE-TAG.** Evidence: v4.30.0 was tagged and pushed with cargo fmt --check red in the CI step Check Formatting after the release workflow finished. Desired behaviour: x. Acceptance: y. | r | 🟡 | open | o | — |\n| **GB-100** | **Stenio: OTHER-THING.** Evidence: unrelated words entirely. Desired behaviour: x. | r | 🟡 | open | o | — |\n";
     let names = |t: &str, e: &str| -> Vec<String> {
-        similar_rows(backlog, t, e)
+        similar_rows(backlog, DEFAULT_QUEUE, t, e)
             .into_iter()
             .map(|(i, _)| i)
             .collect()
@@ -515,6 +638,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
                     duplicate_of: Some("GB-247".into()),
                     ..args("X-RULE")
                 },
+                "x.md",
             )
             .contains("Related: GB-247"),
         ),
@@ -529,9 +653,10 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "opportunity row inserted after last GB row".to_string(),
-            insert_row(table, "| NEW |").as_deref()
+            insert_row(table, "GB", "| NEW |").as_deref()
                 == Some("| ID |\n| **GB-001** | a |\n| **GB-002** | b |\n| NEW |\n\ntext\n")
-                && insert_row("no rows", "x").is_none(),
+                && insert_row("no rows", "GB", "x").is_none()
+                && insert_row(table, "HB", "x").is_none(),
         ),
     ]
 }
@@ -581,6 +706,7 @@ mod tests {
 
     fn request(title: &str) -> AddRequest {
         AddRequest {
+            queue: "GB".to_string(),
             title: title.to_string(),
             evidence: "seen".to_string(),
             desired: "do it".to_string(),

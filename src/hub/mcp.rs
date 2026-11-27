@@ -66,7 +66,8 @@ pub fn tool_definitions() -> Vec<Value> {
             &["resources"],
             json!({"worker": worker(),
                 "resources": list("row:<ID>, tree:<abs path>, repo:<owner/name>, backlog:<P>:write, fleet:slot, ..."),
-                "run": text("Run id"), "ttl_secs": number("Lease length in seconds")}),
+                "run": text("Run id"), "ttl_secs": number("Lease length in seconds"),
+                "path": text("Bind a backlog claim to the queue under this directory")}),
         ),
         tool(
             "hub_beat",
@@ -95,10 +96,10 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "hub_handback",
-            "Return the result of a claimed row. The engine records it; it does not replay the proof.",
+            "Return the result of a claimed row, or of a fence without a row. The engine records it; it does not replay the proof.",
             false,
-            &["row", "fence", "verdict"],
-            json!({"worker": worker(), "row": text("Row id"), "fence": fence(),
+            &["fence", "verdict"],
+            json!({"worker": worker(), "row": text("Row id; omit for a fence without a row"), "fence": fence(),
                 "verdict": text("done, partial, blocked, needs-owner or failed"),
                 "branch": text("Branch"), "pr": text("Pull request"),
                 "proof": text("Required for done"),
@@ -226,6 +227,7 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
                 resources: args.list("resources")?,
                 run: args.text("run")?,
                 ttl_secs: args.number("ttl_secs")?.map(|n| n as u64),
+                path: args.text("path")?.map(|p| root.join(p)),
             },
         ),
         "hub_beat" => ledger::beat(
@@ -260,7 +262,7 @@ fn call(name: &str, args: &Arguments<'_>, root: &Path, db: Option<&Path>) -> Hub
             &mut open()?,
             &ledger::Handback {
                 worker: args.worker()?,
-                row: args.required("row")?,
+                row: args.text("row")?.unwrap_or_default(),
                 fence: args.fence()?,
                 verdict: args.required("verdict")?,
                 branch: args.text("branch")?,

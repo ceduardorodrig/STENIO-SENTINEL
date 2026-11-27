@@ -34,7 +34,7 @@ To ensure semantic consistency across all subcommands, rules, and reports:
 |:---|:---|:---|
 | *Porteiro das Portas* | **Port Gatekeeper / Attack Surface** | `ports.rs` |
 | *Raio-X de Infraestrutura* | **Infrastructure Health Snapshot** | `health.rs` |
-| *Duplicação de Código (DRY)* | **Code Duplication (DRY Principle)** | `rule.rs`, `dry.rs` |
+| `Duplicação de Código (DRY)` | **Code Duplication (DRY Principle)** | `rule.rs`, `dry.rs` |
 | *Erros impeditivos* | **Blocking Errors** | `main.rs` (Gate) |
 | *Zero artefatos residuais* | **Zero leftover test artifacts** | `main.rs`, `gov.rs` |
 | *EM REPOUSO / OFFLINE* | **IDLE / OFFLINE** | `ports.rs` |
@@ -42,9 +42,9 @@ To ensure semantic consistency across all subcommands, rules, and reports:
 | *BIND 0.0.0.0 NÃO AUTORIZADO* | **UNAUTHORIZED BIND 0.0.0.0** | `ports.rs` |
 | *Isolamento de Escopo* | **Monorepo Scope Isolation** | `rule.rs`, `engine.rs` |
 | *Soja / Stubs de IA* | **Lazy AI Stubs & Placeholders** | `rule.rs` |
-| *Autoproteção Criptográfica* | **Cryptographic Anti-Tampering Protection** | `guardian.rs` |
+| `Autoproteção Criptográfica` | **Cryptographic Anti-Tampering Protection** | `guardian.rs` |
 | *Sub-rotinas / Gatilhos* | **Routines / Triggers** | `deploy.rs`, `remote.rs` |
-| *Arquivos auditados* | **Audited files** | `main.rs` |
+| `Arquivos auditados` | **Audited files** | `main.rs` |
 
 ---
 

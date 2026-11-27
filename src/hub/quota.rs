@@ -335,29 +335,59 @@ fn read_source(source: &QuotaSource, timeout: Duration) -> Result<Vec<Window>, S
     parse_usage(&out.stdout)
 }
 
-/// Reads every declared source. The commands run outside any transaction.
-pub fn refresh(store: &mut Store, policy: &QuotaPolicy) -> HubResult<Value> {
+/// Reads one declared source and stores what it says. The command runs outside any transaction.
+fn read_into(store: &mut Store, policy: &QuotaPolicy, source: &QuotaSource) -> HubResult<String> {
     let timeout = Duration::from_secs(policy.command_timeout_secs);
-    let mut report = BTreeMap::new();
-    for source in &policy.source {
-        let label = source.command.join(" ");
-        match read_source(source, timeout) {
-            Ok(windows) => {
-                store.write(|tx| {
-                    tx.execute("DELETE FROM quota WHERE account = ?1", [&source.account])?;
-                    Ok(())
-                })?;
-                put(store, &source.account, &label, &windows)?;
-                report.insert(
-                    source.account.clone(),
-                    format!("{} window(s)", windows.len()),
-                );
-            }
-            Err(reason) => {
-                put_unknown(store, &source.account, &label, &reason)?;
-                report.insert(source.account.clone(), format!("unknown: {reason}"));
-            }
+    let label = source.command.join(" ");
+    match read_source(source, timeout) {
+        Ok(windows) => {
+            store.write(|tx| {
+                tx.execute("DELETE FROM quota WHERE account = ?1", [&source.account])?;
+                Ok(())
+            })?;
+            put(store, &source.account, &label, &windows)?;
+            Ok(format!("{} window(s)", windows.len()))
+        }
+        Err(reason) => {
+            put_unknown(store, &source.account, &label, &reason)?;
+            Ok(format!("unknown: {reason}"))
         }
     }
+}
+
+/// Reads every declared source.
+pub fn refresh(store: &mut Store, policy: &QuotaPolicy) -> HubResult<Value> {
+    let mut report = BTreeMap::new();
+    for source in &policy.source {
+        let said = read_into(store, policy, source)?;
+        report.insert(source.account.clone(), said);
+    }
     Ok(json!({"ok": true, "refreshed": report}))
+}
+
+/// Reads the sources of `account` unless every sample of it is still fresh, so a claim is judged
+/// on a current reading without a manual refresh. A failing source leaves it unknown.
+pub fn refresh_stale(store: &mut Store, policy: &QuotaPolicy, account: &str) -> HubResult<()> {
+    let sources: Vec<&QuotaSource> = policy
+        .source
+        .iter()
+        .filter(|s| s.account == account)
+        .collect();
+    if sources.is_empty() {
+        return Ok(());
+    }
+    let now = now_ms();
+    let fresh = store.read(|c| {
+        let mine: Vec<Sample> = samples(c)?
+            .into_iter()
+            .filter(|s| s.account == account)
+            .collect();
+        Ok(!mine.is_empty() && mine.iter().all(|s| s.confidence(policy, now) == "measured"))
+    })?;
+    if !fresh {
+        for source in sources {
+            read_into(store, policy, source)?;
+        }
+    }
+    Ok(())
 }
