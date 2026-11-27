@@ -2044,6 +2044,9 @@ fn main() -> Result<()> {
         argv[1] = "pre-release".to_string(); // `stenio preflight --repo R` = `pre-release --static-only`
         argv.push("--static-only".to_string());
     }
+    if let Some(code) = secrets_suite::dispatch(&argv) {
+        std::process::exit(code);
+    }
     match argv.get(1).map(String::as_str) {
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),

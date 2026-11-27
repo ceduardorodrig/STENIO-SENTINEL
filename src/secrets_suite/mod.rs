@@ -3,7 +3,9 @@
 //! [`self_test_cases`] and [`explain::EXPLANATIONS`]. SECURITY: nothing here prints a secret value;
 //! reports carry paths, line numbers, key names and counts only.
 
+mod drift;
 pub mod explain;
+mod store;
 mod store_recipients;
 
 use crate::engine::Violation;
@@ -37,6 +39,18 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
         out.extend(store_recipients::audit(root));
     }
     out
+}
+
+/// Host subcommands of the suite.
+const COMMANDS: &[(&str, fn(&[String]) -> i32)] = &[("secrets-drift", drift::run_cli)];
+
+/// Runs `argv[1]` when it is a suite subcommand; `None` lets the engine parse the line.
+pub fn dispatch(argv: &[String]) -> Option<i32> {
+    let name = argv.get(1)?;
+    let (_, run) = COMMANDS.iter().find(|(c, _)| c == name)?;
+    let mut rest = vec![format!("stenio {name}")];
+    rest.extend_from_slice(&argv[2..]);
+    Some(run(&rest))
 }
 
 pub(crate) fn violation(
@@ -76,7 +90,9 @@ pub(crate) fn fixture(tag: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
-    store_recipients::self_test_cases()
+    let mut cases = store_recipients::self_test_cases();
+    cases.extend(drift::self_test_cases());
+    cases
 }
 
 #[cfg(test)]
