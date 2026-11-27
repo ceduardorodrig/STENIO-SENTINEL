@@ -22,6 +22,7 @@ pub struct DocRule {
     pub explain: RuleExplanation,
 }
 
+mod adr_roadmap;
 mod bind_claim;
 mod contract_parity;
 mod incident;
@@ -42,6 +43,7 @@ pub static RULES: &[&DocRule] = &[
     &bind_claim::RULE,
     &raci::RULE,
     &quote_source::RULE,
+    &adr_roadmap::RULE,
 ];
 
 /// What the rules may look at.
@@ -52,6 +54,8 @@ pub struct Ctx {
     pub vault: Option<PathBuf>,
     /// The mirror of the live host configuration (`/mnt/BACKUP/configs-homelab`).
     pub mirror: Option<PathBuf>,
+    /// The directory holding the repository checkouts the vault documents describe.
+    pub repos: Option<PathBuf>,
     /// Checkout of the Miracena application, source of panel labels and permissions.
     pub panel_app: Option<PathBuf>,
     /// Active `--tag`, lowercased.
@@ -72,6 +76,7 @@ impl Ctx {
             target,
             vault,
             mirror: existing("/mnt/BACKUP/configs-homelab"),
+            repos: existing("/mnt/NVME_PCI/homelab"),
             panel_app: existing("/mnt/NVME_PCI/homelab/miracena/miracena"),
             tag: tag.map(str::to_lowercase),
         }
@@ -81,6 +86,7 @@ impl Ctx {
     pub fn fixture(target: &Path) -> Self {
         let mut ctx = Ctx::new(target, None);
         ctx.mirror = Some(ctx.target.join("mirror")).filter(|p| p.is_dir());
+        ctx.repos = Some(ctx.target.join("repos")).filter(|p| p.is_dir());
         ctx.panel_app = Some(ctx.target.join("app")).filter(|p| p.is_dir());
         ctx
     }
