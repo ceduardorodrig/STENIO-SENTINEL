@@ -1745,6 +1745,7 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::hostops::EXPLANATIONS)
         .chain(crate::secrets_suite::explain::EXPLANATIONS)
         .chain(crate::frappe::ext::explanations())
         .chain(crate::release_file_gate::EXPLANATIONS)
@@ -1848,6 +1849,7 @@ pub fn list_all_explanations() -> String {
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
     for exp in EXPLANATIONS
         .iter()
+        .chain(crate::hostops::EXPLANATIONS)
         .chain(crate::secrets_suite::explain::EXPLANATIONS)
         .chain(crate::frappe::ext::explanations())
         .chain(crate::release_file_gate::EXPLANATIONS)

@@ -340,6 +340,24 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 | `GOV-AGENT-LAWS` | Gov | **ERROR** | Validates agent constitution and governance rules in `AGENTS.md`. |
 | `VAULT-TAG-TAXONOMY` | Docs | **WARN** | Restricts tags to canonical taxomony cataloged in `_tags.md`. |
 
+### Host and operations checks (`stenio hostops`)
+
+Static lints run in `--scope homelab` (as warnings), with `stenio --only <RULE_ID> --path <dir>` and with `stenio hostops lint --path <dir>` (declared severity). Probes are read-only and run on request; they exit 1 on findings and 2 when the input cannot be read. `stenio --explain <RULE_ID>` has the details.
+
+| Rule | Runs as |
+|---|---|
+| `SOCKET-NO-AFTER-NETWORK`, `UNIT-PROXY-ENV-MUST-REACH-SOCKET-OWNER`, `SESSION-TARGET-ORPHAN`, `SESSION-SAVE-SHRINK-GUARD`, `HL-LUA-RUNTIME-API-AT-LOAD`, `HL-LUA-NO-HYPRCTL-IN-SHUTDOWN`, `BACKUP-ARTIFACT-VERIFY`, `OPS-ALERT-INDEPENDENCE`, `FUNDAMENTAL-NO-OFFHOST-PROBE`, `ROUTER-IDENTITY-DRIFT` | static lint |
+| `DOC-PORTS-VS-SS` | `hostops ports --host H --vault DIR` |
+| `MONITOR-TARGET-LOOPBACK`, `MONITOR-NO-NOTIFICATION` | `hostops kuma --db SNAPSHOT --kuma-node H=IP [--node H=IP]` |
+| `SYSTEMD-NO-ONFAILURE` | `hostops onfailure --host H` |
+| `DOCKER-FALSE-ALIVE` | `hostops false-alive --host H` |
+| `BOOT-ABRUPT-END-AUDIT` | `hostops boots --host H [--since DATE]` |
+| `AUTOPILOT-LAST-PUBLISH` | `hostops autopilot-last --dir RUNS` (0 fresh, 2 stale or error, 1 unreadable) |
+| `PUNKTFUNK-VDISPLAY-EMPTY-WORKSPACE` | `hostops vdisplay` |
+| `MTU-BUDGET-PRECHECK` | `hostops mtu --need N --iface IF` |
+| `BLOCKLIST-DOMAIN-VERIFY` | `hostops domains --file LIST` |
+| `OPS-STATIC-PARITY-BUILD-AGE` | infrastructure audit and `hostops build-age --dir FE` |
+
 ---
 
 ## 📜 License

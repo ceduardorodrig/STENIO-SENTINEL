@@ -1515,6 +1515,11 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
         }
     }
 
+    // A bundle comparison means nothing when the local build predates its sources (GB-238).
+    if let Some(fe_dir) = crate::deploy::find_frontend_dir(root) {
+        violations.extend(crate::hostops::stale_build_violation(&fe_dir));
+    }
+
     // ── 8. Release Integrity Audit (REL-PKGBUILD-SYNC & REL-TAG-DRIFT) ─────
     let pkgbuild_path = root.join("PKGBUILD");
     let cargo_path = root.join("Cargo.toml");

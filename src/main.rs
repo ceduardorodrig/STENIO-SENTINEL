@@ -35,6 +35,7 @@ mod guardian;
 mod health;
 mod homelab;
 mod hook_fixtures;
+mod hostops;
 mod i18n;
 mod infra;
 mod learner;
@@ -709,6 +710,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(hook_fixtures::self_test_cases())
+        .chain(hostops::self_test_cases())
         .chain(shell::self_test_cases())
         .chain(lockparity::self_test_cases())
         .chain(parity::self_test_cases())
@@ -2088,6 +2090,7 @@ fn main() -> Result<()> {
         Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
+        Some("hostops") => std::process::exit(hostops::run_cli(&argv[2..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
         Some("secrets-guard") => {
             let mut rest = vec!["stenio secrets-guard".to_string()];
@@ -2829,6 +2832,22 @@ fn main() -> Result<()> {
         let ep = entrypoints::audit(&args.path);
         doc_messages.extend(ep.messages);
         for v in ep.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Host and operations lints (`stenio hostops`) ───────────────────────
+    let hostops_only = only_rule.filter(|r| hostops::is_lint_rule(r));
+    if hostops_only.is_some() || (is_homelab_active && tag_lower.is_none() && only_rule.is_none()) {
+        let (messages, found) = hostops::audit(&args.path, hostops_only);
+        doc_messages.extend(messages);
+        for v in found {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {
