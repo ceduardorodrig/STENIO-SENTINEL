@@ -266,3 +266,14 @@ so compare that scope by exit code.
   `src/hub/defaults.toml`, never from a constant naming a host.
 
 Acceptance tests: `tests/hub_ledger.rs` (design A1 to A18).
+
+## Release 4.44.0 (English by default)
+
+- `LANG-ENGLISH-REQUIRED` is an ERROR in every scope, `--gate`, `--scope frappe` and the MCP
+  tools: new or changed Portuguese in documents, comments, log/CLI strings, JSON descriptions, file
+  names, commit messages and pull request text.
+- Existing text is debt: the `[language] baseline` ledger, or in a git tree without one, what was
+  committed before 2026-11-27T12:00:00Z or is on the default branch.
+- `stenio language` reports the ledger, claims the next translation batch and verifies it.
+- Known limits: hidden folders and files over 1 MB are not read; a shallow CI checkout without a
+  ledger has no history to compare with; code fences, quoted spans and blockquotes are not judged.

@@ -114,7 +114,8 @@ fn chain_break(events: &[Event], head: Option<(String, String)>) -> Option<(i64,
     None
 }
 
-fn compare_claims(conn: &Connection, replay: &Replay, problems: &mut Vec<String>) -> HubResult<()> {
+fn compare_claims(conn: &Connection, replay: &Replay) -> HubResult<Vec<String>> {
+    let mut problems = Vec::new();
     let stored = ledger::claims(conn, "", [])?;
     let mut live: BTreeMap<&str, usize> = BTreeMap::new();
     for c in &stored {
@@ -149,14 +150,11 @@ fn compare_claims(conn: &Connection, replay: &Replay, problems: &mut Vec<String>
     for (resource, n) in live.into_iter().filter(|(_, n)| *n > 1) {
         problems.push(format!("{resource} has {n} live holders"));
     }
-    Ok(())
+    Ok(problems)
 }
 
-fn compare_results(
-    conn: &Connection,
-    replay: &Replay,
-    problems: &mut Vec<String>,
-) -> HubResult<()> {
+fn compare_results(conn: &Connection, replay: &Replay) -> HubResult<Vec<String>> {
+    let mut problems = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT row, fence, verdict, current, worker, IFNULL(run, '') FROM results ORDER BY id",
     )?;
@@ -202,7 +200,7 @@ fn compare_results(
             problems.push(format!("question {id} differs from its events"));
         }
     }
-    Ok(())
+    Ok(problems)
 }
 
 /// Verifies the ledger. `ok` is false on any integrity problem and, with `require_final`, while
@@ -221,8 +219,8 @@ pub fn audit(store: &mut Store, run: Option<&str>, require_final: bool) -> HubRe
         for e in &events {
             replay.apply(e);
         }
-        compare_claims(conn, &replay, &mut problems)?;
-        compare_results(conn, &replay, &mut problems)?;
+        problems.extend(compare_claims(conn, &replay)?);
+        problems.extend(compare_results(conn, &replay)?);
         let mut rows = Vec::new();
         if let Some(run) = run {
             for row in ledger::run_rows(conn, run)? {
