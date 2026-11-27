@@ -5122,12 +5122,14 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
                 else {
                     continue;
                 };
-                let money = match (
+                // Which side matched is remembered here: re-deriving it from the text failed for
+                // `float(x) > 0` and read the mirrored form `0 > float(x)` (GB-161).
+                let (money, money_left) = match (
                     money_operand(lhs.as_str(), &currency),
                     money_operand(rhs.as_str(), &currency),
                 ) {
-                    (Some(left), _) => left,
-                    (None, Some(right)) => right,
+                    (Some(left), _) => (left, true),
+                    (None, Some(right)) => (right, false),
                     (None, None) => continue,
                 };
                 // A bare name can be a local parameter (`value` in a rating check); only the
@@ -5138,7 +5140,7 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
                 if py_guards_field(&lines, i, &money.field) {
                     continue;
                 }
-                let (expr, limit) = if money.field == field_of(lhs.as_str()) {
+                let (expr, limit) = if money_left {
                     (lhs.as_str(), rhs.as_str())
                 } else {
                     (rhs.as_str(), lhs.as_str())
@@ -5170,12 +5172,6 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
         }
     }
     out
-}
-
-/// The last dotted segment of an expression, for matching an operand back to its side.
-fn field_of(expr: &str) -> &str {
-    let trimmed = expr.trim().trim_matches(['(', ')']).trim();
-    trimmed.rsplit('.').next().unwrap_or(trimmed)
 }
 
 /// Top-level functions a generator module defines — the entry points a test has to call to prove
@@ -5898,10 +5894,51 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         fieldname_unique_agrees(),
     ));
     cases.push((
+        "FRAPPE-CURRENCY-ZERO-TEST-WRAPPED".to_string(),
+        wrapped_zero_test_agrees(),
+    ));
+    cases.push((
         "FRAPPE-TEST-REGISTERED-ABSENT-LIST".to_string(),
         absent_test_list_agrees(),
     ));
     cases
+}
+
+/// GB-161 mutation proof: `float(x) > 0` / `flt(x) <= 0` are emptiness tests (silent), the same
+/// helper with a real limit is still accused.
+pub(crate) fn wrapped_zero_test_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let count = |body: &str| -> Option<usize> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let files: Vec<(String, String)> = vec![
+            ("repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+            (
+                "repo/app/demo/doctype/asset/asset.json".into(),
+                "{\"doctype\":\"DocType\",\"name\":\"Asset\",\"fields\":[{\"fieldname\":\"purchase_value\",\"fieldtype\":\"Currency\"}]}".into(),
+            ),
+            (
+                "repo/app/core.py".into(),
+                format!("def has_value(purchase_value):\n\treturn {body}\n"),
+            ),
+        ];
+        let base = write_fixture(&format!("zero-wrap-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(
+            got?.iter()
+                .filter(|v| v.rule_id == "FRAPPE-CURRENCY-THRESHOLD-UNSET")
+                .count(),
+        )
+    };
+    count("bool(purchase_value) and float(purchase_value) > 0") == Some(0)
+        && count("flt(purchase_value) <= 0") == Some(0)
+        && count("0 < float(purchase_value)") == Some(0)
+        && count("float(purchase_value) >= 5000") == Some(1)
+        && count("LIMIT <= flt(purchase_value)") == Some(1)
 }
 
 /// GB-280 mutation proof: a test list outside the repository that is absent skips visibly (one
