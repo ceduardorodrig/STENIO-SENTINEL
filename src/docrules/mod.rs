@@ -30,6 +30,7 @@ mod english_codebase;
 mod incident;
 mod inline_style;
 mod live_claim;
+mod offset_sanity;
 mod panel_app;
 mod panel_label;
 mod panel_parity;
@@ -52,6 +53,7 @@ pub static RULES: &[&DocRule] = &[
     &raci::RULE,
     &quote_source::RULE,
     &count_drift::RULE,
+    &offset_sanity::RULE,
     &research_cite::RULE,
     &publish_cover::RULE,
     &panel_parity::RULE,
