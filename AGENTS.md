@@ -221,3 +221,20 @@ and the run was silent. Still a WARNING.
 
 Host-only WARNING (it runs only while `wayland-wm@hyprland.desktop.service` is active). Covered by
 unit tests in `homelab.rs` and `gaming.rs`.
+
+## Release 4.42.0 (wave 1, PRs #2 to #9)
+
+Each rule is listed in the `README.md` catalog and answers `stenio --explain <RULE_ID>`.
+
+- Backlog: safe row close (`stenio backlog close`) and queue integrity rules (#2).
+- Shell, lockfile and harness self-gates, `binary-parity`, `drift`, `preflight` on the engine (#3).
+- Frappe desk, UI and i18n rules (#4); permission and security rules (#5); release, rehearsal,
+  test and patch rules (#7).
+- Secret and environment gates and their subcommands (#6).
+- Host and operations lints (`stenio hostops`) (#8).
+- Document rules in `src/docrules/` (#9).
+
+Known at release time (measured 2026-11-27 against 4.41.0): SUMAENIMA-HUB `--scope hub --strict`
+gains 13 `DEPLOY-SUCCESS-AFTER-WARN` / `SH-DEPLOY-CONVERGENCE` errors; the fix belongs to that
+repository. `compare-engines` does not count `--scope frappe` errors (their output is `ERROR [..]`),
+so compare that scope by exit code.
