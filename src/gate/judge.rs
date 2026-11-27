@@ -52,6 +52,10 @@ pub struct Judge<'a> {
     vars: HashMap<String, String>,
     depth: u8,
     in_script: bool,
+    /// Where the output of the command being judged goes.
+    output: Output,
+    /// The last `cd` went to a directory held in an unknown variable.
+    cwd_unknown: bool,
     pub found: Vec<Finding>,
 }
 
@@ -208,6 +212,8 @@ impl<'a> Judge<'a> {
             vars: HashMap::new(),
             depth: 0,
             in_script: false,
+            output: Output::Shown,
+            cwd_unknown: false,
             found: Vec::new(),
         }
     }
@@ -272,8 +278,10 @@ impl<'a> Judge<'a> {
             if overwrite && self.backed_up(&path) && path.is_file() {
                 self.deny(DESTROY, format!("overwrite of {text}"));
             }
-            if text.starts_with("/dev/")
-                && hit(re!(r"^/dev/(sd|nvme|vd|mmcblk|md|dm-|mapper/)"), &text)
+            let device = ["sd", "nvme", "vd", "mmcblk", "md", "dm-", "mapper/"];
+            if text
+                .strip_prefix("/dev/")
+                .is_some_and(|name| device.iter().any(|d| name.starts_with(d)))
             {
                 self.deny(STORAGE, format!("write to the device {text}"));
             }
@@ -428,6 +436,7 @@ impl<'a> Judge<'a> {
             self.deny(SECRET, "dump of the environment");
         }
         if !argv.is_empty() {
+            self.output = output;
             self.program(&argv, command, &pipeline[..index], output);
         }
     }
@@ -522,11 +531,31 @@ impl<'a> Judge<'a> {
                 ]
                 .into_iter()
                 .find(|id| *id == rule.id);
-                if let Some(id) = id {
+                if let Some(id) = id.filter(|id| !self.excused(id, pattern, args)) {
                     self.deny(id, format!("`{pattern}`"));
                 }
             }
         }
+    }
+
+    /// The two cases where a listed command is ordinary work.
+    fn excused(&self, id: &str, pattern: &str, args: &[String]) -> bool {
+        let kept =
+            self.output == Output::Consumed || (self.in_script && self.output == Output::Stored);
+        // A stack whose compose file lies in a temporary directory is a test stack.
+        let temporary = pattern.contains(" compose down ")
+            && ![
+                "-f",
+                "--file",
+                "-p",
+                "--project-name",
+                "--project-directory",
+            ]
+            .iter()
+            .any(|f| has_flag(args, f))
+            && ((self.in_script && self.cwd_unknown)
+                || paths::any(&self.policy.paths.scratch, &self.cwd, &self.home));
+        (id == SECRET && kept) || temporary
     }
 
     fn inner(&mut self, argv: &[String], command: &Simple, output: Output) {
@@ -607,7 +636,8 @@ impl<'a> Judge<'a> {
             "cd" | "pushd" => {
                 if let Some(dir) = operands(&args, &[]).first() {
                     let dir = self.expand(dir);
-                    if !dir.contains('$') {
+                    self.cwd_unknown = dir.contains('$');
+                    if !self.cwd_unknown {
                         self.cwd = paths::absolute(&dir, &self.cwd);
                     }
                 }
@@ -960,19 +990,25 @@ impl<'a> Judge<'a> {
             "--force-with-lease",
             "--force-if-includes",
             "--mirror",
-            "--delete",
-            "-d",
             "--prune",
         ]
         .iter()
         .any(|f| has_flag(push, f));
         let refs = operands(push, &["-o", "--push-option", "--repo", "--receive-pack"]);
-        if forced
-            || refs
-                .iter()
-                .any(|r| r.starts_with('+') || r.starts_with(':'))
-        {
+        let deleting = has_flag(push, "--delete") || has_flag(push, "-d");
+        let gone: Vec<&&String> = refs
+            .iter()
+            .skip(1)
+            .filter(|r| deleting || r.starts_with(':'))
+            .collect();
+        let rewrites = forced || refs.iter().any(|r| r.starts_with('+'));
+        // A release script removing the candidate ref it named in a variable is part of that
+        // release; every other deletion of a remote ref is history.
+        let own = self.in_script && !gone.is_empty() && gone.iter().all(|r| r.contains('$'));
+        if rewrites || ((deleting || !gone.is_empty()) && !own) {
             self.deny(HISTORY, "force push or deletion of a remote ref");
+        } else if own {
+            self.deny(PUBLISH, "deletion of a candidate ref");
         }
         let tags = has_flag(push, "--tags")
             || has_flag(push, "--follow-tags")
@@ -1110,7 +1146,9 @@ impl<'a> Judge<'a> {
         }
         let to_file = ["-o", "--output"].iter().any(|f| has_flag(args, f))
             || (program == "sops" && (has_flag(args, "-i") || has_flag(args, "--in-place")));
-        if output != Output::Consumed || to_file {
+        let kept =
+            self.output == Output::Consumed || (self.in_script && self.output == Output::Stored);
+        if (output != Output::Consumed && !(kept && output == Output::Stored)) || to_file {
             self.deny(
                 SECRET,
                 format!("{program} decrypts to the terminal or to a clear-text file"),

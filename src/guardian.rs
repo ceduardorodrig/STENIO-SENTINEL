@@ -850,6 +850,31 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             ],
         ),
         (
+            "gate/policy.toml",
+            &[
+                "GATE-DESTROY",
+                "GATE-STORAGE",
+                "GATE-BACKUP",
+                "GATE-HISTORY",
+                "GATE-SECRET",
+                "GATE-POWER",
+                "GATE-DB",
+                "GATE-PUBLISH",
+                "GATE-SELF",
+                "guard_files",
+                "protected_trees",
+            ],
+        ),
+        (
+            "gate/mod.rs",
+            &[
+                "holds_publish_lease",
+                "judge_action",
+                "audit::append",
+                "confirm_owner",
+            ],
+        ),
+        (
             "secrets_guard.rs",
             &[
                 "credential_shaped_name",
