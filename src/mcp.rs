@@ -232,7 +232,10 @@ pub fn dispatch_mcp_request(
                             lines.join("\n")
                         }
                     } else {
-                        match engine.scan_directory(&target_path, tag, only, false, None, false) {
+                        match engine
+                            .scan_directory(&target_path, tag, only, false, None, false)
+                            .map(|r| with_language(r, &target_path, only))
+                        {
                             Ok(report) => {
                                 if report.violations.is_empty() {
                                     format!(
@@ -263,7 +266,10 @@ pub fn dispatch_mcp_request(
                 }
                 "stenio_diff" => {
                     let rev = arguments.get("rev").and_then(|v| v.as_str());
-                    match engine.scan_directory(repo_root, None, None, false, rev, false) {
+                    match engine
+                        .scan_directory(repo_root, None, None, false, rev, false)
+                        .map(|r| with_language(r, repo_root, None))
+                    {
                         Ok(report) => {
                             if report.violations.is_empty() {
                                 format!(
@@ -332,7 +338,10 @@ pub fn dispatch_mcp_request(
                         .and_then(|v| v.as_str())
                         .unwrap_or(".");
                     let target_path = repo_root.join(path_str);
-                    match engine.scan_directory(&target_path, None, None, false, None, false) {
+                    match engine
+                        .scan_directory(&target_path, None, None, false, None, false)
+                        .map(|r| with_language(r, &target_path, None))
+                    {
                         Ok(report) => {
                             let mut errors = Vec::new();
                             for v in &report.violations {
@@ -664,6 +673,22 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
     }
 
     Ok(())
+}
+
+/// Adds the language gate to a scan report: every harness that asks over MCP gets it.
+fn with_language(
+    mut report: crate::engine::ScanReport,
+    target: &Path,
+    only: Option<&str>,
+) -> crate::engine::ScanReport {
+    if only.is_none_or(|o| o.starts_with("LANG-")) {
+        let found = crate::docrules::language_findings(target);
+        report.error_count += found.len();
+        report.total_violations += found.len();
+        // First, so that a truncated listing still shows the blockers.
+        report.violations.splice(0..0, found);
+    }
+    report
 }
 
 /// Reads a string argument and rejects anything that could become another flag or a shell token.

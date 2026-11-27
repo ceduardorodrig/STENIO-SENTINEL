@@ -190,6 +190,21 @@ pub struct ParityConfig {
     pub stenio_container: Option<String>,
 }
 
+/// One `[[language.allow]]` entry: a gitignore glob where Portuguese is allowed, and why.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct LanguageAllow {
+    pub path: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// `[language]` table: the central allowlist of a tree and the baseline holding its debt.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct LanguageConfig {
+    pub allow: Option<Vec<LanguageAllow>>,
+    pub baseline: Option<String>,
+}
+
 /// One `[[dependabot.exclude]]` entry: a lockfile directory that `DEPENDABOT-LOCKFILE-COVERAGE`
 /// accepts without a Dependabot entry. The `reason` is mandatory; an empty one is a finding.
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -244,6 +259,7 @@ pub struct SteniocheckConfig {
     pub topology: Option<TopologyConfig>,
     pub custom_rules: Option<Vec<CustomRuleConfig>>,
     pub frappe: Option<FrappeConfig>,
+    pub language: Option<LanguageConfig>,
     pub parity: Option<ParityConfig>,
     pub dependabot: Option<DependabotConfig>,
     pub ci: Option<CiConfig>,

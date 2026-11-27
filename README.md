@@ -384,6 +384,37 @@ They run on any `--path` (a directory or one document) and stay silent where the
 | `DOC-PDF-COVERS-SOURCE` | error | `##` headings present in the published HTML and PDF |
 | `DOC-RESEARCH-CITE-CURRENT` | error (no URL or date), warn (stale) | research claims: URL, access date, 180 days |
 | `DOC-OFFSET-SANITY` | error | declared flash size against partition ranges |
+| `LANG-ENGLISH-REQUIRED` | error | new or changed Portuguese in any tree (see below) |
+
+## English by default (`LANG-ENGLISH-REQUIRED`, `stenio language`)
+
+New or changed Portuguese is an error in every scope, in `--gate`, `--scope frappe` and the MCP
+`stenio_scan`, `stenio_diff` and `stenio_gate` tools. Judged: Markdown, text and HTML (frontmatter
+and tables included), source comments, log/CLI strings, JSON `description` values, file and folder
+names, commit messages and pull request text, with or without diacritics. Not judged: code spans,
+code fences, quoted spans and blockquotes, translation catalogues and third-party trees (the
+built-in list), and the paths a `steniocheck.toml` allows with a reason:
+
+```toml
+[language]
+baseline = "language-debt-ledger.txt"   # optional: required for trees outside git
+allow = [{ path = "deliverables/**", reason = "client deliverable" }]
+```
+
+Existing text is debt. With a `baseline` (the ledger: totals, per-file counts and line hashes) a
+line outside it fails, an entry that no longer exists fails as stale, and the file only shrinks.
+Without one, what a git tree gained since its default branch (and since the rule took effect) fails.
+
+```bash
+stenio language --path <tree>...                  # debt report per tree, tier and file (--lines)
+stenio language --path <tree> --init|--prune      # create the ledger once, then only shrink it
+stenio language next --path <tree> --budget 150 --claim <agent>   # one claimed batch
+stenio language verify --path <tree> --file <rel> # structure kept, no Portuguese, ledger lowered
+stenio language --message <file>                  # commit-msg hook, PR text
+```
+
+Priority of `next`: agent rule files, runbooks, the rest, personal and archived notes. `--backlog`
+prints the ledger totals.
 
 ---
 
