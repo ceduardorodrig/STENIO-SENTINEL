@@ -722,6 +722,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())
         .chain(docrules::self_test_cases())
+        .chain(docrules::english_debt::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
     {
@@ -2010,13 +2011,14 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
             }
         }
     }
-    let violations = match frappe::audit(&args.path, &fc) {
+    let mut violations = match frappe::audit(&args.path, &fc) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{} {}", "ERROR".red().bold(), e);
             return 2;
         }
     };
+    violations.extend(docrules::language_findings(&args.path));
     if args.json {
         println!(
             "{}",
@@ -2094,6 +2096,7 @@ fn main() -> Result<()> {
         Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
+        Some("language") => std::process::exit(docrules::english_debt::run_cli(&argv[2..])),
         Some("hostops") => std::process::exit(hostops::run_cli(&argv[2..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
         Some("secrets-guard") => {

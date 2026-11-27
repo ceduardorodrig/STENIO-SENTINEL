@@ -246,7 +246,7 @@ fn strip_backticked(text: &str) -> String {
 /// all-caps tokens (`DOS`, `DAS`, `ELE`) and capitalised tokens after the first word (surnames,
 /// product names) are English identifiers or proper nouns (GB-287). An all-caps token of five or
 /// more letters is emphasis (`SEMPRE`), not an acronym that collides with an English one.
-fn is_prose_case(token: &str, is_initial: bool) -> bool {
+pub(crate) fn is_prose_case(token: &str, is_initial: bool) -> bool {
     let mut chars = token.chars();
     let Some(initial) = chars.next() else {
         return false;
