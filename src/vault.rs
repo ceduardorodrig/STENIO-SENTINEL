@@ -19,6 +19,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
     let tags_file = vault_root.join("governance").join("_tags.md");
     let valid_tags = crate::baseline::parse_tags_file(&tags_file);
 
+    let vault_base = vault_base_of(vault_root);
     let mut scanned_count = 0;
     for path in crate::baseline::build_file_walker(vault_root) {
         let path_str = path.to_string_lossy().to_string();
@@ -119,13 +120,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                                 || link_target.ends_with(".png")
                                 || link_target.ends_with(".jpg"))
                         {
-                            let target_path = if link_target.starts_with('/') {
-                                vault_root.join(&link_target[1..])
-                            } else {
-                                path.parent().unwrap_or(vault_root).join(link_target)
-                            };
-
-                            if !target_path.exists() {
+                            if !link_resolves(&vault_base, &path, link_target) {
                                 violations.push(Violation {
                                     rule_id: "VAULT-BROKEN-LINK".to_string(),
                                     rule_name: "Broken Link in Markdown".to_string(),
@@ -133,7 +128,7 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
                                     file_path: path_str.clone(),
                                     line_number: line_idx + 1,
                                     snippet: format!("[...](<{}>)", link_target),
-                                    message: format!("Link points to non-existent file: '{}'", link_target),
+                                    message: format!("Link points to non-existent file: '{}' (tried from the citing file's folder and from the vault root {})", link_target, vault_base.display()),
                                     suggestion: Some("Update relative path or remove reference to deleted/moved file.".to_string()),
                                 });
                             }
@@ -251,5 +246,56 @@ pub fn audit_vault(vault_root: &Path) -> VaultReport {
         total_files_scanned: scanned_count,
         messages,
         violations,
+    }
+}
+
+/// The vault root above `scanned`, so a partial scan (`--path governance`) resolves the same
+/// root-relative paths as a full one.
+fn vault_base_of(scanned: &Path) -> std::path::PathBuf {
+    let absolute = scanned
+        .canonicalize()
+        .unwrap_or_else(|_| scanned.to_path_buf());
+    absolute
+        .ancestors()
+        .find(|a| a.join("governance/agent-global-rules.md").is_file())
+        .map_or_else(|| scanned.to_path_buf(), Path::to_path_buf)
+}
+
+/// GB-154: a target resolves from the citing file's folder or, as prose in the vault writes
+/// paths, from the vault root.
+fn link_resolves(vault_base: &Path, citing: &Path, target: &str) -> bool {
+    let from_root = vault_base.join(target.trim_start_matches('/'));
+    let from_file = citing.parent().unwrap_or(vault_base).join(target);
+    (!target.starts_with('/') && from_file.exists()) || from_root.exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_relative_paths_resolve_and_missing_ones_still_report_both_bases() {
+        let files = [
+            ("governance/agent-global-rules.md", "---\ntags: [x]\n---\n"),
+            ("clients/a/manual.md", "---\ntags: [x]\n---\n"),
+            (
+                "clients/a/deep/note.md",
+                "---\ntags: [x]\n---\n[ok](clients/a/manual.md) [near](../manual.md)\n[gone](clients/a/gone.md)\n",
+            ),
+        ]
+        .map(|(p, t)| (p.to_string(), t.to_string()));
+        let Some(root) = crate::frappe::write_fixture("vault-links", &files) else {
+            panic!("fixture could not be written");
+        };
+        let report = audit_vault(&root.join("clients"));
+        let _ = fs::remove_dir_all(&root);
+        let broken: Vec<&Violation> = report
+            .violations
+            .iter()
+            .filter(|v| v.rule_id == "VAULT-BROKEN-LINK")
+            .collect();
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(broken[0].message.contains("gone.md"));
+        assert!(broken[0].message.contains("vault root"));
     }
 }
