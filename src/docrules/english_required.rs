@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
-use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::Regex;
 
@@ -616,22 +615,6 @@ pub(super) struct Hit {
     pub(super) text: String,
 }
 
-fn files(target: &Path) -> Vec<PathBuf> {
-    if target.is_file() {
-        return vec![target.to_path_buf()];
-    }
-    let mut walker = WalkBuilder::new(target);
-    walker.hidden(true).git_ignore(true).parents(false);
-    let mut out: Vec<PathBuf> = walker
-        .build()
-        .flatten()
-        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-        .map(ignore::DirEntry::into_path)
-        .collect();
-    out.sort();
-    out
-}
-
 fn judged(path: &Path) -> Option<String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if !PROSE_EXTS.contains(&ext) && !CODE_EXTS.contains(&ext) {
@@ -647,7 +630,12 @@ pub(super) fn collect(ctx: &Ctx) -> BTreeMap<PathBuf, (Scope, Vec<Hit>)> {
     let mut cache: HashMap<PathBuf, Option<Scope>> = HashMap::new();
     let mut out: BTreeMap<PathBuf, (Scope, Vec<Hit>)> = BTreeMap::new();
     let mut named = BTreeSet::new();
-    for path in files(&ctx.target) {
+    let files = if ctx.target.is_file() {
+        vec![ctx.target.clone()]
+    } else {
+        super::walk(&ctx.target)
+    };
+    for path in files {
         let Some(dir) = path.parent() else {
             continue;
         };
@@ -1049,35 +1037,16 @@ fn git_case(
     let files = [("legacy.md".to_string(), PT.to_string())];
     let ok =
         crate::frappe::write_fixture(&format!("language-{name}"), &files).is_some_and(|root| {
-            let commit = |text: &str| {
-                git(
-                    &root,
-                    &[
-                        "-c",
-                        "user.email=t@example.invalid",
-                        "-c",
-                        "user.name=t",
-                        "-c",
-                        "commit.gpgsign=false",
-                        "-c",
-                        "core.hooksPath=/dev/null",
-                        "commit",
-                        "--allow-empty",
-                        "-qm",
-                        text,
-                    ],
-                )
-            };
             let mut built = git(&root, &["init", "-q"]).is_some()
                 && git(&root, &["add", "."]).is_some()
-                && commit("base").is_some()
+                && commit(&root, "base", None)
                 && git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]).is_some()
                 && change
                     .iter()
                     .all(|(p, t)| fs::write(root.join(p), t).is_ok());
             if let Some(text) = message {
                 // The committer date must be on or after the first day of the rule.
-                built = built && commit_dated(&root, text);
+                built = built && commit(&root, text, Some("2027-01-01T00:00:00Z"));
             }
             let mut found = Vec::new();
             check(&Ctx::fixture(&root), &mut found);
@@ -1087,29 +1056,26 @@ fn git_case(
     (format!("{} {name}", RULE.id), ok)
 }
 
-fn commit_dated(root: &Path, message: &str) -> bool {
-    Command::new("git")
+/// An empty-or-staged commit in a fixture repository, optionally with a committer date.
+fn commit(root: &Path, message: &str, date: Option<&str>) -> bool {
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(root)
+        .args(["-c", "user.email=t@example.invalid", "-c", "user.name=t"])
         .args([
-            "-c",
-            "user.email=t@example.invalid",
-            "-c",
-            "user.name=t",
             "-c",
             "commit.gpgsign=false",
             "-c",
             "core.hooksPath=/dev/null",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            message,
         ])
-        .env("GIT_COMMITTER_DATE", "2027-01-01T00:00:00Z")
+        .args(["commit", "--allow-empty", "-qm", message])
         .env_remove("GIT_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .is_ok_and(|o| o.status.success())
+        .env_remove("GIT_INDEX_FILE");
+    if let Some(date) = date {
+        command.env("GIT_COMMITTER_DATE", date);
+    }
+    command.output().is_ok_and(|o| o.status.success())
 }
 
 fn self_test() -> Vec<(String, bool)> {

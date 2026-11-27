@@ -143,17 +143,10 @@ impl Ctx {
                 .into_iter()
                 .collect();
         }
-        let mut walker = WalkBuilder::new(&self.target);
-        walker.hidden(true).git_ignore(true).parents(false);
-        let mut out: Vec<PathBuf> = walker
-            .build()
-            .flatten()
-            .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-            .map(ignore::DirEntry::into_path)
+        walk(&self.target)
+            .into_iter()
             .filter(|p| wanted(p) && !excluded(p, &self.target))
-            .collect();
-        out.sort();
-        out
+            .collect()
     }
 
     /// Markdown documents with their content. Backlogs are queues that quote defects verbatim,
@@ -195,6 +188,20 @@ fn excluded(path: &Path, root: &Path) -> bool {
                 .is_some_and(|s| EXCLUDED_DIRS.contains(&s))
         })
     })
+}
+
+/// Every file of a tree, hidden and git-ignored ones left out, in a stable order.
+fn walk(root: &Path) -> Vec<PathBuf> {
+    let mut walker = WalkBuilder::new(root);
+    walker.hidden(true).git_ignore(true).parents(false);
+    let mut out: Vec<PathBuf> = walker
+        .build()
+        .flatten()
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .collect();
+    out.sort();
+    out
 }
 
 /// Builds a finding.
