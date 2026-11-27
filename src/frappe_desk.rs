@@ -7,6 +7,8 @@
 use super::*;
 use crate::explain::RuleExplanation;
 
+#[path = "frappe_desk/fieldname_shadow.rs"]
+mod fieldname_shadow;
 #[path = "frappe_desk/po_resolves.rs"]
 mod po_resolves;
 #[path = "frappe_desk/reqd_messages.rs"]
@@ -30,6 +32,11 @@ const ITEMS: &[Item] = &[
         explain: &reqd_messages::EXPLAIN,
         run: reqd_messages::run,
         cases: reqd_messages::cases,
+    },
+    Item {
+        explain: &fieldname_shadow::EXPLAIN,
+        run: fieldname_shadow::run,
+        cases: fieldname_shadow::cases,
     },
 ];
 
