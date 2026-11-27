@@ -19,6 +19,8 @@ mod po_resolves;
 mod report_chart;
 #[path = "frappe_desk/reqd_messages.rs"]
 mod reqd_messages;
+#[path = "frappe_desk/single_count.rs"]
+mod single_count;
 #[path = "frappe_desk/support.rs"]
 mod support;
 #[path = "frappe_desk/table_section.rs"]
@@ -65,6 +67,11 @@ const ITEMS: &[Item] = &[
         explain: &report_chart::EXPLAIN,
         run: report_chart::run,
         cases: report_chart::cases,
+    },
+    Item {
+        explain: &single_count::EXPLAIN,
+        run: single_count::run,
+        cases: single_count::cases,
     },
 ];
 
