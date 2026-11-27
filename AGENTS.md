@@ -260,3 +260,14 @@ so compare that scope by exit code.
 - `stenio language` reports the ledger, claims the next translation batch and verifies it.
 - Known limits: hidden folders and files over 1 MB are not read; a shallow CI checkout without a
   ledger has no history to compare with; code fences, quoted spans and blockquotes are not judged.
+
+## Release 4.45.0 (HTTP MCP transport security)
+
+- `--mcp-host` defaults to `127.0.0.1` and an unparseable value stops the start.
+- `Host` and `Origin` are validated (403) and no CORS header is sent. A server bound to
+  `0.0.0.0` needs `STENIO_MCP_ALLOWED_HOSTS` or remote clients are refused.
+- `STENIO_MCP_TOKEN` enables bearer authentication; without it a non-loopback bind warns and is
+  not authenticated.
+- The image runs as UID 1000. Pinned by `tests/mcp_http.rs`.
+- Known limits: the transport still has the legacy HTTP+SSE shape, and MCP path arguments are not
+  confined to the served tree.
