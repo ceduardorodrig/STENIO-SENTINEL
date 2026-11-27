@@ -124,11 +124,7 @@ fn after_options<'v>(args: &'v [String], valued: &[&str]) -> &'v [String] {
             break;
         }
         if is_flag(arg) {
-            at += if valued.contains(&arg.as_str()) {
-                2
-            } else {
-                1
-            };
+            at += if valued.contains(&arg.as_str()) { 2 } else { 1 };
         } else if assignment(arg).is_some() {
             at += 1;
         } else {
@@ -252,8 +248,7 @@ impl<'a> Judge<'a> {
 
     fn guard_file(&self, path: &Path) -> bool {
         let p = &self.policy.paths;
-        paths::any(&p.guard_files, path, &self.home)
-            && !paths::any(&p.scratch, path, &self.home)
+        paths::any(&p.guard_files, path, &self.home) && !paths::any(&p.scratch, path, &self.home)
     }
 
     fn backed_up(&self, path: &Path) -> bool {
@@ -308,7 +303,10 @@ impl<'a> Judge<'a> {
                 self.deny(SELF, format!("removal of {text}"));
             }
             if self.backed_up(&path) {
-                self.deny(DESTROY, format!("removal of {text} (backup or version tree)"));
+                self.deny(
+                    DESTROY,
+                    format!("removal of {text} (backup or version tree)"),
+                );
             }
             if !recursive {
                 continue;
@@ -454,8 +452,8 @@ impl<'a> Judge<'a> {
             }
             let rest = &argv[1..];
             argv = match base(first) {
-                "if" | "then" | "else" | "elif" | "fi" | "do" | "done" | "while" | "until" | "!"
-                | "{" | "}" | "builtin" | "nohup" | "chronic" | "coproc" => rest,
+                "if" | "then" | "else" | "elif" | "fi" | "do" | "done" | "while" | "until"
+                | "!" | "{" | "}" | "builtin" | "nohup" | "chronic" | "coproc" => rest,
                 "export" | "local" | "declare" | "readonly" | "typeset"
                     if rest.iter().any(|w| assignment(w).is_some()) =>
                 {
@@ -469,7 +467,9 @@ impl<'a> Judge<'a> {
                 "setsid" => after_options(rest, &[]),
                 "sudo" | "doas" | "run0" => after_options(
                     rest,
-                    &["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "--user"],
+                    &[
+                        "-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "--user",
+                    ],
                 ),
                 "pkexec" => after_options(rest, &["--user"]),
                 "env" => {
@@ -488,7 +488,15 @@ impl<'a> Judge<'a> {
                 }
                 "systemd-run" => after_options(
                     rest,
-                    &["-u", "--unit", "-p", "--property", "-E", "--setenv", "--on-active"],
+                    &[
+                        "-u",
+                        "--unit",
+                        "-p",
+                        "--property",
+                        "-E",
+                        "--setenv",
+                        "--on-active",
+                    ],
                 ),
                 "flock" if !has_flag(rest, "-c") => {
                     let inner = after_options(rest, &["-w", "--timeout", "-E"]);
@@ -624,7 +632,15 @@ impl<'a> Judge<'a> {
             "cp" | "install" | "ln" | "rsync" => {
                 let files = operands(
                     &args,
-                    &["-t", "--target-directory", "-m", "-o", "-g", "-e", "--exclude"],
+                    &[
+                        "-t",
+                        "--target-directory",
+                        "-m",
+                        "-o",
+                        "-g",
+                        "-e",
+                        "--exclude",
+                    ],
                 );
                 if let Some(destination) = files.last().filter(|_| files.len() > 1) {
                     self.write_to(destination, true);
@@ -637,6 +653,23 @@ impl<'a> Judge<'a> {
                 let append = has_flag(&args, "-a");
                 for file in operands(&args, &[]) {
                     self.write_to(file, !append);
+                }
+            }
+            "shred" => {
+                for file in operands(&args, &["-n", "-s", "--iterations", "--size"]) {
+                    let target = self.expand(file);
+                    // A script's own temporary file is not known here.
+                    if target.starts_with('$') && self.in_script {
+                        continue;
+                    }
+                    let scratch = !target.starts_with('$')
+                        && self
+                            .resolve(file)
+                            .iter()
+                            .all(|p| paths::any(&self.policy.paths.scratch, p, &self.home));
+                    if !scratch {
+                        self.deny(STORAGE, format!("shred of {file}"));
+                    }
                 }
             }
             "truncate" => {
@@ -670,7 +703,15 @@ impl<'a> Judge<'a> {
             }
             "chmod" | "chown" | "chgrp" | "chattr" => {
                 let recursive = has_flag(&args, "-R") || has_flag(&args, "--recursive");
-                for file in operands(&args, &["--reference"]).into_iter().skip(1) {
+                // A symbolic mode such as `-x` looks like a flag, so it is not an operand.
+                let dash_mode = args.iter().any(|a| {
+                    program == "chmod"
+                        && a.len() > 1
+                        && a.starts_with('-')
+                        && a.chars().skip(1).all(|c| "rwxXst,+=".contains(c))
+                });
+                let skip = usize::from(!dash_mode);
+                for file in operands(&args, &["--reference"]).into_iter().skip(skip) {
                     for path in self.resolve(file) {
                         if self.guard_file(&path) {
                             self.deny(SELF, format!("permission change of {}", path.display()));
@@ -709,9 +750,10 @@ impl<'a> Judge<'a> {
                 self.inner(&inner, command, output);
             }
             s if SHELLS.contains(&s) => {
-                if let Some(at) = args.iter().position(|a| {
-                    a.starts_with('-') && !a.starts_with("--") && a.ends_with('c')
-                }) {
+                if let Some(at) = args
+                    .iter()
+                    .position(|a| a.starts_with('-') && !a.starts_with("--") && a.ends_with('c'))
+                {
                     if let Some(code) = args.get(at + 1) {
                         self.text(&code.replace(LITERAL_DOLLAR, "$"), output);
                     }
@@ -739,8 +781,10 @@ impl<'a> Judge<'a> {
             }
             "eval" => self.text(&args.join(" ").replace(LITERAL_DOLLAR, "$"), output),
             "su" | "script" | "flock" => {
-                if let Some(at) = args.iter().position(|a| a == "-c" || a == "--command")
-                    && let Some(code) = args.get(at + 1)
+                if let Some(at) = args.iter().position(|a| {
+                    a == "--command"
+                        || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('c'))
+                }) && let Some(code) = args.get(at + 1)
                 {
                     self.text(&code.replace(LITERAL_DOLLAR, "$"), output);
                 }
@@ -776,7 +820,15 @@ impl<'a> Judge<'a> {
                 } else {
                     let after = after_options(
                         rest,
-                        &["-e", "--env", "-u", "--user", "-w", "--workdir", "--env-file"],
+                        &[
+                            "-e",
+                            "--env",
+                            "-u",
+                            "--user",
+                            "-w",
+                            "--workdir",
+                            "--env-file",
+                        ],
                     );
                     after.get(1..).unwrap_or_default()
                 };
@@ -808,6 +860,7 @@ impl<'a> Judge<'a> {
                 let into_variable = program == "printf" && has_flag(&args, "-v");
                 if output != Output::Consumed
                     && !into_variable
+                    && !self.in_script
                     && args.iter().any(|a| expands_secret(a))
                 {
                     self.deny(SECRET, "print of a secret variable");
@@ -841,11 +894,21 @@ impl<'a> Judge<'a> {
             "bat", "cat", "head", "tail", "less", "more", "rg", "grep", "awk", "sed", "sd", "cut",
             "jq", "yq", "xxd", "hexyl", "strings", "base64", "nl", "tac", "delta",
         ];
-        if READERS.contains(&program.as_str()) && output != Output::Consumed {
+        // A script's own functions may consume what it reads, so a script's reads are not
+        // judged as printing.
+        if READERS.contains(&program.as_str()) && output != Output::Consumed && !self.in_script {
             let quiet = matches!(program.as_str(), "rg" | "grep")
-                && ["-q", "-c", "-l", "--quiet", "--count", "--files-with-matches", "--files"]
-                    .iter()
-                    .any(|f| has_flag(&args, f));
+                && [
+                    "-q",
+                    "-c",
+                    "-l",
+                    "--quiet",
+                    "--count",
+                    "--files-with-matches",
+                    "--files",
+                ]
+                .iter()
+                .any(|f| has_flag(&args, f));
             // The first operands of these are a pattern or a program, not a file.
             let skip = match program.as_str() {
                 "rg" | "grep" | "awk" | "sed" | "jq" | "yq" => 1,
@@ -853,10 +916,19 @@ impl<'a> Judge<'a> {
                 _ => 0,
             };
             if !quiet {
-                for file in operands(&args, &["-e", "-g", "-r", "-n"])
-                    .into_iter()
-                    .skip(skip)
-                {
+                let search = matches!(program.as_str(), "rg" | "grep");
+                // `-n` takes a value for `head` and `tail` only.
+                let valued: &[&str] = if search {
+                    &["-e", "-g", "-A", "-B", "-C", "-m"]
+                } else {
+                    &["-e", "-f", "-n", "-c"]
+                };
+                let skip = if search && has_flag(&args, "-e") {
+                    0
+                } else {
+                    skip
+                };
+                for file in operands(&args, valued).into_iter().skip(skip) {
                     self.file_read(file);
                 }
             }

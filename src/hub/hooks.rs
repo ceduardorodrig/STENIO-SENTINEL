@@ -28,12 +28,7 @@ pub fn read_payload_up_to(limit: u64) -> Value {
         return Value::Null;
     }
     let mut text = String::new();
-    if stdin
-        .lock()
-        .take(limit)
-        .read_to_string(&mut text)
-        .is_err()
-    {
+    if stdin.lock().take(limit).read_to_string(&mut text).is_err() {
         return Value::Null;
     }
     serde_json::from_str(&text).unwrap_or(Value::Null)

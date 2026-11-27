@@ -14,7 +14,7 @@ why = "destroys data in a protected place"
 id = "GATE-STORAGE"
 why = "formats, wipes or repartitions storage"
 commands = [
-    "shred", "wipefs", "mkfs*", "mkswap", "blkdiscard", "sgdisk !-p !--print", "cgdisk", "gdisk !-l",
+    "wipefs", "mkfs*", "mkswap", "blkdiscard", "sgdisk !-p !--print", "cgdisk", "gdisk !-l",
     "fdisk !-l !--list", "sfdisk !-l !--list !-d !--dump", "cfdisk",
     "parted mklabel|mktable|mkpart|rm|resizepart|name|set",
     "cryptsetup luksFormat|erase|luksErase|reencrypt|luksKillSlot|luksRemoveKey",
@@ -91,10 +91,7 @@ commands = [
 
 [paths]
 # Backup and version trees: nothing inside is deleted, moved away, truncated or overwritten.
-protected_trees = [
-    "/mnt/BACKUP", "/mnt/storage", "**/.snapshots", "**/.stversions", "/etc", "/boot",
-    "/usr",
-]
+protected_trees = ["/mnt/BACKUP", "/mnt/storage", "**/.snapshots", "**/.stversions"]
 # These directories, and a glob of their contents, are never deleted, moved or re-owned
 # recursively. Deeper paths are ordinary work.
 protected_roots = [

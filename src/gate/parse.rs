@@ -211,11 +211,10 @@ fn redirect(reader: &mut Reader, state: &mut State, first: char) {
     state.end_word();
     let mut op = first.to_string();
     while let Some(c) = reader.peek() {
-        let more = match (op.as_str(), c) {
-            (">", '>' | '|' | '&') | ("<", '<' | '>' | '&') | ("<<", '<' | '-') => true,
-            (">>", '&') => true,
-            _ => false,
-        };
+        let more = matches!(
+            (op.as_str(), c),
+            (">", '>' | '|' | '&') | ("<", '<' | '>' | '&') | ("<<", '<' | '-') | (">>", '&')
+        );
         if !more {
             break;
         }

@@ -31,7 +31,10 @@ pub fn covering(state: &Path, rule: &str, subject: &str, now: i64) -> Option<Gra
         .filter_map(|l| serde_json::from_str::<Grant>(l).ok())
         .find(|g| g.rule == rule)?;
     let in_time = latest.until > now && latest.until - latest.at <= MAX_SECS * 1000;
-    let covers = latest.matching.as_deref().is_none_or(|m| subject.contains(m));
+    let covers = latest
+        .matching
+        .as_deref()
+        .is_none_or(|m| subject.contains(m));
     (in_time && covers).then_some(latest)
 }
 

@@ -3,9 +3,7 @@
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-use super::judge::{
-    BACKUP, DB, DESTROY, HISTORY, POWER, PUBLISH, SECRET, SELF, STORAGE,
-};
+use super::judge::{BACKUP, DB, DESTROY, HISTORY, POWER, PUBLISH, SECRET, SELF, STORAGE};
 use super::{Action, action_of, audit, decide, grant, judge_action, policy};
 
 const HOME: &str = "/home/agent";
@@ -34,7 +32,7 @@ const RED: &[(&str, &str)] = &[
     ("fd . /mnt/BACKUP -x rm", DESTROY),
     ("fd . /mnt/disk/projects -X rm -rf", DESTROY),
     ("find /mnt/storage -type f -exec rm {} \\;", DESTROY),
-    ("echo x > /mnt/BACKUP/.keep && true", DESTROY),
+    ("truncate -s 0 /mnt/BACKUP/dump.sql && true", DESTROY),
     ("rsync -a --delete ./empty/ /mnt/disk/projects", DESTROY),
     ("chmod -R 777 /etc", DESTROY),
     // storage
@@ -78,6 +76,9 @@ const RED: &[(&str, &str)] = &[
     ("echo \"token=${MY_TOKEN}\"", SECRET),
     ("bat .env", SECRET),
     ("rg KEY ~/.config/app/.env", SECRET),
+    ("rg -n KEY .env", SECRET),
+    ("head -n 3 .env", SECRET),
+    ("shred -u \"$F\"", STORAGE),
     ("cat ~/.ssh/id_ed25519", SECRET),
     ("gh auth token", SECRET),
     ("sops exec-env s.env 'printenv'", SECRET),
@@ -95,7 +96,10 @@ const RED: &[(&str, &str)] = &[
     ("sqlite3 x.db 'DELETE FROM events;'", DB),
     ("dropdb prod", DB),
     ("bench --site a.local drop-site", DB),
-    ("docker exec db psql -U x -c 'drop schema public cascade'", DB),
+    (
+        "docker exec db psql -U x -c 'drop schema public cascade'",
+        DB,
+    ),
     ("redis-cli FLUSHALL", DB),
     // publishing without a lease
     ("cargo publish", PUBLISH),
@@ -108,8 +112,14 @@ const RED: &[(&str, &str)] = &[
     ("bash release.sh", PUBLISH),
     ("terraform destroy", PUBLISH),
     // the guard itself
-    ("stenio gate override --rule GATE-POWER --for 1h --reason x", SELF),
-    ("stenio hub quota override --account a --for 1h --reason x", SELF),
+    (
+        "stenio gate override --rule GATE-POWER --for 1h --reason x",
+        SELF,
+    ),
+    (
+        "stenio hub quota override --account a --for 1h --reason x",
+        SELF,
+    ),
     ("echo '{}' > ~/.claude/settings.json", SELF),
     ("sd always never ~/.hermes/config.yaml", SELF),
     ("cp /tmp/x ~/.config/opencode/opencode.jsonc", SELF),
@@ -142,12 +152,27 @@ const RED: &[(&str, &str)] = &[
     ("bash <<'EOF'\nreboot\nEOF", POWER),
     ("ssh host bash -c 'wipefs -a /dev/sda'", STORAGE),
     ("docker exec -it c sh -c 'dropdb prod'", DB),
-    ("fd -e x . | xargs rm -rf; find /mnt/disk/projects | xargs rm -rf", DESTROY),
+    (
+        "fd -e x . | xargs rm -rf; find /mnt/disk/projects | xargs rm -rf",
+        DESTROY,
+    ),
     ("echo a | xargs -I{} git push --force", HISTORY),
-    ("script -qc 'stenio gate override --rule GATE-DB --for 1h --reason x' /dev/null", SELF),
-    ("python3 -c \"import os; os.system('git push --force')\"", HISTORY),
-    ("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'push', '--force'])\nEOF", HISTORY),
-    ("python3 -c \"import shutil; shutil.rmtree('/mnt/disk/projects')\"", DESTROY),
+    (
+        "script -qc 'stenio gate override --rule GATE-DB --for 1h --reason x' /dev/null",
+        SELF,
+    ),
+    (
+        "python3 -c \"import os; os.system('git push --force')\"",
+        HISTORY,
+    ),
+    (
+        "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'push', '--force'])\nEOF",
+        HISTORY,
+    ),
+    (
+        "python3 -c \"import shutil; shutil.rmtree('/mnt/disk/projects')\"",
+        DESTROY,
+    ),
     ("git status\nreboot", POWER),
     ("git \\\n push \\\n --force", HISTORY),
 ];
@@ -166,6 +191,7 @@ const GREEN: &[&str] = &[
     "cat > doc.md <<'EOF'\nreboot\ngit push --force\nEOF",
     "ls # then reboot",
     "rm -f build.log",
+    "shred -u /tmp/otp.png",
     "rm -rf target node_modules",
     "rm -rf /tmp/scratch-123",
     "rm -rf \"$tmp\"",
@@ -365,9 +391,8 @@ fn payload_cases(policy: &policy::Policy) -> Vec<(String, bool)> {
 fn decision_cases(policy: &policy::Policy, dir: &Path) -> Vec<(String, bool)> {
     let publish = || judge_action(policy, HOME, &command("docker push x"));
     let power = || judge_action(policy, HOME, &command("reboot"));
-    let run = |found, lease: Result<bool, String>| {
-        decide(policy, found, "reboot", dir, || lease).verdict
-    };
+    let run =
+        |found, lease: Result<bool, String>| decide(policy, found, "reboot", dir, || lease).verdict;
     let now = crate::hub::now_ms();
     let record = |until: i64, at: i64| grant::Grant {
         rule: POWER.to_string(),
@@ -380,7 +405,8 @@ fn decision_cases(policy: &policy::Policy, dir: &Path) -> Vec<(String, bool)> {
     let stored = grant::store(dir, &record(now + 60_000, now)).is_ok();
     let lifted = run(power(), Ok(false));
     let other = run(publish(), Ok(false));
-    let expired = grant::store(dir, &record(now - 1, now - 2)).is_ok() && run(power(), Ok(false)) == "deny";
+    let expired =
+        grant::store(dir, &record(now - 1, now - 2)).is_ok() && run(power(), Ok(false)) == "deny";
     let long = grant::store(dir, &record(now + 90 * 86_400_000, now)).is_ok()
         && run(power(), Ok(false)) == "deny";
     vec![

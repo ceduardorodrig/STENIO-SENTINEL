@@ -517,8 +517,8 @@ fn show_report(since: &str, dir: Option<PathBuf>, show: usize) -> Result<i32, St
     let home = std::env::var("HOME").unwrap_or_default();
     let dir = dir.unwrap_or_else(|| audit_dir(&host, &home));
     let from = chrono::Utc::now() - chrono::Duration::seconds(seconds(since)?);
-    let report = audit::report(&dir, &from.to_rfc3339())
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    let report =
+        audit::report(&dir, &from.to_rfc3339()).map_err(|e| format!("{}: {e}", dir.display()))?;
     println!(
         "audit {} since {since}: files={} entries={}",
         dir.display(),
