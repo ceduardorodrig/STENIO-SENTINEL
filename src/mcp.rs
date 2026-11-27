@@ -212,6 +212,8 @@ pub fn dispatch_mcp_request(
                 .unwrap_or("");
             let arguments = req.params.get("arguments").cloned().unwrap_or(json!({}));
 
+            // Set by every outcome that is not a success; it becomes `isError` in the result.
+            let mut failed = false;
             let content_text = match tool_name {
                 "stenio_scan" => {
                     let path_str = arguments
@@ -222,8 +224,12 @@ pub fn dispatch_mcp_request(
                     let only = arguments.get("only_rule").and_then(|v| v.as_str());
                     let target_path = repo_root.join(path_str);
 
-                    if target_path.is_file() {
+                    if !target_path.exists() {
+                        failed = true;
+                        format!("Path '{}' does not exist.", path_str)
+                    } else if target_path.is_file() {
                         let violations = engine.scan_file(&target_path, tag, only);
+                        failed = violations.iter().any(|v| v.severity == Severity::Error);
                         if violations.is_empty() {
                             format!("✨ File '{}' 100% compliant. Zero violations.", path_str)
                         } else {
@@ -237,6 +243,7 @@ pub fn dispatch_mcp_request(
                             .map(|r| with_language(r, &target_path, only))
                         {
                             Ok(report) => {
+                                failed = report.error_count > 0;
                                 if report.violations.is_empty() {
                                     format!(
                                         "✨ Directory '{}' 100% compliant. Zero violations across {} files.",
@@ -260,7 +267,10 @@ pub fn dispatch_mcp_request(
                                     lines.join("\n")
                                 }
                             }
-                            Err(e) => format!("Error scanning directory: {}", e),
+                            Err(e) => {
+                                failed = true;
+                                format!("Error scanning directory: {}", e)
+                            }
                         }
                     }
                 }
@@ -271,6 +281,7 @@ pub fn dispatch_mcp_request(
                         .map(|r| with_language(r, repo_root, None))
                     {
                         Ok(report) => {
+                            failed = report.error_count > 0;
                             if report.violations.is_empty() {
                                 format!(
                                     "✨ Clean surgical scan! Zero violations in {} modified files.",
@@ -288,11 +299,15 @@ pub fn dispatch_mcp_request(
                                 lines.join("\n")
                             }
                         }
-                        Err(e) => format!("Error executing diff: {}", e),
+                        Err(e) => {
+                            failed = true;
+                            format!("Error executing diff: {}", e)
+                        }
                     }
                 }
                 "stenio_guardian" => {
                     let rep = audit_stenio_integrity(repo_root);
+                    failed = !rep.is_intact;
                     if rep.is_intact {
                         format!(
                             "🛡️ Guardian: Intact. Zero tampering detected. Executable SHA-256: {}",
@@ -325,6 +340,7 @@ pub fn dispatch_mcp_request(
                     } else if let Some(exp) = crate::explain::get_explanation(rule_id) {
                         crate::explain::format_explanation_plain(exp)
                     } else {
+                        failed = true;
                         format!(
                             "No explanation found for rule '{}'.\n\n{}",
                             rule_id,
@@ -375,7 +391,10 @@ pub fn dispatch_mcp_request(
                                 ));
                             }
 
-                            if errors.is_empty() {
+                            failed = !errors.is_empty() || !target_path.exists();
+                            if !target_path.exists() {
+                                format!("Path '{}' does not exist.", path_str)
+                            } else if errors.is_empty() {
                                 format!(
                                     "🎉 [GATE PASSED] Zero blocking errors and zero duplications across {} files. Code is 100% compliant. Task approved for delivery!",
                                     report.total_files_scanned
@@ -395,7 +414,10 @@ pub fn dispatch_mcp_request(
                                 )
                             }
                         }
-                        Err(e) => format!("Error executing Quality Gate: {}", e),
+                        Err(e) => {
+                            failed = true;
+                            format!("Error executing Quality Gate: {}", e)
+                        }
                     }
                 }
                 "stenio_dry" => {
@@ -411,6 +433,7 @@ pub fn dispatch_mcp_request(
                     let (dry_violations, dry_count, dry_dur) =
                         crate::dry::scan_dry_directory(&target_path, min_lines, whitelist);
 
+                    failed = dry_violations.iter().any(|v| v.severity == Severity::Error);
                     if dry_violations.is_empty() {
                         format!(
                             "✨ [DRY PASSED] Zero duplications detected across {} files ({:?}).",
@@ -444,6 +467,7 @@ pub fn dispatch_mcp_request(
                                 .iter()
                                 .filter(|v| v.severity == crate::docker::DockerSeverity::Error)
                                 .count();
+                            failed = errors > 0;
                             let warnings = report
                                 .violations
                                 .iter()
@@ -473,7 +497,10 @@ pub fn dispatch_mcp_request(
                                 )
                             }
                         }
-                        Err(e) => format!("Error auditing Docker daemon: {}", e),
+                        Err(e) => {
+                            failed = true;
+                            format!("Error auditing Docker daemon: {}", e)
+                        }
                     }
                 }
                 "stenio_graph" => {
@@ -557,9 +584,9 @@ pub fn dispatch_mcp_request(
                         if mcp_flag(&arguments, "tagged") {
                             cmd.push("--tagged".to_string());
                         }
-                        run_as_subcommand(&cmd)
+                        run_as_subcommand(&cmd, &mut failed)
                     }
-                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                    (Err(e), _) | (_, Err(e)) => invalid_arguments(e, &mut failed),
                 },
                 "stenio_verify_release" => match (
                     mcp_arg(&arguments, "host", ""),
@@ -586,9 +613,9 @@ pub fn dispatch_mcp_request(
                         if mcp_flag(&arguments, "expect_main") {
                             cmd.push("--expect-main".to_string());
                         }
-                        run_as_subcommand(&cmd)
+                        run_as_subcommand(&cmd, &mut failed)
                     }
-                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                    (Err(e), _) | (_, Err(e)) => invalid_arguments(e, &mut failed),
                 },
                 "stenio_verify_host" => match (
                     mcp_arg(&arguments, "host", ""),
@@ -606,11 +633,14 @@ pub fn dispatch_mcp_request(
                             cmd.push("--repo-root".to_string());
                             cmd.push(root);
                         }
-                        run_as_subcommand(&cmd)
+                        run_as_subcommand(&cmd, &mut failed)
                     }
-                    (Err(e), _) | (_, Err(e)) => format!("invalid arguments: {e}"),
+                    (Err(e), _) | (_, Err(e)) => invalid_arguments(e, &mut failed),
                 },
-                other => format!("Unknown tool: '{}'", other),
+                other => {
+                    failed = true;
+                    format!("Unknown tool: '{}'", other)
+                }
             };
 
             Some(McpResponse {
@@ -622,7 +652,8 @@ pub fn dispatch_mcp_request(
                             "type": "text",
                             "text": content_text
                         }
-                    ]
+                    ],
+                    "isError": failed
                 })),
                 error: None,
             })
@@ -665,7 +696,14 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
             }
         };
 
-        if let Some(resp) = dispatch_mcp_request(&req, repo_root, &engine, &whitelist) {
+        // The work ledger is local: its tools exist on this stdio transport only.
+        let response = crate::hub::mcp::intercept(&req, repo_root, None).or_else(|| {
+            dispatch_mcp_request(&req, repo_root, &engine, &whitelist).map(|mut resp| {
+                crate::hub::mcp::extend(&req, &mut resp);
+                resp
+            })
+        });
+        if let Some(resp) = response {
             let out = serde_json::to_string(&resp)?;
             writeln!(stdout, "{}", out)?;
             stdout.flush()?;
@@ -691,6 +729,11 @@ fn with_language(
     report
 }
 
+fn invalid_arguments(error: String, failed: &mut bool) -> String {
+    *failed = true;
+    format!("invalid arguments: {error}")
+}
+
 /// Reads a string argument and rejects anything that could become another flag or a shell token.
 fn mcp_arg(arguments: &Value, key: &str, extra: &str) -> Result<String, String> {
     match arguments.get(key).and_then(Value::as_str) {
@@ -708,7 +751,9 @@ fn mcp_flag(arguments: &Value, key: &str) -> bool {
 
 /// Runs this same binary as a subcommand (argv vector, never a shell) and returns its exit code
 /// with the PASS/FAIL lines the subcommand printed.
-fn run_as_subcommand(args: &[String]) -> String {
+fn run_as_subcommand(args: &[String], failed: &mut bool) -> String {
+    // Cleared only by a run that exits 0.
+    *failed = true;
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => return format!("cannot locate the stenio binary: {e}"),
@@ -717,6 +762,7 @@ fn run_as_subcommand(args: &[String]) -> String {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);
             let stderr = String::from_utf8_lossy(&o.stderr);
+            *failed = !o.status.success();
             format!(
                 "exit={}\n{}{}",
                 o.status.code().unwrap_or(-1),

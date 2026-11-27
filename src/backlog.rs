@@ -37,6 +37,7 @@
 
 pub mod close;
 pub mod integrity;
+pub mod queue_index;
 #[cfg(test)]
 mod wave_tests;
 

@@ -9,6 +9,7 @@
 use clap::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::backlog;
 use crate::engine::Violation;
@@ -87,6 +88,11 @@ struct AddArgs {
     path: Option<PathBuf>,
     #[arg(long)]
     dry_run: bool,
+    #[arg(
+        long,
+        help = "Ledger worker id (or $STENIO_HUB_WORKER): needed while that worker holds backlog:GB:write"
+    )]
+    worker: Option<String>,
     #[arg(
         long,
         help = "GB id of an open row this one overlaps with on purpose: recorded as `Related:` and lets the add pass the similarity guard"
@@ -378,7 +384,10 @@ pub(crate) fn guarded_write(path: &Path, original: &str, new: &str) -> Result<()
         .and_then(|n| n.to_str())
         .unwrap_or("backlog.md");
     let dir = path.parent().unwrap_or(Path::new("."));
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // A name of its own: two writers must never share a temporary file.
+    static TEMPORARY: AtomicU64 = AtomicU64::new(0);
+    let serial = TEMPORARY.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{serial}.tmp", std::process::id()));
     fs::write(&tmp, new).map_err(|e| format!("cannot write: {e}"))?;
     fs::rename(&tmp, path).map_err(|e| format!("cannot replace: {e}"))?;
     Ok(())
@@ -413,12 +422,16 @@ pub fn run_cli(argv: &[String]) -> i32 {
     };
     let root = vault_root(a.path.as_deref());
     let req = a.request();
-    let done = match add(&root, &req, a.dry_run) {
+    let written = crate::hub::guard::cli_write(
+        &root,
+        &["GB".to_string()],
+        a.worker.as_deref(),
+        a.dry_run,
+        || add(&root, &req, a.dry_run),
+    );
+    let done = match written {
         Ok(d) => d,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
+        Err(code) => return code,
     };
     if a.dry_run {
         println!("{}\n{}", done.id, done.row);

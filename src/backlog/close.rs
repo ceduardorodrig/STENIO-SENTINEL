@@ -394,6 +394,11 @@ struct CloseArgs {
     path: Option<PathBuf>,
     #[arg(long)]
     dry_run: bool,
+    #[arg(
+        long,
+        help = "Ledger worker id (or $STENIO_HUB_WORKER): needed while that worker holds a backlog:<prefix>:write claim"
+    )]
+    worker: Option<String>,
 }
 
 /// Parses the batch file format of `--file`.
@@ -444,7 +449,7 @@ fn collect_items(a: &CloseArgs) -> Result<Vec<CloseItem>, String> {
     Ok(items)
 }
 
-/// Entry point of `stenio backlog close`. Exit codes: 0 done, 1 refused, 2 usage.
+/// Entry point of `stenio backlog close`. Exit codes: 0 done, 1 refused, 2 usage, 3 ledger unavailable.
 pub fn run_cli(argv: &[String]) -> i32 {
     let a = match CloseArgs::try_parse_from(argv) {
         Ok(a) => a,
@@ -455,20 +460,33 @@ pub fn run_cli(argv: &[String]) -> i32 {
         .date
         .clone()
         .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    let done = collect_items(&a).and_then(|items| plan(&root, &items, &date));
-    let p = match done {
-        Ok(p) => p,
+    let items = match collect_items(&a) {
+        Ok(items) => items,
         Err(e) => {
             eprintln!("{e}");
             return 1;
         }
     };
-    if !a.dry_run {
-        if let Err(e) = apply(&p) {
-            eprintln!("{e}");
-            return 1;
-        }
-    }
+    let mut prefixes: Vec<String> = items
+        .iter()
+        .filter_map(|i| i.id.split_once('-'))
+        .map(|(prefix, _)| prefix.trim().to_uppercase())
+        .collect();
+    prefixes.sort();
+    prefixes.dedup();
+    // Planned and applied under one lock, so no other writer changes a file in between.
+    let written =
+        crate::hub::guard::cli_write(&root, &prefixes, a.worker.as_deref(), a.dry_run, || {
+            let p = plan(&root, &items, &date)?;
+            if !a.dry_run {
+                apply(&p)?;
+            }
+            Ok(p)
+        });
+    let p = match written {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
     let verb = if a.dry_run { "would close" } else { "closed" };
     for (id, row) in &p.rows {
         println!("{verb} {id}");
