@@ -27,7 +27,9 @@ mod contract_parity;
 mod incident;
 mod inline_style;
 mod live_claim;
+mod raci;
 mod rule_count;
+mod sources;
 
 #[rustfmt::skip]
 pub static RULES: &[&DocRule] = &[
@@ -37,6 +39,7 @@ pub static RULES: &[&DocRule] = &[
     &contract_parity::RULE,
     &live_claim::RULE,
     &bind_claim::RULE,
+    &raci::RULE,
 ];
 
 /// What the rules may look at.
