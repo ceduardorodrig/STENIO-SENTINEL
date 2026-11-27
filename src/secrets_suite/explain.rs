@@ -47,4 +47,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "HF_TOKEN: ${HF_TOKEN:-}",
         remediation: "Make it optional, delete it, or declare `[stack_env] external = [\"NAME\"]` when an image reads it.",
     },
+    RuleExplanation {
+        id: "COMPOSE-ENV-EXAMPLE-PARITY",
+        name: "Compose Variable Missing From The Env Example",
+        severity: "ERROR",
+        tag: "env",
+        summary: "A variable interpolated in a compose file is not declared in the sibling .env.example (a commented declaration counts). ERROR without a default, WARNING with one; inert without a sibling example.",
+        rationale: "Parity between compose.yml and .env.example was checked by hand with rg; a missing line only shows up as a blank value at `up -d`.",
+        bad_example: "compose.yml: K: ${APP_KEY}      .env.example: (no APP_KEY line)",
+        good_example: ".env.example: APP_KEY=",
+        remediation: "Declare the variable in .env.example and set it in the host .env.",
+    },
 ];

@@ -4,6 +4,7 @@
 //! reports carry paths, line numbers, key names and counts only.
 
 mod drift;
+mod env_example;
 mod env_stack;
 mod env_wired;
 pub mod explain;
@@ -47,12 +48,16 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
     }
     let wired = sel.wants("env", env_wired::RULE_ID);
     let stack = sel.wants("env", env_stack::RULE_ID);
-    if !(wired || stack) {
+    let parity = sel.wants("env", env_example::RULE_ID);
+    if !(wired || stack || parity) {
         return out;
     }
     let files = tree::files(root);
     if wired {
         out.extend(env_wired::audit(root, &files));
+    }
+    if parity {
+        out.extend(env_example::audit(&files));
     }
     if stack {
         out.extend(env_stack::audit(root, &files));
@@ -113,6 +118,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     cases.extend(drift::self_test_cases());
     cases.extend(env_wired::self_test_cases());
     cases.extend(env_stack::self_test_cases());
+    cases.extend(env_example::self_test_cases());
     cases
 }
 
