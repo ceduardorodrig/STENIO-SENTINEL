@@ -33,6 +33,7 @@ mod live_claim;
 mod panel_app;
 mod panel_label;
 mod panel_parity;
+mod publish_cover;
 mod quote_source;
 mod raci;
 mod route_drift;
@@ -50,6 +51,7 @@ pub static RULES: &[&DocRule] = &[
     &raci::RULE,
     &quote_source::RULE,
     &count_drift::RULE,
+    &publish_cover::RULE,
     &panel_parity::RULE,
     &panel_label::RULE,
     &english_codebase::RULE,
