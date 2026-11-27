@@ -41,6 +41,8 @@ mod support;
 mod table_section;
 #[path = "frappe_desk/template_literals.rs"]
 mod template_literals;
+#[path = "frappe_desk/untranslated.rs"]
+mod untranslated;
 #[path = "frappe_desk/version_endpoint.rs"]
 mod version_endpoint;
 
@@ -125,6 +127,11 @@ const ITEMS: &[Item] = &[
         explain: &template_literals::EXPLAIN,
         run: template_literals::run,
         cases: template_literals::cases,
+    },
+    Item {
+        explain: &untranslated::EXPLAIN,
+        run: untranslated::run,
+        cases: untranslated::cases,
     },
 ];
 
