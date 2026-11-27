@@ -20,6 +20,7 @@ mod boots; // GB-155
 mod kuma; // GB-014 GB-015
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
+mod proxy_env; // GB-200
 mod socket_order; // GB-171
 
 
@@ -34,6 +35,7 @@ type Lint = fn(&[SourceFile]) -> Vec<Violation>;
 /// Static lints: rule id and function.
 const LINTS: &[(&str, Lint)] = &[
     (backup_verify::RULE_ID, backup_verify::lint),           // GB-051
+    (proxy_env::RULE_ID, proxy_env::lint),                   // GB-200
     (socket_order::RULE_ID, socket_order::lint),             // GB-171
 ];
 
@@ -45,6 +47,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     kuma::EXPLAIN_NOTIFY,        // GB-015
     onfailure::EXPLAIN,          // GB-016
     ports_vs_ss::EXPLAIN,        // GB-013
+    proxy_env::EXPLAIN,          // GB-200
     socket_order::EXPLAIN,       // GB-171
 ];
 
@@ -78,6 +81,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
+    all.extend(proxy_env::self_test_cases()); // GB-200
     all.extend(socket_order::self_test_cases()); // GB-171
     all
 }
