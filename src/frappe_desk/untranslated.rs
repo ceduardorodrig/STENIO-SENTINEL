@@ -7,10 +7,10 @@ use crate::explain::RuleExplanation;
 pub(super) const EXPLAIN: RuleExplanation = RuleExplanation {
     id: "I18N-NO-UNTRANSLATED-INTERPOLATION",
     name: "User Message That Skips Translation",
-    severity: "WARN",
+    severity: "ERROR",
     tag: "frappe",
     summary: "`frappe.throw` / `frappe.msgprint` whose message starts with a literal or an f-string (not `_(...)`), or a `get_label(...)` passed raw into `.format(...)` or a `label=` argument. Tests and patches are skipped; a variable message is not judged.",
-    rationale: "GB-083 (i18n audit): `validators.py` passed a raw `doc.meta.get_label()` into a translated sentence and `integrations_setup.py` threw English literals and f-strings; the coverage gates only read literals inside `_()`. WARN while existing sites are fixed.",
+    rationale: "GB-083 (i18n audit): `validators.py` passed a raw `doc.meta.get_label()` into a translated sentence and `integrations_setup.py` threw English literals and f-strings; the coverage gates only read literals inside `_()`.",
     bad_example: "frappe.throw(f\"{email} already exists\")",
     good_example: "frappe.throw(_(\"{0} already exists\").format(email))",
     remediation: "Wrap the sentence in _() with placeholders, and each label in _().",
