@@ -121,7 +121,12 @@ fn touch(conn: &Connection, worker: &str) -> HubResult<()> {
 }
 
 /// Marks a live claim as released and records the event that replay needs.
-fn end_claim(conn: &Connection, claim: &Claim, reason: &str, note: Option<&str>) -> HubResult<()> {
+pub fn end_claim(
+    conn: &Connection,
+    claim: &Claim,
+    reason: &str,
+    note: Option<&str>,
+) -> HubResult<()> {
     let now = now_ms();
     conn.execute(
         "UPDATE claims SET released = ?1, reason = ?2 WHERE id = ?3",
@@ -317,21 +322,8 @@ fn open_runs_with_row(conn: &Connection, row: &str) -> HubResult<Vec<String>> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn run_start(
-    store: &mut Store,
-    cfg: &Config,
-    vault: &Path,
-    rows: &[String],
-    slots: Option<u32>,
-    goal: &str,
-) -> HubResult<Value> {
-    let slots = slots.unwrap_or(cfg.fleet.ceiling);
-    if slots == 0 || slots > cfg.fleet.ceiling {
-        return Err(HubError::Usage(format!(
-            "--slots must be between 1 and the fleet ceiling {}",
-            cfg.fleet.ceiling
-        )));
-    }
+/// The listed rows by their canonical ids, each present in an active queue under `vault`.
+pub fn run_row_ids(vault: &Path, rows: &[String]) -> HubResult<Vec<String>> {
     let queues = present_queues(vault);
     let mut ids: Vec<String> = Vec::new();
     for raw in rows.iter().flat_map(|r| r.split(',')) {
@@ -357,9 +349,42 @@ pub fn run_start(
     if ids.is_empty() {
         return Err(HubError::Usage("--rows must name at least one row".into()));
     }
-    let vault = vault.display().to_string();
+    Ok(ids)
+}
+
+pub fn run_start(
+    store: &mut Store,
+    cfg: &Config,
+    vault: &Path,
+    rows: &[String],
+    slots: Option<u32>,
+    goal: &str,
+) -> HubResult<Value> {
+    let ids = run_row_ids(vault, rows)?;
+    run_insert(store, cfg, &vault.display().to_string(), &ids, slots, goal)
+}
+
+/// Opens the run over rows that [`run_row_ids`] already found.
+pub fn run_insert(
+    store: &mut Store,
+    cfg: &Config,
+    vault: &str,
+    ids: &[String],
+    slots: Option<u32>,
+    goal: &str,
+) -> HubResult<Value> {
+    let slots = slots.unwrap_or(cfg.fleet.ceiling);
+    if slots == 0 || slots > cfg.fleet.ceiling {
+        return Err(HubError::Usage(format!(
+            "--slots must be between 1 and the fleet ceiling {}",
+            cfg.fleet.ceiling
+        )));
+    }
+    if ids.is_empty() {
+        return Err(HubError::Usage("--rows must name at least one row".into()));
+    }
     store.write(|tx| {
-        for id in &ids {
+        for id in ids {
             if let Some(run) = open_runs_with_row(tx, id)?.first() {
                 return Err(HubError::refused(
                     "row_in_run",

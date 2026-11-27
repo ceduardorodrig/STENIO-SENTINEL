@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use super::config::{self, Config};
 use super::ledger::{self, BeatRequest};
 use super::store::{self, Store};
-use super::{HubResult, guard, now_ms};
+use super::{HubError, HubResult, guard, now_ms, remote};
 use crate::backlog::queue_index::present_queues;
 
 /// Hook payloads are small; anything larger is not read further.
@@ -74,6 +74,9 @@ fn existing_ledger() -> HubResult<Option<Store>> {
 fn renew(who: Option<&str>, fence: Option<i64>) -> HubResult<()> {
     let cfg = Config::load()?;
     let payload = read_payload();
+    if let Some(server) = remote::declared()? {
+        return renew_served(&server, &cfg, &payload, who, fence);
+    }
     let Some(mut store) = existing_ledger()? else {
         return Ok(());
     };
@@ -86,6 +89,79 @@ fn renew(who: Option<&str>, fence: Option<i64>) -> HubResult<()> {
             from_hook: true,
         };
         if let Err(e) = ledger::beat(&mut store, &cfg, &request) {
+            eprintln!("stenio hub beat ({worker}): {e}");
+        }
+    }
+    Ok(())
+}
+
+/// At most one request per declared hook interval and session, so that an absent server costs a
+/// session one short wait per interval and not one per tool call.
+fn beat_due(cfg: &Config, key: &str) -> bool {
+    let Some(db) = config::db_path().ok() else {
+        return true;
+    };
+    let Some(dir) = db.parent() else {
+        return true;
+    };
+    let name: String = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(64)
+        .collect();
+    let stamp = dir.join(format!("beat-{name}.stamp"));
+    let recent = std::fs::metadata(&stamp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|age| age.as_secs() < cfg.lease.hook_beat_min_secs);
+    if recent {
+        return false;
+    }
+    if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&stamp, b"")) {
+        eprintln!("stenio hub beat: cannot write {}: {e}", stamp.display());
+    }
+    true
+}
+
+fn served_workers(server: &remote::Remote, session: Option<&str>) -> HubResult<Vec<String>> {
+    let Some(session) = session else {
+        return Ok(Vec::new());
+    };
+    let reply = server.call("session_workers", json!({"session": session}))?;
+    Ok(reply["workers"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(|w| w.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+fn renew_served(
+    server: &remote::Remote,
+    cfg: &Config,
+    payload: &Value,
+    who: Option<&str>,
+    fence: Option<i64>,
+) -> HubResult<()> {
+    let server = server.clone().with_timeout(remote::HOOK_TIMEOUT_SECS);
+    let session = session_of(cfg, payload);
+    let named = config::worker_or_env(who);
+    let Some(key) = named.as_deref().or(session.as_deref()) else {
+        return Ok(());
+    };
+    if !beat_due(cfg, key) {
+        return Ok(());
+    }
+    let workers = match &named {
+        Some(worker) => vec![worker.clone()],
+        None => served_workers(&server, session.as_deref())?,
+    };
+    for worker in workers {
+        let request = json!({"worker": worker, "fence": fence, "from_hook": true});
+        if let Err(e) = server.call("hub_beat", request) {
             eprintln!("stenio hub beat ({worker}): {e}");
         }
     }
@@ -153,6 +229,17 @@ fn refusal_of(payload: &Value) -> HubResult<Option<String>> {
         return Ok(None);
     };
     let cfg = Config::load()?;
+    if let Some(server) = remote::declared()? {
+        let server = server.with_timeout(remote::HOOK_TIMEOUT_SECS);
+        let mine: Vec<String> = config::worker_or_env(None).into_iter().collect();
+        let check = json!({"prefixes": [prefix], "mine": mine,
+            "session": session_of(&cfg, payload)});
+        return match server.call("queue_check", check) {
+            Ok(_) => Ok(None),
+            Err(e @ HubError::Refused(_)) => Ok(Some(format!("{e} ({})", root.display()))),
+            Err(e) => Err(e),
+        };
+    }
     let Some(mut store) = existing_ledger()? else {
         return Ok(None);
     };
@@ -189,10 +276,42 @@ pub fn guard_hook() -> i32 {
     }
 }
 
+fn release_verdict(
+    resource: &str,
+    holder: Option<&str>,
+    mine: &[String],
+) -> Result<String, String> {
+    match holder {
+        Some(h) if mine.iter().any(|m| m == h) => Ok(format!("{resource} held by {h}")),
+        Some(h) => Err(format!("{resource} is held by {h}")),
+        None => Err(format!(
+            "nobody holds {resource}; claim it first: stenio hub claim --worker <id> {resource}"
+        )),
+    }
+}
+
+fn require_served_release(
+    server: &remote::Remote,
+    cfg: &Config,
+    resource: &str,
+    worker: Option<&str>,
+) -> HubResult<Result<String, String>> {
+    let mine = match config::worker_or_env(worker) {
+        Some(w) => vec![w],
+        None => served_workers(server, session_of(cfg, &Value::Null).as_deref())?,
+    };
+    let reply = server.call("claim_holder", json!({"resource": resource}))?;
+    Ok(release_verdict(resource, reply["holder"].as_str(), &mine))
+}
+
 /// A release needs a live `release:<name>` claim of the caller.
 pub fn require_release(name: &str, worker: Option<&str>) -> Result<String, String> {
     let resource = format!("release:{}", name.to_ascii_lowercase());
     let cfg = Config::load().map_err(|e| e.to_string())?;
+    if let Some(server) = remote::declared().map_err(|e| e.to_string())? {
+        return require_served_release(&server, &cfg, &resource, worker)
+            .map_err(|e| e.to_string())?;
+    }
     let Some(mut store) = existing_ledger().map_err(|e| e.to_string())? else {
         return Ok(format!(
             "no ledger on this host, {resource} cannot be checked"
@@ -213,13 +332,8 @@ pub fn require_release(name: &str, worker: Option<&str>) -> Result<String, Strin
         })
         .map_err(|e| e.to_string())?;
     let now = now_ms();
-    match held.iter().find(|c| c.live(now)) {
-        Some(c) if mine.contains(&c.holder) => Ok(format!("{resource} held by {}", c.holder)),
-        Some(c) => Err(format!("{resource} is held by {}", c.holder)),
-        None => Err(format!(
-            "nobody holds {resource}; claim it first: stenio hub claim --worker <id> {resource}"
-        )),
-    }
+    let holder = held.iter().find(|c| c.live(now)).map(|c| c.holder.as_str());
+    release_verdict(&resource, holder, &mine)
 }
 
 /// Whether the ledger events start more than `max_age_secs` ago.

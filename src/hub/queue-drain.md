@@ -62,7 +62,26 @@ the owner, at a terminal, may pass `--without-lease`.
 `stenio hub backup --out <dir>` writes a snapshot and the event export and restore-tests them;
 `backup --check <dir>` fails when the newest is older than 26 hours; `status` reports a stale one.
 
+## Shared server
+
+`stenio hub serve --clients <list>` serves one ledger to many machines. It listens on loopback;
+publish it only through the TLS proxy of the private network and name that host with
+`--allow-host`. `stenio hub token --client <name> --out <new file>` writes a token to a private
+file and prints the list entry, which holds only its hash (`role = "owner"` may answer).
+
+A client declares the server in `~/.config/stenio/hub-remote.toml` (or `/etc/stenio/`):
+
+    url = "https://<server name>:<port>"
+    token_file = "~/.config/stenio/hub.token"
+
+`STENIO_HUB_URL` with `STENIO_HUB_TOKEN_FILE` overrides the files; `STENIO_HUB_DB` still selects a
+local ledger. CLI, stdio MCP, hooks and the backlog writers then use the server. Unreachable or
+broken: exit 3, claim nothing, no queue write, no release; the two hooks let work continue.
+The client name is the identity: workers and `tree:` paths belong to it, and a queue claim covers
+every directory. Backup and `hub backup --check` run on the server.
+
 ## Limits of this release
 
-Local to one host and one Unix user: a process can edit the database, and `audit` detects it but
-cannot prevent it. No proof replay, no grants, no sandbox, no remote workers.
+A process of the same Unix user on the server can edit the database, and `audit` detects it but
+cannot prevent it; on a client it can read the token or select another ledger. No proof replay,
+no grants, no sandbox.
