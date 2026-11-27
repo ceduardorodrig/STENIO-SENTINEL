@@ -85,7 +85,7 @@ use vault::audit_vault;
     author = "Sumænimá Platform",
     version = env!("CARGO_PKG_VERSION"),
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust",
-    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  preflight         Alias of --pre-release --static-only"
+    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  backlog close     Move rows to backlog-archive.md and drop their ids from every pending: list\n  preflight         Alias of --pre-release --static-only"
 )]
 struct Args {
     #[arg(
@@ -2023,8 +2023,20 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     i32::from(errors > 0)
 }
 
+/// The linked queues are audited here only when no homelab audit already covers them.
+fn should_audit_queues(vault: bool, homelab: bool, tag: Option<&str>) -> bool {
+    vault && !homelab && tag.is_none_or(|t| t == "doc")
+}
+
 fn main() -> Result<()> {
     let mut argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("backlog")
+        && argv.get(2).map(String::as_str) == Some("close")
+    {
+        let mut rest = vec!["stenio backlog close".to_string()];
+        rest.extend_from_slice(&argv[3..]);
+        std::process::exit(backlog::close::run_cli(&rest))
+    }
     if argv.get(1).map(String::as_str) == Some("backlog") {
         argv[1] = "--backlog".to_string(); // `stenio backlog --next-id MB`
         // GB-031: the documented subcommand form defaults --path to the vault root, so it works
@@ -2559,7 +2571,7 @@ fn main() -> Result<()> {
                 .unwrap_or(false));
     let should_audit_doc = (is_hub_active || is_homelab_active || is_vault_active)
         && (tag_lower.as_deref() == Some("doc") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.starts_with("DOC-")).unwrap_or(false));
+        && only_rule.is_none_or(|s| s.starts_with("DOC-") || s.contains("BACKLOG-"));
     let should_audit_mig = is_hub_active
         && (tag_lower.as_deref() == Some("db")
             || tag_lower.as_deref() == Some("migrations")
@@ -2740,6 +2752,28 @@ fn main() -> Result<()> {
     if let Some(doc) = doc_res {
         doc_messages = doc.messages;
         for v in doc.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Linked queues under the vault scope, and a queue file named by --path ──
+    // The homelab subsystem already audits the linked queues; `--scope vault` alone did not, so a
+    // stale `pending:` link (GB-252) or a foreign row (GB-251) was invisible there.
+    let mut queue_findings = Vec::new();
+    if should_audit_queues(is_vault_active, is_homelab_active, tag_lower.as_deref()) {
+        queue_findings.extend(audit_backlog(&args.path).violations);
+    }
+    if args.path.is_file() && tag_lower.as_deref().is_none_or(|t| t == "doc") {
+        queue_findings.extend(backlog::integrity::audit_file(&args.path));
+    }
+    for v in queue_findings {
+        if only_rule.is_none_or(|r| r.eq_ignore_ascii_case(&v.rule_id)) {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {
