@@ -6,6 +6,7 @@
 //! it must fire (the mutation proof), executed by `--self-test` and `cargo test`.
 
 mod docperm_row;
+mod permlevel_row;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -36,7 +37,7 @@ struct Case {
     expect: usize,
 }
 
-pub static RULES: &[&Rule] = &[&docperm_row::RULE];
+pub static RULES: &[&Rule] = &[&docperm_row::RULE, &permlevel_row::RULE];
 
 /// Roles that carry no identity of their own (house policy, same list as `FRAPPE-PERMISSION-SCOPE`).
 const BROAD_ROLES: &[&str] = crate::frappe::BROAD_ROLES;
@@ -231,6 +232,14 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         }
     }
     out
+}
+
+/// A field that holds a value (layout fields carry no permission of their own).
+fn data_field(f: &Value) -> bool {
+    !matches!(
+        str_of(f, "fieldtype"),
+        "Section Break" | "Column Break" | "Tab Break" | "Fold" | "Heading" | "HTML" | "Button"
+    )
 }
 
 /// Fixture helper: a DocType JSON at its canonical path (`demoapp/m/doctype/<slug>/<slug>.json`).
