@@ -1743,15 +1743,21 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     } else {
         rule_id
     };
+    all_explanations().find(|e| e.id.eq_ignore_ascii_case(wanted))
+}
+
+/// The built-in entries plus the ones each document rule carries next to its code.
+fn all_explanations() -> impl Iterator<Item = &'static RuleExplanation> {
+    let doc_rules = crate::docrules::RULES.iter().map(|r| &r.explain);
     EXPLANATIONS
         .iter()
+        .chain(doc_rules)
         .chain(crate::hostops::EXPLANATIONS)
         .chain(crate::secrets_suite::explain::EXPLANATIONS)
         .chain(crate::frappe::ext::explanations())
         .chain(crate::release_file_gate::EXPLANATIONS)
         .chain(crate::frappe_perm::explanations())
         .chain(crate::frappe::desk::explanations())
-        .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 
 pub fn format_explanation_cli(exp: &RuleExplanation) -> String {
@@ -1847,15 +1853,7 @@ pub fn format_explanation_plain(exp: &RuleExplanation) -> String {
 pub fn list_all_explanations() -> String {
     let mut s = String::new();
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
-    for exp in EXPLANATIONS
-        .iter()
-        .chain(crate::hostops::EXPLANATIONS)
-        .chain(crate::secrets_suite::explain::EXPLANATIONS)
-        .chain(crate::frappe::ext::explanations())
-        .chain(crate::release_file_gate::EXPLANATIONS)
-        .chain(crate::frappe_perm::explanations())
-        .chain(crate::frappe::desk::explanations())
-    {
+    for exp in all_explanations() {
         s.push_str(&format!(
             "  • {:<26} [{:<5}] {:<7} - {}\n",
             exp.id, exp.tag, exp.severity, exp.name

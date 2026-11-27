@@ -360,6 +360,33 @@ Static lints run in `--scope homelab` (as warnings), with `stenio --only <RULE_I
 
 ---
 
+## Document rules (`src/docrules/`)
+
+One file per rule, each carrying its audit, mutation proof (`--self-test`) and reference (`stenio --explain <ID>`).
+They run on any `--path` (a directory or one document) and stay silent where they have nothing to judge.
+
+| Rule | Severity | Judges |
+|---|---|---|
+| `DOC-INCIDENT-REGISTER` | error | incident entries: four sections, a real mechanism, README row |
+| `DOC-RULE-COUNT-DERIVED` | error | global rule numbering and typed rule counts |
+| `DOC-NO-INLINE-STYLE` | error | `docs/*.html` of an app, under `--tag <app tag>` |
+| `DOC-DELIVERABLE-CONTRACT-PARITY` | error / warn | declared line and column contract; table shape |
+| `DOC-LIVE-CLAIM` | warn | undated "rcNN is live" sentences |
+| `DOC-BIND-CLAIM` | warn | service bind address against the mirrored compose file |
+| `DOC-RACI-CITATION` | error | matrix and spec documents: `file:line` citations, one A per row |
+| `DOC-QUOTE-SOURCE-RESOLVES` | warn | quoted phrase at the cited line; ambiguous source names |
+| `DOC-ADR-NO-REJECTED-ROADMAP` | warn | ADR planning what it rejects |
+| `DOC-HOMELAB-ROUTE-DRIFT` | error | service endpoint tables against the axum router source |
+| `DOC-ASSERTED-COUNT-DRIFT` | warn | typed counts of a declared bash array |
+| `DOC-ENGLISH-ONLY-CODEBASE` | warn | Portuguese prose under a `Language tier: A` declaration |
+| `DOC-PANEL-LABEL-EXISTS` | error | panel names in client documents |
+| `DOC-PANEL-PARITY` | warn | manual menu and permission tables against the app |
+| `DOC-PDF-COVERS-SOURCE` | warn | `##` headings present in the published HTML and PDF |
+| `DOC-RESEARCH-CITE-CURRENT` | warn | research claims: URL, access date, 180 days |
+| `DOC-OFFSET-SANITY` | error | declared flash size against partition ranges |
+
+---
+
 ## 📜 License
 
 Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — see [LICENSE](LICENSE).

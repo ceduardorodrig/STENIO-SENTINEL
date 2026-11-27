@@ -17,6 +17,7 @@ mod dependabot;
 mod deploy;
 mod doc;
 mod docker;
+mod docrules;
 mod dry;
 mod dry_ast;
 mod engine;
@@ -719,6 +720,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(sweep::self_test_cases())
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())
+        .chain(docrules::self_test_cases())
         .chain(compact_cases())
         .chain(scope_path_cases())
     {
@@ -1871,7 +1873,8 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     }
 
     // 3. Corrupted documentation / broken links
-    for v in &doc_result.violations {
+    let doc_rules = docrules::audit(&args.path, None, None);
+    for v in doc_result.violations.iter().chain(&doc_rules) {
         if v.severity == Severity::Error {
             blocker_errors.push(format!(
                 "[DOC-ERROR] {}:{}: {}",
@@ -2796,6 +2799,18 @@ fn main() -> Result<()> {
                 report.error_count += 1;
             } else {
                 report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Document rules (src/docrules/) ─────────────────────────────────────
+    if scope != "mirror" && docrules::applies(&args.path, tag_lower.as_deref(), only_rule) {
+        for v in docrules::audit(&args.path, tag_lower.as_deref(), only_rule) {
+            match v.severity {
+                Severity::Error => report.error_count += 1,
+                Severity::Warning => report.warning_count += 1,
             }
             report.total_violations += 1;
             report.violations.push(v);
