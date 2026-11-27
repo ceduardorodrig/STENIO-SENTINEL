@@ -22,11 +22,18 @@ pub struct DocRule {
     pub explain: RuleExplanation,
 }
 
+mod contract_parity;
 mod incident;
 mod inline_style;
 mod rule_count;
 
-pub static RULES: &[&DocRule] = &[&incident::RULE, &rule_count::RULE, &inline_style::RULE];
+#[rustfmt::skip]
+pub static RULES: &[&DocRule] = &[
+    &incident::RULE,
+    &rule_count::RULE,
+    &inline_style::RULE,
+    &contract_parity::RULE,
+];
 
 /// What the rules may look at.
 pub struct Ctx {
