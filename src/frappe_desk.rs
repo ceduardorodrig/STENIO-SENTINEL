@@ -11,6 +11,8 @@ use crate::explain::RuleExplanation;
 mod desk_field_real;
 #[path = "frappe_desk/fieldname_shadow.rs"]
 mod fieldname_shadow;
+#[path = "frappe_desk/list_filter_fields.rs"]
+mod list_filter_fields;
 #[path = "frappe_desk/po_resolves.rs"]
 mod po_resolves;
 #[path = "frappe_desk/reqd_messages.rs"]
@@ -51,6 +53,11 @@ const ITEMS: &[Item] = &[
         explain: &desk_field_real::EXPLAIN,
         run: desk_field_real::run,
         cases: desk_field_real::cases,
+    },
+    Item {
+        explain: &list_filter_fields::EXPLAIN,
+        run: list_filter_fields::run,
+        cases: list_filter_fields::cases,
     },
 ];
 
