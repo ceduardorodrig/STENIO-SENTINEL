@@ -288,3 +288,13 @@ Acceptance tests: `tests/hub_ledger.rs` (design A1 to A18).
 - The image runs as UID 1000. Pinned by `tests/mcp_http.rs`.
 - Known limits: the transport still has the legacy HTTP+SSE shape, and MCP path arguments are not
   confined to the served tree.
+
+## Release 4.46.0 (shared work ledger, first release)
+
+- `stenio hub` and the stdio MCP tools `hub_*`, `stenio_quota`, `stenio_backlog`; every MCP tool
+  result carries `isError`.
+- `backlog close` and `opportunity add` lock the queue directories and honour
+  `backlog:<prefix>:write`.
+- Known limits: one host and one Unix user (edits are detected, not prevented); no proof replay,
+  signed grants, worker sandbox or remote ledger; the HTTP server has no ledger tools; a quota
+  sample older than five minutes counts as unknown until `hub quota refresh`.
