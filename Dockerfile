@@ -30,6 +30,9 @@ WORKDIR /app
 # Copy stripped native binary
 COPY --from=builder /app/target/release/stenio /usr/local/bin/stenio
 
+# The server only reads the mounted tree: no root.
+USER 1000:1000
+
 # Expose default MCP SSE Server port
 EXPOSE 9099
 
