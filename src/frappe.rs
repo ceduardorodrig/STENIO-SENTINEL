@@ -180,7 +180,7 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL",
         "Release Tag Published Before The Rehearsal",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-REHEARSAL-VERDICT",
@@ -7066,7 +7066,7 @@ mod tests {
 
     // ── FRAPPE-RELEASE-ORDER ───────────────────────────────────────────────
     #[test]
-    fn release_order_errors_on_battery_after_tag_and_warns_on_rehearsal() {
+    fn release_order_errors_on_battery_and_rehearsal_after_tag() {
         let cfg = FrappeConfig {
             app: Some("app".into()),
             release_file: Some("ops/release.sh".into()),
@@ -7090,7 +7090,7 @@ mod tests {
             "{e:?}"
         );
         let w = run("ro-bad2", bad, "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL");
-        assert!(w.len() == 1 && w[0].severity == Severity::Warning, "{w:?}");
+        assert!(w.len() == 1 && w[0].severity == Severity::Error, "{w:?}");
         let none = audit_rule("ro/none", &app_tree(vec![]), "FRAPPE-RELEASE-ORDER");
         assert!(
             !none.is_empty() && none.iter().all(|v| v.severity == Severity::Warning),
