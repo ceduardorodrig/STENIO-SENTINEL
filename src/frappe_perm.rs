@@ -6,6 +6,7 @@
 //! it must fire (the mutation proof), executed by `--self-test` and `cargo test`.
 
 mod docperm_row;
+mod permlevel_list_view;
 mod permlevel_row;
 mod permlevel_write;
 
