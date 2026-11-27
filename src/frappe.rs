@@ -5449,6 +5449,10 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     ] {
         all.extend(f(&c));
     }
+    let validated = gate_entries(&c).into_keys().collect();
+    all.extend(crate::frappe_perm::audit(
+        &c.root, &c.pkg, &c.files, validated,
+    ));
     all.sort_by(|a, b| {
         (&a.rule_id, &a.file_path, a.line_number).cmp(&(&b.rule_id, &b.file_path, b.line_number))
     });

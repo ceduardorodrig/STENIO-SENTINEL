@@ -220,8 +220,23 @@ fn run_case(rule: &Rule, tag: &str, case: &Case) -> Option<usize> {
     Some(found)
 }
 
+/// Mutation proof of the registration: the full `--scope frappe` audit must reach these rules.
+fn wired_into_scope() -> bool {
+    let mut files = vec![doctype_file("Thing", "", "", r#"{"role":"A","report":1}"#)];
+    files.push(("demoapp/hooks.py".into(), String::new()));
+    let Some(root) = crate::frappe::write_fixture("perm-wired", &files) else {
+        return false;
+    };
+    let found = crate::frappe::audit(&root, &crate::frappe::fixture_config());
+    let _ = fs::remove_dir_all(root);
+    found.is_ok_and(|v| v.iter().any(|x| x.rule_id == "FRAPPE-DOCPERM-ROW"))
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
-    let mut out = Vec::new();
+    let mut out = vec![(
+        "frappe permission rules are wired into the scope audit".to_string(),
+        wired_into_scope(),
+    )];
     for (r, rule) in RULES.iter().enumerate() {
         let cases = (rule.cases)();
         // a rule never seen both silent and red proves nothing
