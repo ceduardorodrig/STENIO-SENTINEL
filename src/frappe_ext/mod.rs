@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
 mod masked_literal; // TEST-NO-MASKED-LITERAL
+mod privacy_lists; // FRAPPE-PRIVACY-LIST-NAMES-EXIST
 mod test_cleanup; // FRAPPE-TEST-CLEANUP-DEFERRED
 mod test_verdict; // FRAPPE-TEST-VERDICT
 
@@ -28,6 +29,7 @@ pub(crate) static ITEMS: &[&Item] = &[
     &access_log::ITEM,
     &dead_except::ITEM,
     &masked_literal::ITEM,
+    &privacy_lists::ITEM,
     &test_cleanup::ITEM,
     &test_verdict::ITEM,
 ];
