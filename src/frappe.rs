@@ -1000,7 +1000,7 @@ fn rule_patches(c: &Ctx) -> Vec<Violation> {
 }
 
 // ── FRAPPE-HOOK-TARGETS ────────────────────────────────────────────────────
-fn strip_comment(line: &str) -> String {
+pub(crate) fn strip_comment(line: &str) -> String {
     let mut quote: Option<char> = None;
     let mut out = String::new();
     for ch in line.chars() {
@@ -2124,7 +2124,7 @@ fn rule_whitelist_no_caller(c: &Ctx) -> Vec<Violation> {
 // guessing.
 
 /// Byte range `[start, end)` of the `open`/`close` pair opening at `start`.
-fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
+pub(crate) fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     if bytes.get(start).copied() != Some(open) {
         return None;

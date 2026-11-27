@@ -6,6 +6,7 @@
 //! it must fire (the mutation proof), executed by `--self-test` and `cargo test`.
 
 mod docperm_row;
+mod perm_matrix;
 mod permlevel_list_view;
 mod permlevel_row;
 mod permlevel_write;
@@ -42,6 +43,7 @@ struct Case {
 }
 
 pub static RULES: &[&Rule] = &[
+    &perm_matrix::RULE,
     &public_drift::RULE,
     &public_reason::RULE,
     &permlevel_list_view::RULE,
@@ -52,6 +54,24 @@ pub static RULES: &[&Rule] = &[
 
 /// Roles that carry no identity of their own (house policy, same list as `FRAPPE-PERMISSION-SCOPE`).
 const BROAD_ROLES: &[&str] = crate::frappe::BROAD_ROLES;
+
+/// The `{...}` literal bound to `name` at the top level of hooks.py, comments removed; empty
+/// when the file does not bind it to a dict literal.
+fn hook_block(t: &Tree, name: &str) -> String {
+    let clean: Vec<String> = read(&t.pkg.join("hooks.py"))
+        .lines()
+        .map(crate::frappe::strip_comment)
+        .collect();
+    let clean = clean.join("\n");
+    let Ok(head) = regex::Regex::new(&format!(r"(?m)^{name}\s*=\s*\{{")) else {
+        return String::new();
+    };
+    head.find(&clean)
+        .and_then(|m| crate::frappe::balanced_at(&clean, m.end() - 1, b'{', b'}'))
+        .and_then(|(s, e)| clean.get(s..e))
+        .unwrap_or_default()
+        .to_string()
+}
 
 /// DocTypes (or `DocType.field`) declared public on purpose.
 const PUBLIC_FILE: &str = "permissions-public.txt";
