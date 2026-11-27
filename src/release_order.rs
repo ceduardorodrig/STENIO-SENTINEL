@@ -5,8 +5,8 @@
 //!   1. the offline static battery (`release-checks.sh`) runs before any `git push ... refs/tags`
 //!      and before the image build (GB-165 / GB-157);
 //!   2. the version bump and the tag creation come only after the battery (GB-214);
-//!   3. the tag push comes after the rehearsal (GB-196). That one is a WARNING: the real fix is a
-//!      release.sh + Dockerfile change, so the detector reports it without blocking. A rehearsal is
+//!   3. the tag push comes after the rehearsal (GB-196, blocking since release.sh publishes the
+//!      tag only in its step 7b). A rehearsal is
 //!      a line that RUNS rehearse.sh: copying it to the host (`scp`), removing it or running it
 //!      with `--dry-run` rehearses nothing.
 //! Echo lines (`say`, `note`, `pass`, `fail`, `echo`, `printf`) and comments are not calls.
@@ -104,7 +104,7 @@ pub fn analyze(text: &str) -> Order {
     match (all(&push).first().copied(), rehearsal) {
         (Some(p), Some(r)) if p < r => out.rehearsal.push(Finding {
             line: p,
-            message: format!("the tag is pushed at line {p} before the rehearsal call at line {r}: a red rehearsal still spends the published number (GB-196, WARNING: the fix is a release.sh + Dockerfile change, not yet done)."),
+            message: format!("the tag is pushed at line {p} before the rehearsal call at line {r}: a red rehearsal still spends the published number (GB-196: publish the tag only after a green rehearsal)."),
         }),
         (_, None) => out.inert.push(Finding {
             line: 1,

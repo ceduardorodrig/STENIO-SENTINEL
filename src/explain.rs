@@ -1568,13 +1568,13 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL",
         name: "Release Tag Published Before The Rehearsal",
-        severity: "WARNING",
+        severity: "ERROR",
         tag: "frappe",
-        summary: "Detector half of GB-196: the first `git push ... refs/tags` call of the release script comes before the call to rehearse.sh, so a red rehearsal still spends a number that is already public. WARNING, not ERROR: the real fix (publish the tag only after the rehearsal, which needs the image built from an unpublished tag) is a release.sh + Dockerfile change tracked in GB-196.",
-        rationale: "rc125 spent its number this way: the tag push sat before the minutes-long rehearsal that decides whether the image is deployable. The warning keeps the debt visible on every audit until the order is changed; it is deliberately not blocking because the fix is outside the engine.",
+        summary: "Detector half of GB-196: the first `git push ... refs/tags` call of the release script comes before the call to rehearse.sh, so a red rehearsal still spends a number that is already public. ERROR since the release script publishes the tag only after the rehearsal; `stenio --path release.sh` judges one script alone as RELEASE-TAG-PUBLISHED-AFTER-REHEARSAL and RELEASE-BATTERY-BEFORE-TAG.",
+        rationale: "rc125 spent its number this way: the tag push sat before the minutes-long rehearsal that decides whether the image is deployable. The order is fixed in the Miracena orchestrator, so a regression now blocks.",
         bad_example: "git push origin \"refs/tags/$VTAG\"\nbash rehearse.sh \"$IMG\"\n# WARNING [FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL] the tag is pushed at line 1 before the rehearsal call at line 2",
         good_example: "bash rehearse.sh \"$IMG\"\ngit push origin \"refs/tags/$VTAG\"",
-        remediation: "Reorder release.sh so the tag push follows a green rehearsal (GB-196); until then the warning is the reminder.",
+        remediation: "Reorder release.sh so the tag push follows a green rehearsal (GB-196); build the image from a candidate branch meanwhile.",
     },
     RuleExplanation {
         id: "FRAPPE-REHEARSAL-VERDICT",
@@ -1745,6 +1745,8 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::frappe::ext::explanations())
+        .chain(crate::release_file_gate::EXPLANATIONS)
         .chain(crate::frappe_perm::explanations())
         .chain(crate::frappe::desk::explanations())
         .find(|e| e.id.eq_ignore_ascii_case(wanted))
@@ -1845,6 +1847,8 @@ pub fn list_all_explanations() -> String {
     s.push_str("\nDocumented Rules in StenioSentinel Reference:\n\n");
     for exp in EXPLANATIONS
         .iter()
+        .chain(crate::frappe::ext::explanations())
+        .chain(crate::release_file_gate::EXPLANATIONS)
         .chain(crate::frappe_perm::explanations())
         .chain(crate::frappe::desk::explanations())
     {

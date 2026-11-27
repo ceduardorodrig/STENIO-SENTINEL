@@ -22,6 +22,9 @@ use crate::engine::Violation;
 use crate::i18n;
 use crate::rule::Severity;
 
+#[path = "frappe_ext/mod.rs"]
+pub(crate) mod ext;
+
 pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-DOCTYPE-CONTROLLER",
@@ -177,7 +180,7 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL",
         "Release Tag Published Before The Rehearsal",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-REHEARSAL-VERDICT",
@@ -217,11 +220,16 @@ pub(crate) mod desk;
 
 /// `(id, name, severity)` of every rule of the scope: the core table and the desk rules.
 pub fn rule_table() -> impl Iterator<Item = (&'static str, &'static str, Severity)> {
-    RULES.iter().copied().chain(desk::rule_table()).chain(
-        crate::frappe_perm::RULES
-            .iter()
-            .map(|r| (r.id, r.name, r.severity)),
-    )
+    RULES
+        .iter()
+        .copied()
+        .chain(desk::rule_table())
+        .chain(ext::rules())
+        .chain(
+            crate::frappe_perm::RULES
+                .iter()
+                .map(|r| (r.id, r.name, r.severity)),
+        )
 }
 
 const SKIP_DIRS: &[&str] = &[
@@ -5488,6 +5496,7 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
     ] {
         all.extend(f(&c));
     }
+    all.extend(ext::audit(&c));
     let validated = gate_entries(&c).into_keys().collect();
     all.extend(crate::frappe_perm::audit(
         &c.root, &c.pkg, &c.files, validated,
@@ -5932,6 +5941,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             (id.to_string(), silent && fires)
         })
         .collect();
+    cases.extend(ext::self_test_cases());
     cases.extend(desk::self_test_cases());
     cases.push((
         "FRAPPE-TEST-PARITY-SPELLING".to_string(),
@@ -7191,7 +7201,7 @@ mod tests {
 
     // ── FRAPPE-RELEASE-ORDER ───────────────────────────────────────────────
     #[test]
-    fn release_order_errors_on_battery_after_tag_and_warns_on_rehearsal() {
+    fn release_order_errors_on_battery_and_rehearsal_after_tag() {
         let cfg = FrappeConfig {
             app: Some("app".into()),
             release_file: Some("ops/release.sh".into()),
@@ -7215,7 +7225,7 @@ mod tests {
             "{e:?}"
         );
         let w = run("ro-bad2", bad, "FRAPPE-RELEASE-TAG-BEFORE-REHEARSAL");
-        assert!(w.len() == 1 && w[0].severity == Severity::Warning, "{w:?}");
+        assert!(w.len() == 1 && w[0].severity == Severity::Error, "{w:?}");
         let none = audit_rule("ro/none", &app_tree(vec![]), "FRAPPE-RELEASE-ORDER");
         assert!(
             !none.is_empty() && none.iter().all(|v| v.severity == Severity::Warning),

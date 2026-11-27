@@ -93,6 +93,9 @@ fn check(status: Status, name: &'static str, detail: impl Into<String>) -> Check
     }
 }
 
+#[path = "verify_published.rs"]
+mod published;
+
 /// The allowlist of commands the engine may run. Remote ones run over ssh, local ones here.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Cmd {
@@ -117,6 +120,8 @@ pub enum Cmd {
     ContainerPolicies,
     SiteConfig,
     ComposeFile(String),
+    /// Size and sha256 of a file packaged in the running image, relative to `apps/`.
+    ImageFile(String),
 }
 
 impl Cmd {}
@@ -183,6 +188,7 @@ impl Cmd {
                 c.site
             ),
             Cmd::ComposeFile(f) => format!("{cd}cat {f}"),
+            Cmd::ImageFile(p) => published::image_file_cmd(&c.dir, p)?,
         })
     }
 }
@@ -466,6 +472,7 @@ pub fn run_checks(t: &dyn Transport, o: &Opts) -> Vec<Check> {
     out.push(check_compose_parity(t, &c, o));
     // 5d. compose content: the keys can match while a healthcheck, command or image differs (GB-229).
     out.push(check_compose_hash(t, &c, o));
+    out.extend(published::checks(t, &c, &o.fc));
 
     // 6. image tags
     if let Some(img) = &o.image {
@@ -1367,7 +1374,8 @@ fn good_fake(o: &Opts) -> BTreeMap<Cmd, (i32, String)> {
 }
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
-    let cases = self_test_cases_inner();
+    let mut cases = self_test_cases_inner();
+    cases.extend(published::self_test_cases());
     // The parity check needs a real compose file; the fixture directory is not an artifact to keep.
     let _ = std::fs::remove_dir_all(
         std::env::temp_dir().join(format!("stenio-vr-{}", std::process::id())),

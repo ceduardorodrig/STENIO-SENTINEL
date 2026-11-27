@@ -49,6 +49,7 @@ mod ports;
 mod pre_release;
 mod reconcile;
 mod release_engine;
+mod release_file_gate;
 mod release_order;
 pub mod remote;
 mod rule;
@@ -701,6 +702,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(frappe_whitelist::self_test_cases())
         .chain(frappe_perm::self_test_cases())
         .chain(release_order::self_test_cases())
+        .chain(release_file_gate::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
@@ -2114,6 +2116,12 @@ fn main() -> Result<()> {
         _ => {}
     }
     let args = Args::parse_from(&argv);
+    // GB-165/GB-196: `--path release.sh` alone judges the order of that one script.
+    if argv.len() <= 3
+        && let Some(code) = release_file_gate::run_path(&args.path)
+    {
+        std::process::exit(code);
+    }
 
     // ── Modo Deploy Automatizado (--deploy [target]) ────────────────────────
     if let Some(ref target) = args.deploy {
