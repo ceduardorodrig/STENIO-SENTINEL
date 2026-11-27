@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use super::config::{QuotaPolicy, QuotaSource};
 use super::ledger::Worker;
-use super::store::{NewEvent, Store, append};
+use super::store::{NewEvent, Store, append, meta, set_meta};
 use super::{HubError, HubResult, iso, now_ms};
 
 /// The window name of an entry that only explains why nothing is known.
@@ -76,10 +76,86 @@ fn busy_workers(conn: &Connection, who: &Worker) -> HubResult<u32> {
     )?)
 }
 
+/// Longest time one owner decision lifts the gate.
+pub const OVERRIDE_MAX_SECS: u64 = 24 * 3600;
+
+fn override_key(account: &str) -> String {
+    format!("quota_override:{account}")
+}
+
+/// The live owner override of `account`, if any.
+pub fn owner_override(conn: &Connection, account: &str, now: i64) -> HubResult<Option<Value>> {
+    Ok(meta(conn, &override_key(account))?
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(|o| o["until_ms"].as_i64().is_some_and(|until| until > now)))
+}
+
+/// Every live override, for `status`.
+pub fn overridden(conn: &Connection) -> HubResult<Vec<Value>> {
+    let mut stmt =
+        conn.prepare("SELECT substr(key, 16) FROM meta WHERE key LIKE 'quota_override:%'")?;
+    let accounts = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut out = Vec::new();
+    for account in accounts {
+        if let Some(mut live) = owner_override(conn, &account, now_ms())? {
+            live["kind"] = json!("quota_override");
+            out.push(live);
+        }
+    }
+    Ok(out)
+}
+
+/// Records the owner's decision to lift the quota gate of `account` for a limited time; zero
+/// seconds revokes it. `terminal` says the request comes from an interactive terminal: agents
+/// run without one. A process of the same Unix user can fake it, so the event is the record.
+pub fn set_override(
+    store: &mut Store,
+    account: &str,
+    secs: u64,
+    reason: &str,
+    terminal: bool,
+) -> HubResult<Value> {
+    if !terminal {
+        return Err(HubError::refused(
+            "owner_only",
+            "a quota override is the owner's decision and needs an interactive terminal",
+            "ask the owner (stenio hub ask)",
+        ));
+    }
+    if secs > OVERRIDE_MAX_SECS || reason.trim().is_empty() {
+        return Err(HubError::Usage(
+            "--for is at most 24h and --reason is not empty".to_string(),
+        ));
+    }
+    let until = now_ms().saturating_add((secs as i64).saturating_mul(1000));
+    let record = json!({"account": account, "until_ms": until, "until": iso(until),
+        "reason": reason.trim()});
+    store.write(|tx| {
+        set_meta(tx, &override_key(account), &record.to_string())?;
+        append(
+            tx,
+            NewEvent {
+                worker: "owner",
+                run: None,
+                kind: "quota_override",
+                resource: account,
+                payload: record.clone(),
+            },
+        )?;
+        Ok(())
+    })?;
+    Ok(json!({"ok": true, "account": account, "until": iso(until)}))
+}
+
 /// Refuses new work when the account is too full, or when too many of its workers already hold
 /// work for what is known about it.
 pub fn gate(conn: &Connection, policy: &QuotaPolicy, who: &Worker) -> HubResult<()> {
     let now = now_ms();
+    if owner_override(conn, &who.account, now)?.is_some() {
+        return Ok(());
+    }
     let current: Vec<Sample> = samples(conn)?
         .into_iter()
         .filter(|s| s.account == who.account && s.confidence(policy, now) != "unknown")
@@ -105,7 +181,11 @@ pub fn gate(conn: &Connection, policy: &QuotaPolicy, who: &Worker) -> HubResult<
                 "account {} used {worst:.0}% (limit {:.0}%)",
                 who.account, policy.stop_percent
             ),
-            "checkpoint, release what you cannot finish and resume after resume_after",
+            format!(
+                "checkpoint and resume after resume_after; only the owner may authorize more, at a \
+                 terminal: stenio hub quota override --account {} --for 4h --reason <why>",
+                who.account
+            ),
         )
         .with("account", who.account.clone())
         .with("resume_after", resume));
@@ -409,4 +489,66 @@ pub fn refresh_stale(store: &mut Store, policy: &QuotaPolicy, account: &str) -> 
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+    use crate::hub::config::Config;
+    use crate::hub::ledger::{self, ClaimRequest, Join};
+
+    #[test]
+    fn only_a_recorded_owner_override_lifts_the_gate() -> HubResult<()> {
+        let dir = std::env::temp_dir().join(format!("stenio-override-{}", std::process::id()));
+        let result = (|| {
+            let mut cfg = Config::embedded()?;
+            cfg.quota.source.clear();
+            let mut store = Store::open(&dir.join("hub.db"))?;
+            let join = Join {
+                harness: "t".to_string(),
+                ..Join::default()
+            };
+            let worker = ledger::join(&mut store, &cfg, &join)?["worker"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let window = Window {
+                window: "w".to_string(),
+                used_pct: 91.0,
+                resets_at: None,
+            };
+            put(&mut store, "t", "test", &[window])?;
+            let request = ClaimRequest {
+                worker,
+                resources: vec!["row:GB-001".to_string()],
+                ttl_secs: Some(60),
+                run: None,
+                path: None,
+            };
+            let code = |r: HubResult<Value>| r.err().map(|e| e.code().to_string());
+            assert_eq!(
+                code(ledger::claim(&mut store, &cfg, &request)).as_deref(),
+                Some("quota")
+            );
+            let agent = set_override(&mut store, "t", 60, "agent", false);
+            assert_eq!(code(agent).as_deref(), Some("owner_only"));
+            assert!(set_override(&mut store, "t", 90_000, "too long", true).is_err());
+            assert_eq!(
+                code(ledger::claim(&mut store, &cfg, &request)).as_deref(),
+                Some("quota")
+            );
+            set_override(&mut store, "t", 60, "owner says go", true)?;
+            ledger::claim(&mut store, &cfg, &request)?;
+            let recorded = store.read(crate::hub::store::events)?;
+            assert!(recorded.iter().any(|e| e.kind == "quota_override"));
+            let report = crate::hub::audit::audit(&mut store, None, false)?;
+            assert_eq!(report["ok"], json!(true), "{report}");
+            set_override(&mut store, "t", 0, "revoked", true)?;
+            let now = store.read(|c| owner_override(c, "t", now_ms()))?;
+            assert!(now.is_none());
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
 }
