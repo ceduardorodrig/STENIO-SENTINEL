@@ -69,4 +69,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "rg -o '^[A-Z_]+=' left.env   # compare names, never values (or `stenio secrets-drift`)",
         remediation: "`shred -u` the file, rotate if it left the host, compare names only.",
     },
+    RuleExplanation {
+        id: "HARNESS-ENV-SNAPSHOT-REDACTS-SECRETS",
+        name: "Harness Snapshot Holds Secret Values",
+        severity: "ERROR",
+        tag: "sec",
+        summary: "`stenio secret-dumps` without `--root` scans the agent harness scratch roots (~/.hermes/cache, tmp, logs) and fails naming file, line and key for every literal credential, including `export` and `declare -x` snapshot lines. A redaction marker passes.",
+        rationale: "The harness rewrote an environment snapshot with provider keys in clear on every turn boundary; hand redaction was reverted within minutes (2026-11-06).",
+        bad_example: "declare -x PROVIDER_API_KEY=\"<literal value>\"",
+        good_example: "declare -x PROVIDER_API_KEY=\"[REDACTED]\"",
+        remediation: "Make the harness replace values by a marker when it serialises its environment; do not export secrets into the agent shell.",
+    },
 ];

@@ -1,5 +1,7 @@
 //! `stenio secret-dumps --root DIR` (GB-226): secrets written to scratch space. A file named after
 //! a secret key (`e_POSTGRES_PASSWORD.txt`) or carrying a credential fails the check. The report has
+//! Without `--root` the agent harness scratch roots are scanned (GB-189: environment snapshots
+//! serialised by the harness). The report has
 //! paths, line numbers and key names; never a value. To compare two env files use
 //! `stenio secrets-drift` (names only on the right-hand side), never per-key dump files.
 
@@ -28,7 +30,10 @@ const DUMP_EXTENSIONS: &[&str] = &[
 #[derive(Parser, Debug)]
 #[command(about = "Fail when scratch directories hold secrets (paths and key names only)")]
 struct Args {
-    #[arg(long, help = "Directory to scan (repeatable)")]
+    #[arg(
+        long,
+        help = "Directory to scan (repeatable); default: the harness scratch roots under $HOME"
+    )]
     root: Vec<PathBuf>,
     #[arg(
         long,
@@ -96,6 +101,17 @@ fn scan(roots: &[PathBuf], allow: &[PathBuf]) -> (usize, Vec<String>) {
     (seen, out)
 }
 
+/// Where agent harnesses write snapshots, transcripts and scratch files.
+const HARNESS_ROOTS: &[&str] = &[".hermes/cache", ".hermes/tmp", ".hermes/logs"];
+
+fn harness_roots(home: &Path) -> Vec<PathBuf> {
+    HARNESS_ROOTS
+        .iter()
+        .map(|r| home.join(r))
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
 pub fn run_cli(argv: &[String]) -> i32 {
     let args = match Args::try_parse_from(argv) {
         Ok(a) => a,
@@ -104,9 +120,14 @@ pub fn run_cli(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    let roots = args.root;
+    let mut roots = args.root;
+    if roots.is_empty()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        roots = harness_roots(Path::new(&home));
+    }
     if roots.is_empty() || roots.iter().any(|r| !r.is_dir()) {
-        eprintln!("stenio: secret-dumps needs existing --root directories");
+        eprintln!("stenio: secret-dumps found no directory to scan (check --root)");
         return 2;
     }
     let (seen, findings) = scan(&roots, &args.allow);
@@ -143,7 +164,26 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             ("e.env", "DB_PASSWORD=${DB_PASSWORD}\n"),
         ],
     );
+    let snap =
+        format!("export PATH=\"/usr/bin\"\ndeclare -x OPENCODE_GO_API_KEY=\"{FAKE_VALUE}\"\n");
+    let home = super::fixture("dp4", &[(".hermes/cache/scratch/hermes-snap-ab.sh", &snap)]);
+    let leaked = scan(&harness_roots(&home), &[]).1.join("\n");
+    let _ = std::fs::write(
+        home.join(".hermes/cache/scratch/hermes-snap-ab.sh"),
+        "declare -x OPENCODE_GO_API_KEY=\"[REDACTED]\"\n",
+    );
+    let redacted = scan(&harness_roots(&home), &[]).1;
+    let _ = std::fs::remove_dir_all(&home);
     vec![
+        (
+            "harness snapshot: mutation, exported sentinel fails with file and line".to_string(),
+            leaked.contains("hermes-snap-ab.sh:2 OPENCODE_GO_API_KEY")
+                && !leaked.contains(FAKE_VALUE),
+        ),
+        (
+            "harness snapshot: redaction marker passes".to_string(),
+            redacted.is_empty(),
+        ),
         (
             "secret dumps: mutation, key-named file fails naming it".to_string(),
             named
