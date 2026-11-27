@@ -160,12 +160,12 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-WHITELIST-METHODS",
         "State-Changing Endpoint Without A Methods List",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-WRITE-POST",
         "State-Changing Endpoint Reachable By A Verb Other Than POST",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-NO-CALLER",
@@ -213,6 +213,24 @@ pub const RULES: &[(&str, &str, Severity)] = &[
         Severity::Error,
     ),
 ];
+
+/// Desk, UI and i18n rules, one per file (`src/frappe_desk/`).
+#[path = "frappe_desk.rs"]
+pub(crate) mod desk;
+
+/// `(id, name, severity)` of every rule of the scope: the core table and the desk rules.
+pub fn rule_table() -> impl Iterator<Item = (&'static str, &'static str, Severity)> {
+    RULES
+        .iter()
+        .copied()
+        .chain(desk::rule_table())
+        .chain(ext::rules())
+        .chain(
+            crate::frappe_perm::RULES
+                .iter()
+                .map(|r| (r.id, r.name, r.severity)),
+        )
+}
 
 const SKIP_DIRS: &[&str] = &[
     "node_modules",
@@ -1003,7 +1021,7 @@ fn rule_patches(c: &Ctx) -> Vec<Violation> {
 }
 
 // ── FRAPPE-HOOK-TARGETS ────────────────────────────────────────────────────
-fn strip_comment(line: &str) -> String {
+pub(crate) fn strip_comment(line: &str) -> String {
     let mut quote: Option<char> = None;
     let mut out = String::new();
     for ch in line.chars() {
@@ -1617,13 +1635,16 @@ fn load_catalogue(path: &Path) -> Option<BTreeMap<String, String>> {
     )
 }
 
+/// The configured `locale_file` (inside the package, else under the app root), else whatever
+/// `po_catalogue` finds in either layout. A configured file that is missing resolves to nothing,
+/// and FRAPPE-PO-CATALOGUE-RESOLVES reports it (GB-084).
 fn catalogue(c: &Ctx) -> Option<(String, BTreeMap<String, String>)> {
-    let rel_loc = c
-        .cfg
-        .locale_file
-        .clone()
-        .unwrap_or_else(|| "locale/pt_BR.po".into());
-    let path = c.pkg.join(&rel_loc);
+    let Some(configured) = &c.cfg.locale_file else {
+        return po_catalogue(c);
+    };
+    let path = [c.pkg.join(configured), c.root.join(configured)]
+        .into_iter()
+        .find(|p| p.is_file())?;
     Some((rel(&c.root, &path), load_catalogue(&path)?))
 }
 
@@ -1997,7 +2018,9 @@ fn rule_whitelist(c: &Ctx) -> Vec<Violation> {
                 k += 1;
             }
             let body = lines[j..k].join("\n");
-            if !markers.iter().any(|m| body.contains(m)) {
+            if !markers.iter().any(|m| body.contains(m))
+                && !crate::frappe_perm::guarded_by_helper(&text, &body, &markers)
+            {
                 let name = lines[j]
                     .trim()
                     .trim_start_matches("async ")
@@ -2127,7 +2150,7 @@ fn rule_whitelist_no_caller(c: &Ctx) -> Vec<Violation> {
 // guessing.
 
 /// Byte range `[start, end)` of the `open`/`close` pair opening at `start`.
-fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
+pub(crate) fn balanced_at(text: &str, start: usize, open: u8, close: u8) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     if bytes.get(start).copied() != Some(open) {
         return None;
@@ -2999,7 +3022,7 @@ fn rule_min_syntax(c: &Ctx) -> Vec<Violation> {
 // session of whoever saved, so a Structure Steward (no `write` on User) died with PermissionError
 // on an edit the steward is allowed to make. The rule reads the hook binding and the function
 // body as text (the engine never imports the app) and stays silent on any shape it cannot read:
-// a computed DocType, a path outside the app, a hook written as a list.
+// a computed DocType, a path outside the app, a computed hook value.
 
 /// Doc events that run inside a write, so the handler inherits the permissions of whoever saved.
 /// `before_validate` is included because it runs in the same save phase as `validate`.
@@ -3016,6 +3039,8 @@ enum DictTok {
     Str(String),
     Open,
     Close,
+    ListOpen,
+    ListClose,
     Colon,
 }
 
@@ -3034,6 +3059,8 @@ fn dict_tokens(s: &str) -> Vec<DictTok> {
             '{' => out.push(DictTok::Open),
             '}' => out.push(DictTok::Close),
             ':' => out.push(DictTok::Colon),
+            '[' => out.push(DictTok::ListOpen),
+            ']' => out.push(DictTok::ListClose),
             '"' | '\'' => {
                 let mut buf = String::new();
                 let quote = ch;
@@ -3057,10 +3084,10 @@ fn dict_tokens(s: &str) -> Vec<DictTok> {
     out
 }
 
-/// `(DocType, event, dotted path)` of every `doc_events` entry bound to a write hook. Only the
-/// dict form with a literal string path is read; a list of paths or a computed value stays
-/// unread (silent), which is the conservative direction.
-fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
+/// `(DocType, event, dotted paths)` of every entry of the `doc_events` dict literal. A string and
+/// a list of strings are read (GB-077); a computed value (a variable, a call) yields no path, so
+/// the rules stay silent only for what they cannot resolve.
+fn doc_event_entries(c: &Ctx) -> Vec<(String, String, Vec<String>)> {
     let text = read(&c.pkg.join("hooks.py"));
     let Ok(head) = Regex::new(r"(?m)^doc_events\s*=\s*\{") else {
         return Vec::new();
@@ -3092,22 +3119,43 @@ fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
                     doc_type = key.clone();
                 }
             }
-            Some(DictTok::Str(key)) if depth == 2 => {
-                let value = match (toks.get(i + 1), toks.get(i + 2)) {
-                    (Some(DictTok::Colon), Some(DictTok::Str(path))) => Some(path),
-                    _ => None,
+            Some(DictTok::Str(key))
+                if depth == 2
+                    && !doc_type.is_empty()
+                    && matches!(toks.get(i + 1), Some(DictTok::Colon)) =>
+            {
+                let paths = match toks.get(i + 2) {
+                    Some(DictTok::Str(path)) => vec![path.clone()],
+                    Some(DictTok::ListOpen) => toks[i + 3..]
+                        .iter()
+                        .take_while(|t| !matches!(t, DictTok::ListClose | DictTok::Close))
+                        .filter_map(|t| match t {
+                            DictTok::Str(path) => Some(path.clone()),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
                 };
-                if let Some(path) = value {
-                    if WRITE_HOOKS.contains(&key.as_str()) && !doc_type.is_empty() {
-                        out.push((doc_type.clone(), key.clone(), path.clone()));
-                    }
-                }
+                out.push((doc_type.clone(), key.clone(), paths));
             }
             _ => {}
         }
         i += 1;
     }
     out
+}
+
+/// `(DocType, event, dotted path)` of every `doc_events` binding to a write hook, one per path.
+fn write_hook_targets(c: &Ctx) -> Vec<(String, String, String)> {
+    doc_event_entries(c)
+        .into_iter()
+        .filter(|(_, event, _)| WRITE_HOOKS.contains(&event.as_str()))
+        .flat_map(|(dt, event, paths)| {
+            paths
+                .into_iter()
+                .map(move |p| (dt.clone(), event.clone(), p))
+        })
+        .collect()
 }
 
 /// The module file and function name of an app-local dotted hook path (`miracena.api.on_todo`).
@@ -5125,12 +5173,14 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
                 else {
                     continue;
                 };
-                let money = match (
+                // Which side matched is remembered here: re-deriving it from the text failed for
+                // `float(x) > 0` and read the mirrored form `0 > float(x)` (GB-161).
+                let (money, money_left) = match (
                     money_operand(lhs.as_str(), &currency),
                     money_operand(rhs.as_str(), &currency),
                 ) {
-                    (Some(left), _) => left,
-                    (None, Some(right)) => right,
+                    (Some(left), _) => (left, true),
+                    (None, Some(right)) => (right, false),
                     (None, None) => continue,
                 };
                 // A bare name can be a local parameter (`value` in a rating check); only the
@@ -5141,7 +5191,7 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
                 if py_guards_field(&lines, i, &money.field) {
                     continue;
                 }
-                let (expr, limit) = if money.field == field_of(lhs.as_str()) {
+                let (expr, limit) = if money_left {
                     (lhs.as_str(), rhs.as_str())
                 } else {
                     (rhs.as_str(), lhs.as_str())
@@ -5175,12 +5225,6 @@ fn rule_currency_threshold(c: &Ctx) -> Vec<Violation> {
     out
 }
 
-/// The last dotted segment of an expression, for matching an operand back to its side.
-fn field_of(expr: &str) -> &str {
-    let trimmed = expr.trim().trim_matches(['(', ')']).trim();
-    trimmed.rsplit('.').next().unwrap_or(trimmed)
-}
-
 /// Top-level functions a generator module defines — the entry points a test has to call to prove
 /// the boards exist.
 fn generator_symbols(text: &str) -> Vec<String> {
@@ -5206,7 +5250,7 @@ fn rel_to_fixtures(path: &str) -> bool {
 // that stores rows about a PERSON and lets one of these roles `read` or `write` needs a row-level
 // scope in `hooks.py`. Adding a role here is a policy edit, deliberate and reviewed in the
 // repository — the same way `mnemocine/network/gpu-consumers.txt` registers a GPU consumer.
-const BROAD_ROLES: &[&str] = &[
+pub(crate) const BROAD_ROLES: &[&str] = &[
     "Miracena Member",
     "Miracena Freelancer",
     "Desk User",
@@ -5453,6 +5497,11 @@ pub fn audit(root: &Path, cfg: &FrappeConfig) -> Result<Vec<Violation>, String> 
         all.extend(f(&c));
     }
     all.extend(ext::audit(&c));
+    let validated = gate_entries(&c).into_keys().collect();
+    all.extend(crate::frappe_perm::audit(
+        &c.root, &c.pkg, &c.files, validated,
+    ));
+    all.extend(desk::audit(&c));
     all.sort_by(|a, b| {
         (&a.rule_id, &a.file_path, a.line_number).cmp(&(&b.rule_id, &b.file_path, b.line_number))
     });
@@ -5853,9 +5902,12 @@ pub fn fixture_config() -> FrappeConfig {
     }
 }
 
-/// Writes a fixture under a fresh temp directory; the caller removes it.
+/// Writes a fixture under a fresh temp directory, unique per call (GB-246: two tests sharing a
+/// tag raced when the key was tag and pid only); the caller removes it.
 pub fn write_fixture(tag: &str, files: &[(String, String)]) -> Option<PathBuf> {
-    let root = std::env::temp_dir().join(format!("stenio-{tag}-{}", std::process::id()));
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("stenio-{tag}-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     for (p, t) in files {
         let path = root.join(p);
@@ -5890,6 +5942,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         })
         .collect();
     cases.extend(ext::self_test_cases());
+    cases.extend(desk::self_test_cases());
     cases.push((
         "FRAPPE-TEST-PARITY-SPELLING".to_string(),
         parity_spelling_agrees(),
@@ -5902,11 +5955,92 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         "FRAPPE-FIELDNAME-UNIQUE-JSON-PARSE".to_string(),
         fieldname_unique_agrees(),
     ));
+    cases.push(("FRAPPE-HOOK-LIST-FORM".to_string(), hook_list_form_agrees()));
+    cases.push((
+        "FRAPPE-CURRENCY-ZERO-TEST-WRAPPED".to_string(),
+        wrapped_zero_test_agrees(),
+    ));
     cases.push((
         "FRAPPE-TEST-REGISTERED-ABSENT-LIST".to_string(),
         absent_test_list_agrees(),
     ));
     cases
+}
+
+/// GB-077 mutation proof: a privileged read reached only through a list-form hook is reported
+/// (naming the line), the narrow read is silent, and a computed value stays silent.
+pub(crate) fn hook_list_form_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let lines = |value: &str, body: &str| -> Option<Vec<usize>> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let files: Vec<(String, String)> = vec![
+            (
+                "repo/app/hooks.py".into(),
+                format!("doc_events = {{\"ToDo\": {{\"on_update\": {value}}}}}\n"),
+            ),
+            (
+                "repo/app/session.py".into(),
+                format!("import frappe\n\n\ndef sync_members(doc=None, method=None):\n\t{body}\n"),
+            ),
+        ];
+        let base = write_fixture(&format!("hook-list-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(
+            got?.iter()
+                .filter(|v| v.rule_id == "FRAPPE-PRIVILEGED-READ-IN-SAVE")
+                .map(|v| v.line_number)
+                .collect(),
+        )
+    };
+    let list = "[\"app.session.noop\", \"app.session.sync_members\"]";
+    let bad = "frappe.get_doc(\"User\", doc.user)";
+    let good = "frappe.db.get_value(\"User\", doc.user, \"enabled\")";
+    lines(list, bad) == Some(vec![5])
+        && lines(list, good) == Some(vec![])
+        && lines("HANDLERS", bad) == Some(vec![])
+        && lines("\"app.session.sync_members\"", bad) == Some(vec![5])
+}
+
+/// GB-161 mutation proof: `float(x) > 0` / `flt(x) <= 0` are emptiness tests (silent), the same
+/// helper with a real limit is still accused.
+pub(crate) fn wrapped_zero_test_agrees() -> bool {
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let cfg = FrappeConfig {
+        app: Some("app".into()),
+        ..FrappeConfig::default()
+    };
+    let count = |body: &str| -> Option<usize> {
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let files: Vec<(String, String)> = vec![
+            ("repo/app/hooks.py".into(), "app_name = \"app\"\n".into()),
+            (
+                "repo/app/demo/doctype/asset/asset.json".into(),
+                "{\"doctype\":\"DocType\",\"name\":\"Asset\",\"fields\":[{\"fieldname\":\"purchase_value\",\"fieldtype\":\"Currency\"}]}".into(),
+            ),
+            (
+                "repo/app/core.py".into(),
+                format!("def has_value(purchase_value):\n\treturn {body}\n"),
+            ),
+        ];
+        let base = write_fixture(&format!("zero-wrap-{n}"), &files)?;
+        let got = audit(&base.join("repo"), &cfg).ok();
+        let _ = fs::remove_dir_all(&base);
+        Some(
+            got?.iter()
+                .filter(|v| v.rule_id == "FRAPPE-CURRENCY-THRESHOLD-UNSET")
+                .count(),
+        )
+    };
+    count("bool(purchase_value) and float(purchase_value) > 0") == Some(0)
+        && count("flt(purchase_value) <= 0") == Some(0)
+        && count("0 < float(purchase_value)") == Some(0)
+        && count("float(purchase_value) >= 5000") == Some(1)
+        && count("LIMIT <= flt(purchase_value)") == Some(1)
 }
 
 /// GB-280 mutation proof: a test list outside the repository that is absent skips visibly (one
@@ -6095,11 +6229,7 @@ pub(crate) fn parity_spelling_agrees() -> bool {
             "names=(alpha)\ncmds=(\n  \"python3 -I app/tests/alpha.py\"\n)\n".into(),
         ),
     ];
-    // One directory per call: the self-test case and its unit test run in one process, in parallel,
-    // and `write_fixture` keys the directory by tag and pid only.
-    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let Some(base) = write_fixture(&format!("parity-spelling-{n}"), &files) else {
+    let Some(base) = write_fixture("parity-spelling", &files) else {
         return false;
     };
     let cfg = FrappeConfig {
@@ -6271,6 +6401,11 @@ mod tests {
         };
         let got = audit(&base.join("ws"), cfg).unwrap_or_default();
         let _ = fs::remove_dir_all(&base);
+        // A tag with a slash ("x/inert") leaves a private parent; `remove_dir` only removes it
+        // when empty (GB-246).
+        if tag.contains('/') {
+            let _ = base.parent().map(fs::remove_dir);
+        }
         got.into_iter().filter(|v| v.rule_id == rule).collect()
     }
 

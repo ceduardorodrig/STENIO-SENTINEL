@@ -457,6 +457,34 @@ fn check_plan_parity(r: &dyn Runner, a: &RelArgs) -> Line {
     )
 }
 
+/// The built binary compared with the installed one: same bytes, same subcommands (GB-067).
+fn binary_parity_argv(a: &RelArgs, dir: &Path) -> Vec<String> {
+    let built = a.repo.join("target/release/stenio").display().to_string();
+    vec![
+        built.clone(),
+        "binary-parity".to_string(),
+        "--installed".to_string(),
+        dir.join("stenio").display().to_string(),
+        "--built".to_string(),
+        built,
+    ]
+}
+
+fn check_binary_parity(r: &dyn Runner, a: &RelArgs) -> Line {
+    let dir = match install_dir(a) {
+        Ok(d) => d,
+        Err(e) => return fail("binary-parity", e),
+    };
+    match r.run(None, &binary_parity_argv(a, &dir), Duration::from_secs(120)) {
+        Ok(o) if out_ok(&o) => pass(
+            "binary-parity",
+            "installed = built, every subcommand answers",
+        ),
+        Ok(o) => fail("binary-parity", flat(&o.stdout)),
+        Err(e) => fail("binary-parity", e),
+    }
+}
+
 /// `cargo metadata --locked --offline --no-deps`: parses `Cargo.toml` without the network.
 /// `--no-deps` stays because resolving the full graph offline downloads every target's crates
 /// (a macOS-only `fsevent-sys` is absent from this machine's cache), and the version parity below
@@ -968,6 +996,7 @@ fn run_steps(r: &dyn Runner, a: &RelArgs) -> Vec<Line> {
     if !install_ok {
         return out;
     }
+    out.push(check_binary_parity(r, a));
     let retag = check_retag(r, a, &version, &old);
     let retag_ran = retag.status == Status::Pass;
     out.push(retag);
@@ -1011,6 +1040,7 @@ fn plan(a: &RelArgs) -> Vec<(&'static str, String)> {
         ("plan-parity", format!("{}/target/release/stenio release-engine --tag {} --dry-run (step names vs this engine)", a.repo.display(), a.tag)),
         ("integrity", format!("{}/target/release/stenio --guardian", a.repo.display())),
         ("install", "cp target/release/stenio <install-dir>/stenio (previous binary kept as stenio.prev-<version>; FAIL when an existing binary reports no version)".to_string()),
+        ("binary-parity", "target/release/stenio binary-parity --installed <install-dir>/stenio (same bytes and every subcommand)".to_string()),
         ("kuaray-retag", format!("ssh {} docker tag <running image> stenio-sentinel:prev-<previous>", a.host)),
         ("kuaray-pull", format!("ssh {} docker pull {}:{version} && docker tag {}:{version} {}:{}", a.host, a.image_repo, a.image_repo, a.image_repo, tag_major(&version))),
         ("kuaray-up", format!("ssh {} cd {} && docker compose up -d {}", a.host, a.compose_dir, a.service)),
@@ -1213,6 +1243,9 @@ fn scripted(
         key(&["cargo", "build", "--release", "--locked"].map(String::from)),
         ok(""),
     );
+    if let Some(dir) = a.install_dir.as_ref() {
+        m.insert(key(&binary_parity_argv(a, dir)), ok(""));
+    }
     // The freshly built binary announces the same plan this engine has, so `plan-parity` passes.
     // The mutation cases below rewrite exactly this entry to drive the FAIL and WARN paths.
     m.insert(key(&dry_run_argv(a)), ok(&plan_text(&plan(a))));
