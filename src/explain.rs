@@ -826,7 +826,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         rationale: "When the React/Vite frontend builds new features, cache optimizations, or updated API contracts, but static assets have not been synchronized to edge servers (/var/www/sumaenima), clients receive stale bundles. This leads to performance regressions, UI errors, and calls to nonexistent API routes.",
         bad_example: "Compiling new frontend optimizations while leaving edge nodes running an outdated index-DEcIyMkJ.js bundle.",
         good_example: "stenio --deploy front  # Compiles and atomically syncs edge nodes (Ybyra/Kavure) via rsync and reloads Nginx",
-        remediation: "Run 'stenio --deploy front' to atomically sync edge nodes (Ybyra/Kavure) and reload Nginx without downtime.",
+        remediation: "Follow the suggestion of the finding: deploy ('stenio --deploy front') is advised, and accepted, only when the local build is not older than its sources nor than the production index.html; otherwise rebuild first.",
     },
     RuleExplanation {
         id: "RUST-CANONICAL-REMOTE",

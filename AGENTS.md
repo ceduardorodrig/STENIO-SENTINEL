@@ -289,6 +289,23 @@ Acceptance tests: `tests/hub_ledger.rs` (design A1 to A18).
 - Known limits: the transport still has the legacy HTTP+SSE shape, and MCP path arguments are not
   confined to the served tree.
 
+## Release 4.47.0 (ledger friction, publication and deploy guards)
+
+- `opportunity add --queue <P>` writes any registered queue under its claim; `--json`; a dry run
+  reports the refusal of the real run.
+- `backlog_write` events carry the row ids and file hashes; a fence without a row is handed back
+  without `--row`; `claim --path` binds a backlog claim to one queue directory; a voluntary
+  release records `lease_until`, only an expiry records `expired_at`.
+- A claim of new work reads the declared quota source of the account when no fresh sample exists;
+  `claude-code` and `opencode` have a declared account.
+- `DOC-PUBLISH-OPEN-WEAKNESS`: published queue directories (`published = true`). It blocks a
+  publication only where the gate runs with `--strict`.
+- `OPS-STATIC-PARITY` advises `--deploy front` only for a build that is not older than production
+  nor than its sources; `--deploy front|sync` refuses otherwise, also when an age is unknown.
+- A tree whose git history cannot be read is judged by an enclosing `[language]` ledger.
+- Known limits: the deploy age is the file time of `dist/index.html`, so a rebuild of an old
+  checkout looks new; no harness hook renews leases; no Claude status line feeds the quota.
+
 ## Release 4.46.0 (shared work ledger, first release)
 
 - `stenio hub` and the stdio MCP tools `hub_*`, `stenio_quota`, `stenio_backlog`; every MCP tool

@@ -132,6 +132,11 @@ enum Cmd {
         run: Option<String>,
         #[arg(long, help = "Lease length: seconds, or with s, m, h")]
         ttl: Option<String>,
+        #[arg(
+            long,
+            help = "Bind a backlog:<P>:write claim to the queue under this directory (default: every directory)"
+        )]
+        path: Option<PathBuf>,
     },
     /// Renew the leases
     Beat {
@@ -181,8 +186,11 @@ enum Cmd {
     Handback {
         #[command(flatten)]
         who: Who,
-        #[arg(long)]
-        row: String,
+        #[arg(
+            long,
+            help = "Omit for a fence that holds no row (backlog, release, deploy)"
+        )]
+        row: Option<String>,
         #[arg(long)]
         fence: i64,
         #[arg(long, help = "done, partial, blocked, needs-owner or failed")]
@@ -371,12 +379,14 @@ fn execute(command: Cmd) -> HubResult<Value> {
             resources,
             run,
             ttl,
+            path,
         } => {
             let request = ledger::ClaimRequest {
                 worker: who.id()?,
                 resources,
                 run,
                 ttl_secs: ttl.as_deref().map(parse_ttl).transpose()?,
+                path,
             };
             ledger::claim(&mut open()?, &cfg, &request)
         }
@@ -438,7 +448,7 @@ fn execute(command: Cmd) -> HubResult<Value> {
         } => {
             let request = ledger::Handback {
                 worker: who.id()?,
-                row,
+                row: row.unwrap_or_default(),
                 fence,
                 verdict,
                 branch,

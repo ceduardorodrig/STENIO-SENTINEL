@@ -2,7 +2,9 @@
 //! directories, so two writers cannot interleave, and (2) a write transaction on the ledger, in
 //! which a live `backlog:<prefix>:write` claim of another worker refuses the write.
 
-use serde_json::json;
+use rusqlite::Connection;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -63,6 +65,92 @@ pub fn lock_dirs(dirs: &[PathBuf]) -> HubResult<DirLocks> {
     Ok(DirLocks { _held: held })
 }
 
+/// What a writer changed, recorded in the `backlog_write` event.
+#[derive(Debug, Default)]
+pub struct Written {
+    pub rows: Vec<String>,
+    pub files: Vec<PathBuf>,
+}
+
+impl Written {
+    fn files_json(&self) -> Vec<Value> {
+        self.files
+            .iter()
+            .map(|path| {
+                let hash = std::fs::read(path).ok().map(|bytes| {
+                    Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                });
+                json!({"path": path.display().to_string(), "sha256": hash})
+            })
+            .collect()
+    }
+}
+
+/// The canonical directory of the `prefix` queue under `root`.
+pub fn queue_dir(root: &Path, prefix: &str) -> Option<PathBuf> {
+    present_queues(root)
+        .into_iter()
+        .find(|q| q.prefix == prefix)
+        .and_then(|q| q.dir.canonicalize().ok())
+}
+
+/// Refuses when another worker holds a live `backlog:<prefix>:write` claim that covers the queue
+/// being written. A claim taken with `--path` covers only that queue directory; one taken
+/// without it covers every directory.
+fn refuse_held(
+    conn: &Connection,
+    root: &Path,
+    prefixes: &[String],
+    worker: Option<&str>,
+) -> HubResult<()> {
+    for prefix in prefixes {
+        let name = format!("backlog:{prefix}:write");
+        let live = ledger::claims(conn, "WHERE released IS NULL AND resource = ?1", [&name])?;
+        let now = super::now_ms();
+        for claim in live
+            .iter()
+            .filter(|c| c.live(now) && Some(c.holder.as_str()) != worker)
+        {
+            if let Some(scope) = ledger::claim_scope(conn, claim.fence, &name)?
+                && queue_dir(root, prefix).is_some_and(|dir| dir != scope)
+            {
+                continue;
+            }
+            return Err(HubError::refused(
+                "held",
+                format!(
+                    "{name} is held by {} until {}; nothing written",
+                    claim.holder,
+                    super::iso(claim.expires)
+                ),
+                "pass --worker <holder> if it is you, else wait or ask the holder",
+            )
+            .with("resource", name.clone())
+            .with("holder", claim.holder.clone())
+            .with("expires", super::iso(claim.expires)));
+        }
+    }
+    Ok(())
+}
+
+fn ledger_file(given: Option<&Path>) -> HubResult<PathBuf> {
+    match given {
+        Some(p) => Ok(p.to_path_buf()),
+        None => config::db_path(),
+    }
+}
+
+fn write_failed(message: String) -> HubError {
+    HubError::refused(
+        "write_failed",
+        message,
+        "fix the reported problem and retry",
+    )
+}
+
 /// Runs `write` as the only backlog writer of the queues under `root`.
 ///
 /// `prefixes` are the queues being written. Without a ledger file there can be no claim; a ledger
@@ -72,51 +160,20 @@ pub fn backlog_write<T>(
     prefixes: &[String],
     worker: Option<&str>,
     ledger_path: Option<&Path>,
-    write: impl FnOnce() -> Result<T, String>,
+    write: impl FnOnce() -> Result<(T, Written), String>,
 ) -> HubResult<T> {
     let dirs: Vec<PathBuf> = present_queues(root).into_iter().map(|q| q.dir).collect();
     let _locks = lock_dirs(&dirs)?;
-    let refused = |message: String| {
-        HubError::refused(
-            "write_failed",
-            message,
-            "fix the reported problem and retry",
-        )
-    };
-    let path = match ledger_path {
-        Some(p) => p.to_path_buf(),
-        None => config::db_path()?,
-    };
+    let path = ledger_file(ledger_path)?;
     if !path.exists() {
-        return write().map_err(refused);
+        return write().map(|(value, _)| value).map_err(write_failed);
     }
     let mut store = Store::open(&path)?;
     ledger::sweep_now(&mut store)?;
     store.write(|tx| {
-        for prefix in prefixes {
-            let name = format!("backlog:{prefix}:write");
-            let live = ledger::claims(tx, "WHERE released IS NULL AND resource = ?1", [&name])?;
-            let now = super::now_ms();
-            let other = live
-                .iter()
-                .find(|c| c.live(now) && Some(c.holder.as_str()) != worker);
-            if let Some(claim) = other {
-                return Err(HubError::refused(
-                    "held",
-                    format!(
-                        "{name} is held by {} until {}; nothing written",
-                        claim.holder,
-                        super::iso(claim.expires)
-                    ),
-                    "pass --worker <holder> if it is you, else wait or ask the holder",
-                )
-                .with("resource", name.clone())
-                .with("holder", claim.holder.clone())
-                .with("expires", super::iso(claim.expires)));
-            }
-        }
+        refuse_held(tx, root, prefixes, worker)?;
         // The ledger write lock is held while the files change: nobody can claim in between.
-        let value = write().map_err(refused)?;
+        let (value, written) = write().map_err(write_failed)?;
         append(
             tx,
             NewEvent {
@@ -124,37 +181,38 @@ pub fn backlog_write<T>(
                 run: None,
                 kind: "backlog_write",
                 resource: &prefixes.join(","),
-                payload: json!({"root": root.display().to_string()}),
+                payload: json!({"root": root.display().to_string(), "rows": written.rows,
+                    "files": written.files_json()}),
             },
         )?;
         Ok(value)
     })
 }
 
-/// [`backlog_write`] for a command line: a dry run writes nothing and needs no lock. A failure is
-/// printed and returned as the exit code (1 refused or failed, 3 ledger unavailable).
-pub fn cli_write<T>(
+/// [`backlog_write`] for a command line. A dry run writes nothing and takes no lock, but it
+/// reports the same refusal the real run would.
+pub fn guarded<T>(
     root: &Path,
     prefixes: &[String],
     worker: Option<&str>,
     dry_run: bool,
-    write: impl FnOnce() -> Result<T, String>,
-) -> Result<T, i32> {
-    let outcome = if dry_run {
-        write().map_err(|e| (e, 1))
-    } else {
-        let worker = config::worker_or_env(worker);
-        backlog_write(root, prefixes, worker.as_deref(), None, write).map_err(|e| {
-            let text = match &e {
-                // The writer's own message stays as it was.
-                HubError::Refused(r) if r.code == "write_failed" => r.message.clone(),
-                other => other.to_string(),
-            };
-            (text, e.exit_code())
-        })
-    };
-    outcome.map_err(|(message, code)| {
-        eprintln!("{message}");
-        code
-    })
+    write: impl FnOnce() -> Result<(T, Written), String>,
+) -> HubResult<T> {
+    let worker = config::worker_or_env(worker);
+    if !dry_run {
+        return backlog_write(root, prefixes, worker.as_deref(), None, write);
+    }
+    let path = ledger_file(None)?;
+    if path.exists() {
+        Store::open(&path)?.read(|c| refuse_held(c, root, prefixes, worker.as_deref()))?;
+    }
+    write().map(|(value, _)| value).map_err(write_failed)
+}
+
+/// The text of a refused or failed write; the writer's own message stays as it was.
+pub fn failure_text(error: &HubError) -> String {
+    match error {
+        HubError::Refused(r) if r.code == "write_failed" => r.message.clone(),
+        other => other.to_string(),
+    }
 }

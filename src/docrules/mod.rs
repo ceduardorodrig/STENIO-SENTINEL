@@ -37,6 +37,7 @@ mod panel_app;
 mod panel_label;
 mod panel_parity;
 mod publish_cover;
+mod publish_weakness;
 mod quote_source;
 mod raci;
 mod research_cite;
@@ -58,6 +59,7 @@ pub static RULES: &[&DocRule] = &[
     &offset_sanity::RULE,
     &research_cite::RULE,
     &publish_cover::RULE,
+    &publish_weakness::RULE,
     &panel_parity::RULE,
     &panel_label::RULE,
     &english_codebase::RULE,

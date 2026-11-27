@@ -25,6 +25,12 @@ impl Drop for Fixture {
     }
 }
 
+/// The embedded declaration without its quota sources.
+fn config_head() -> &'static str {
+    let text = include_str!("../src/hub/defaults.toml");
+    text.split("[[quota.source]]").next().unwrap_or(text)
+}
+
 fn row(n: usize) -> String {
     format!("| **GB-00{n}** | fixture item {n} | [`area.md`](area.md) | 🟡 | open | a | — |\n")
 }
@@ -54,6 +60,8 @@ impl Fixture {
             gov.join("area.md"),
             "---\ntags: [gov]\npending: [GB-001, GB-002, GB-003, GB-004, GB-005, GB-006]\n---\n# Area\n",
         )?;
+        // No quota source: a test never runs a command of the host.
+        fs::write(root.join("hub.toml"), config_head())?;
         Ok(Fixture { root })
     }
 
@@ -72,7 +80,7 @@ impl Fixture {
             .env("HOME", self.root.join("home"))
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_STATE_HOME")
-            .env_remove("STENIO_HUB_CONFIG")
+            .env("STENIO_HUB_CONFIG", self.root.join("hub.toml"))
             .env_remove("STENIO_HUB_WORKER")
             .current_dir(self.vault());
         c
@@ -455,8 +463,7 @@ fn a9_quota_gates_new_claims() -> Fallible {
 fn a10_a_failing_source_is_unknown_never_zero() -> Fallible {
     let f = Fixture::new("unknown")?;
     let config = f.root.join("hub.toml");
-    let text = include_str!("../src/hub/defaults.toml");
-    let head = text.split("[[quota.source]]").next().ok_or("no head")?;
+    let head = config_head();
     fs::write(
         &config,
         format!(
@@ -1004,5 +1011,249 @@ fn a18_the_self_test_turns_red_without_each_guarantee() -> Fallible {
             "self-test case not OK: {case}"
         );
     }
+    Ok(())
+}
+
+/// Adds a homelab queue with the row HB-001 to the fixture vault.
+fn homelab(f: &Fixture) -> std::io::Result<PathBuf> {
+    let dir = f.vault().join("mnemocine");
+    fs::create_dir_all(&dir)?;
+    fs::write(
+        dir.join("backlog.md"),
+        "| ID | Item | Ref | Sev | State | Origin | Recurrence |\n\
+         |---|---|---|---|---|---|---|\n\
+         | **HB-001** | **Old chore.** x | [`area.md`](area.md) | 🟡 | open | a | — |\n",
+    )?;
+    fs::write(
+        dir.join("area.md"),
+        "---\ntags: [gov]\npending: [HB-001]\n---\n# Area\n",
+    )?;
+    Ok(dir)
+}
+
+/// `stenio opportunity add --json` under `root`.
+fn add_json(
+    f: &Fixture,
+    root: &Path,
+    extra: &[&str],
+) -> Result<(i32, Value), Box<dyn std::error::Error>> {
+    let child = f
+        .command()
+        .args([
+            "opportunity",
+            "add",
+            "--json",
+            "--evidence",
+            "seen",
+            "--desired",
+            "do it",
+            "--acceptance",
+            "test",
+            "--origin",
+            "t",
+            "--path",
+        ])
+        .arg(root)
+        .args(extra)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    finish(child)
+}
+
+#[test]
+fn f1_f2_f3_f4_other_queues_are_written_under_their_claim() -> Fallible {
+    let f = Fixture::new("queues")?;
+    let dir = homelab(&f)?;
+    let (holder, other) = (f.join("claude")?, f.join("hermes")?);
+    f.claim(&holder, "backlog:HB:write")?;
+    let base = [
+        "--queue",
+        "HB",
+        "--title",
+        "Rotate logs",
+        "--ref",
+        "mnemocine/area.md",
+    ];
+    let before = fs::read(dir.join("backlog.md"))?;
+    // A dry run reports the refusal of the real run.
+    for dry in [&["--dry-run"][..], &[]] {
+        let mut args = base.to_vec();
+        args.extend(["--worker", other.as_str()]);
+        args.extend(dry);
+        let (code, no) = add_json(&f, &f.vault(), &args)?;
+        assert_eq!((code, no["code"].as_str()), (1, Some("held")), "{no}");
+        assert_eq!(no["holder"], holder.as_str());
+    }
+    assert_eq!(fs::read(dir.join("backlog.md"))?, before);
+    let mut args = base.to_vec();
+    args.extend(["--worker", holder.as_str()]);
+    let (code, done) = add_json(&f, &f.vault(), &args)?;
+    assert_eq!((code, done["id"].as_str()), (0, Some("HB-002")), "{done}");
+    assert_eq!(done["pending"], "added");
+    let text = fs::read_to_string(dir.join("backlog.md"))?;
+    assert!(
+        text.contains("| **HB-002** | **Rotate logs.** Evidence: seen"),
+        "{text}"
+    );
+    assert!(text.contains("[`area.md`](area.md)"));
+    assert!(fs::read_to_string(dir.join("area.md"))?.contains("HB-001, HB-002"));
+    let write = f
+        .export()?
+        .into_iter()
+        .find(|e| e["type"] == "backlog_write")
+        .ok_or("no write event")?;
+    let payload: Value = match &write["payload"] {
+        Value::String(s) => serde_json::from_str(s)?,
+        other => other.clone(),
+    };
+    assert_eq!(payload["rows"], json!(["HB-002"]), "{write}");
+    assert_eq!(
+        payload["files"][0]["sha256"].as_str().map(str::len),
+        Some(64),
+        "{write}"
+    );
+    // A queue without a default document needs --ref.
+    let (code, no) = add_json(&f, &f.vault(), &["--queue", "HB", "--title", "No ref"])?;
+    assert_eq!((code, no["code"].as_str()), (2, Some("usage")), "{no}");
+    Ok(())
+}
+
+#[test]
+fn f5_a_claim_without_a_row_is_handed_back_by_its_fence() -> Fallible {
+    let f = Fixture::new("claimback")?;
+    let (w1, w2) = (f.join("claude")?, f.join("hermes")?);
+    let fence = f.claim(&w1, "backlog:GB:write")?.to_string();
+    let args = |w: &'static str| {
+        [
+            "handback",
+            "--worker",
+            w,
+            "--fence",
+            fence.as_str(),
+            "--verdict",
+            "done",
+            "--proof",
+            "filed",
+        ]
+        .map(str::to_string)
+    };
+    let call = |worker: &str| {
+        let mut list = args("-").to_vec();
+        list[2] = worker.to_string();
+        f.hub(&list.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    assert_eq!(call(&w2)?.1["code"], "stale_fence");
+    let (code, done) = call(&w1)?;
+    assert_eq!(code, 0, "{done}");
+    assert_eq!(done["resources"], json!(["backlog:GB:write"]));
+    assert_eq!(call(&w1)?.1["code"], "stale_fence");
+    f.claim(&w2, "backlog:GB:write")?;
+    // A fence that holds a row still names it.
+    let with_row = f.claim(&w1, "row:GB-001")?.to_string();
+    let (code, _) = f.hub(&[
+        "handback",
+        "--worker",
+        &w1,
+        "--fence",
+        &with_row,
+        "--verdict",
+        "done",
+        "--proof",
+        "x",
+    ])?;
+    assert_eq!(code, 2);
+    assert_eq!(f.ok(&["audit"])?["ok"], true);
+    Ok(())
+}
+
+#[test]
+fn f6_a_claim_bound_to_a_queue_leaves_a_scratch_copy_writable() -> Fallible {
+    let f = Fixture::new("bound")?;
+    let w1 = f.join("claude")?;
+    let vault = f.vault().display().to_string();
+    f.ok(&[
+        "claim",
+        "--worker",
+        &w1,
+        "--path",
+        &vault,
+        "backlog:GB:write",
+    ])?;
+    let scratch = f.root.join("scratch");
+    fs::create_dir_all(scratch.join("governance"))?;
+    for name in ["backlog.md", "backlog-archive.md", "area.md"] {
+        fs::copy(
+            f.vault().join("governance").join(name),
+            scratch.join("governance").join(name),
+        )?;
+    }
+    let (code, done) = add_json(&f, &scratch, &["--title", "Scratch rule"])?;
+    assert_eq!(code, 0, "{done}");
+    let (code, no) = add_json(&f, &f.vault(), &["--title", "Real rule"])?;
+    assert_eq!((code, no["code"].as_str()), (1, Some("held")), "{no}");
+    let (code, _) = f.hub(&["claim", "--worker", &w1, "--path", &vault, "row:GB-001"])?;
+    assert_eq!(code, 2);
+    Ok(())
+}
+
+#[test]
+fn f7_a_voluntary_release_has_no_expired_at() -> Fallible {
+    let f = Fixture::new("release")?;
+    let w1 = f.join("claude")?;
+    let fence = f.claim(&w1, "backlog:GB:write")?.to_string();
+    f.ok(&["release", "--worker", &w1, "--fence", &fence])?;
+    let events = f.export()?;
+    let released = events
+        .iter()
+        .find(|e| e["type"] == "release")
+        .ok_or("no release")?;
+    let text = released["payload"].to_string();
+    assert!(
+        text.contains("lease_until") && !text.contains("expired_at"),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_claim_reads_the_declared_source_of_the_account_itself() -> Fallible {
+    let f = Fixture::new("autoquota")?;
+    let source = |command: &str| {
+        fs::write(
+            f.root.join("hub.toml"),
+            format!(
+                "{}[[quota.source]]\naccount = \"anthropic\"\ncommand = {command}\n",
+                config_head()
+            ),
+        )
+    };
+    source(
+        "[\"echo\", '{\"windows\":[{\"label\":\"week\",\"used_percent\":91,\"resets_at\":null}]}']",
+    )?;
+    // No --account and no refresh: the harness is declared to use the account.
+    let w1 = f.join("claude-code")?;
+    let no = f.refused(&["claim", "--worker", &w1, "row:GB-001"], "quota")?;
+    assert!(
+        no["message"].as_str().is_some_and(|m| m.contains("91%")),
+        "{no}"
+    );
+    let g = Fixture::new("autoquota-unreadable")?;
+    fs::write(
+        g.root.join("hub.toml"),
+        format!(
+            "{}[[quota.source]]\naccount = \"anthropic\"\ncommand = [\"false\"]\n",
+            config_head()
+        ),
+    )?;
+    let w2 = g.join("claude-code")?;
+    g.claim(&w2, "row:GB-001")?;
+    let shown = g.ok(&["quota", "show"])?;
+    let item = shown["items"]
+        .as_array()
+        .and_then(|i| i.iter().find(|i| i["account"] == "anthropic"))
+        .ok_or("not listed")?;
+    assert_eq!(item["confidence"], "unknown", "{item}");
+    assert!(item["used_pct"].is_null(), "{item}");
     Ok(())
 }

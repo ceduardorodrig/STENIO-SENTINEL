@@ -43,6 +43,23 @@ pub fn present_queues(root: &Path) -> Vec<QueueFiles> {
         .collect()
 }
 
+/// Directories under `root` that are mirrored to a public repository.
+pub fn published_dirs(root: &Path) -> Vec<PathBuf> {
+    super::registry()
+        .into_iter()
+        .filter(|q| q.published)
+        .filter_map(|q| super::resolve_queue_dir(root, &q))
+        .filter(|dir| dir.join(super::BACKLOG_REL).is_file())
+        .collect()
+}
+
+/// True when the queue of `prefix` (without the dash) traces rows and documents both ways.
+pub fn is_linked(prefix: &str) -> bool {
+    super::registry()
+        .into_iter()
+        .any(|q| q.linked && q.prefix.trim_end_matches('-').eq_ignore_ascii_case(prefix))
+}
+
 /// The table line of `id` in a queue file (the row whose first cell is the id).
 pub fn row_line<'a>(text: &'a str, id: &str) -> Option<&'a str> {
     let (prefix, _) = id.split_once('-')?;

@@ -133,6 +133,9 @@ struct Queue {
     linked: bool,
     #[serde(default)]
     self_if_named: bool,
+    /// The queue directory is mirrored to a public repository.
+    #[serde(default)]
+    published: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -1837,6 +1840,7 @@ mod tests {
             requires: None,
             linked: false,
             self_if_named: false,
+            published: false,
         };
         let report = audit_queue(&root, &dir, &queue);
         let _ = fs::remove_dir_all(&root);

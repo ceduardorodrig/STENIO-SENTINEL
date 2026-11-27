@@ -16,6 +16,8 @@
 #                  (`pending: [PREFIX-n]` frontmatter). false (default): structure,
 #                  lifecycle, state, recurrence and Ref resolution only
 #   self_if_named  true: when the audited path itself ends with `dir`, it is the queue dir
+#   published      true: the directory is mirrored to a public repository, so its documents are
+#                  also judged by DOC-PUBLISH-OPEN-WEAKNESS
 
 [[queue]]
 name = "homelab"
@@ -23,6 +25,7 @@ prefix = "HB-"
 dir = "mnemocine"
 linked = true
 self_if_named = true
+published = true
 
 [[queue]]
 name = "sumaenima"

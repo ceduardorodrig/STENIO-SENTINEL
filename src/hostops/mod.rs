@@ -35,7 +35,7 @@ mod shrink_guard; // GB-236
 mod socket_order; // GB-171
 mod vdisplay; // GB-253
 
-pub use build_age::stale_build_violation; // GB-238
+pub use build_age::{stale as stale_build, stale_build_violation}; // GB-238
 
 /// One file of a linted tree.
 pub struct SourceFile {

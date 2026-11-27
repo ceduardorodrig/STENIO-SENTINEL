@@ -903,6 +903,17 @@ fn check_diffed(ctx: &Ctx, scope: &Scope, hits: &[Hit], out: &mut Vec<Violation>
         return;
     }
     let Some(mut added) = added_since_base(&scope.root) else {
+        // History that cannot be read says nothing about what is new: an enclosing ledger does.
+        if let Some((file, mut allowed)) = inherited_baseline(&scope.root) {
+            let why = format!("not in the inherited baseline {}", file.display());
+            for hit in hits {
+                match allowed.get_mut(&line_hash(&hit.text)) {
+                    Some(left) if *left > 0 => *left -= 1,
+                    _ => report(ctx, hit, &why, out),
+                }
+            }
+            return;
+        }
         for hit in hits {
             report(
                 ctx,
@@ -932,6 +943,18 @@ fn check_diffed(ctx: &Ctx, scope: &Scope, hits: &[Hit], out: &mut Vec<Violation>
             _ => report(ctx, hit, "added since the default branch", out),
         }
     }
+}
+
+/// The ledger of the nearest ancestor of `root` whose `[language]` table declares a readable one.
+fn inherited_baseline(root: &Path) -> Option<(PathBuf, HashMap<u64, usize>)> {
+    root.ancestors().skip(1).find_map(|dir| {
+        if !dir.join("steniocheck.toml").is_file() {
+            return None;
+        }
+        let file = dir.join(SteniocheckConfig::load_from_dir(dir).language?.baseline?);
+        let allowed = read_baseline(&file)?;
+        Some((file, allowed))
+    })
 }
 
 /// The Portuguese lines of a commit message or pull request text.
@@ -1078,6 +1101,36 @@ fn commit(root: &Path, message: &str, date: Option<&str>) -> bool {
     command.output().is_ok_and(|o| o.status.success())
 }
 
+/// A nested tree with a `.git` directory whose history cannot be read, under a ledger.
+fn unreadable_history(
+    name: &str,
+    config: (&str, &str),
+    base: (&str, &str),
+    old: (&str, &str),
+) -> Vec<(String, bool)> {
+    let broken = ("nested/.git/HEAD", "not a repository\n");
+    let known = ("nested/old.md", PT);
+    vec![
+        count(
+            &format!("{name}-ledgered-silent"),
+            &[config, base, old, broken, known],
+            0,
+        ),
+        count(
+            &format!("{name}-new-line-red"),
+            &[
+                config,
+                base,
+                old,
+                broken,
+                known,
+                ("nested/new.md", "Isso não está pronto.\n"),
+            ],
+            1,
+        ),
+    ]
+}
+
 fn self_test() -> Vec<(String, bool)> {
     let config = (
         "steniocheck.toml",
@@ -1094,7 +1147,8 @@ fn self_test() -> Vec<(String, bool)> {
     let one = |name: &str, path: &'static str, text: &str| {
         count(name, &[config, base, old, (path, text)], 1)
     };
-    vec![
+    let mut cases = unreadable_history("inherited", config, base, old);
+    cases.extend(vec![
         count(
             "allowed-and-cited-silent",
             &[config, base, old, cited, allowed[0], allowed[1]],
@@ -1168,5 +1222,6 @@ fn self_test() -> Vec<(String, bool)> {
             Some("fix: the sender check"),
             0,
         ),
-    ]
+    ]);
+    cases
 }

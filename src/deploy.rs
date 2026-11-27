@@ -9,6 +9,69 @@ pub struct ParityStatus {
     pub local_bundle: String,
     pub remote_bundle: String,
     pub in_sync: bool,
+    /// Why this local build must not replace production; `None` when it may.
+    pub deploy_block: Option<String>,
+}
+
+/// Why the local build must not be deployed (GB-324): it is older than what production serves,
+/// older than its own sources, or one of the two ages cannot be established. Times are Unix
+/// seconds; `production` is the `Last-Modified` of the served `index.html`, which `rsync -a`
+/// keeps equal to the modification time of the deployed build.
+pub fn deploy_block(
+    local: Option<i64>,
+    production: Option<i64>,
+    stale: Option<String>,
+) -> Option<String> {
+    if let Some(why) = stale {
+        return Some(why);
+    }
+    let Some(local) = local else {
+        return Some("the age of the local build cannot be established".to_string());
+    };
+    let Some(production) = production else {
+        return Some("the age of the production build cannot be established".to_string());
+    };
+    let utc = |secs: i64| {
+        chrono::DateTime::from_timestamp(secs, 0)
+            .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_default()
+    };
+    (local < production).then(|| {
+        format!(
+            "the local build ({}) is older than the one production serves ({})",
+            utc(local),
+            utc(production)
+        )
+    })
+}
+
+fn modified_secs(file: &Path) -> Option<i64> {
+    let time = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
+    let since = time.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(since.as_secs()).ok()
+}
+
+/// Splits `xh --print=hb` output into the `Last-Modified` time and the body.
+fn parse_probe(response: &str) -> (Option<i64>, &str) {
+    let split = response
+        .find("\r\n\r\n")
+        .map(|i| (i, i + 4))
+        .into_iter()
+        .chain(response.find("\n\n").map(|i| (i, i + 2)))
+        .min();
+    let Some((end, body)) = split else {
+        return (None, response);
+    };
+    let modified = response[..end].lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if !name.eq_ignore_ascii_case("last-modified") {
+            return None;
+        }
+        chrono::DateTime::parse_from_rfc2822(value.trim())
+            .ok()
+            .map(|t| t.timestamp())
+    });
+    (modified, &response[body..])
 }
 
 /// Extracts main script bundle name (assets/index-*.js) from HTML
@@ -51,7 +114,8 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
         .args([
             "get",
             "https://sumaenima.chimaera-heptatonic.ts.net/index.html",
-            "-b",
+            "--print=hb",
+            "--check-status",
             "--timeout=3",
         ])
         .stdin(std::process::Stdio::null())
@@ -62,9 +126,9 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
         return None;
     }
 
-    let remote_html = String::from_utf8_lossy(&output.stdout);
-    let remote_bundle =
-        extract_script_bundle(&remote_html).unwrap_or_else(|| "unknown".to_string());
+    let response = String::from_utf8_lossy(&output.stdout);
+    let (production, remote_html) = parse_probe(&response);
+    let remote_bundle = extract_script_bundle(remote_html).unwrap_or_else(|| "unknown".to_string());
 
     let in_sync = local_bundle == remote_bundle;
 
@@ -72,6 +136,11 @@ pub fn check_static_parity(root: &Path) -> Option<ParityStatus> {
         local_bundle,
         remote_bundle,
         in_sync,
+        deploy_block: deploy_block(
+            modified_secs(&local_index),
+            production,
+            crate::hostops::stale_build(&fe_dir),
+        ),
     })
 }
 
@@ -106,6 +175,17 @@ pub fn execute_front_deploy(root: &Path, build_first: bool) -> Result<()> {
             );
         }
         println!("{}", "  ✅ Build compiled successfully!".green());
+    }
+
+    // Nothing leaves this host unless the build is provably not older than production.
+    let refusal = match check_static_parity(root) {
+        Some(parity) => parity.deploy_block,
+        None => Some(
+            "production or the local bundle cannot be read, so their ages are unknown".to_string(),
+        ),
+    };
+    if let Some(why) = refusal {
+        anyhow::bail!("Deploy refused: {why}. Nothing was synchronized.");
     }
 
     let dist_str = format!("{}/", dist_dir.display());
@@ -191,6 +271,26 @@ mod tests {
     fn test_extract_script_bundle_missing() {
         let html = "<html><body><h1>Hello World</h1></body></html>";
         assert_eq!(extract_script_bundle(html), None);
+    }
+
+    #[test]
+    fn a_build_is_deployable_only_when_not_older_than_production() {
+        assert!(deploy_block(Some(200), Some(100), None).is_none());
+        assert!(deploy_block(Some(100), Some(100), None).is_none());
+        assert!(deploy_block(Some(100), Some(200), None).is_some());
+        assert!(deploy_block(Some(200), None, None).is_some());
+        assert!(deploy_block(None, Some(100), None).is_some());
+        assert!(deploy_block(Some(200), Some(100), Some("stale".into())).is_some());
+    }
+
+    #[test]
+    fn the_probe_keeps_the_body_and_reads_the_date() {
+        let (when, body) = parse_probe(
+            "HTTP/2.0 200 OK\nlast-modified: Fri, 27 Nov 2026 07:49:44 GMT\n\n<html>\n\n</html>",
+        );
+        assert_eq!(when, Some(1_795_765_784));
+        assert_eq!(body, "<html>\n\n</html>");
+        assert_eq!(parse_probe("HTTP/1.1 200 OK\n\nx").0, None);
     }
 
     #[test]

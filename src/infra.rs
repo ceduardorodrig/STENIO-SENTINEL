@@ -1510,7 +1510,12 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                     "Production edge node is serving a legacy bundle ('{}'), diverging from local build ('{}').",
                     parity.remote_bundle, parity.local_bundle
                 ),
-                suggestion: Some("Synchronize production immediately by executing: stenio --deploy front".to_string()),
+                suggestion: Some(match &parity.deploy_block {
+                    None => "Synchronize production by executing: stenio --deploy front".to_string(),
+                    Some(why) => format!(
+                        "Do not deploy this build: {why}. Build the current sources, then compare again."
+                    ),
+                }),
             });
         }
     }

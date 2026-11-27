@@ -55,6 +55,7 @@ fn claim_row(
             resources: vec!["row:GB-001".to_string()],
             ttl_secs: Some(ttl_secs),
             run: None,
+            path: None,
         },
     )
 }

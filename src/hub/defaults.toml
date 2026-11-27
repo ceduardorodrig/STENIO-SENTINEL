@@ -26,7 +26,10 @@ resume_margin_secs = 120
 command_timeout_secs = 30
 
 # Quota account of a harness that joins without --account. Unlisted harnesses use their own name.
+# A claim of new work reads the account's source first when no fresh sample exists.
 [accounts]
+claude-code = "anthropic"
+opencode = "opencode-go"
 
 # Read-only commands that report account limits. Stenio never reads key files.
 [[quota.source]]
