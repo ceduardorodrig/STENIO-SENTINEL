@@ -20,6 +20,44 @@ pub struct Config {
     pub quota: QuotaPolicy,
     #[serde(default)]
     pub accounts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub session: Session,
+    #[serde(default)]
+    pub backup: Backup,
+}
+
+/// Where a harness exposes its session id, to its shell commands and to its hooks.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Session {
+    pub env: Vec<String>,
+    pub fields: Vec<String>,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        // An override without this section keeps the embedded declaration's behaviour.
+        Session {
+            env: vec!["CLAUDE_CODE_SESSION_ID".to_string()],
+            fields: ["session_id", "sessionId", "conversationId"]
+                .map(str::to_string)
+                .to_vec(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Backup {
+    pub max_age_secs: u64,
+}
+
+impl Default for Backup {
+    fn default() -> Self {
+        Backup {
+            max_age_secs: 26 * 3600,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

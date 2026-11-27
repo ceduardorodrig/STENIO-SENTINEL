@@ -179,6 +179,21 @@ pub struct Join {
     pub host: Option<String>,
     pub parent: Option<String>,
     pub account: Option<String>,
+    /// Harness session this worker belongs to; default: the declared session variables.
+    pub session: Option<String>,
+}
+
+fn session_key(worker: &str) -> String {
+    format!("session:{worker}")
+}
+
+/// The workers bound to a harness session.
+pub fn session_workers(conn: &Connection, session: &str) -> HubResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT substr(key, 9) FROM meta WHERE key LIKE 'session:%' AND value = ?1 ORDER BY key",
+    )?;
+    let rows = stmt.query_map([session], |r| r.get(0))?;
+    Ok(rows.collect::<Result<Vec<String>, _>>()?)
 }
 
 fn name_like(value: &str) -> bool {
@@ -211,6 +226,10 @@ pub fn join(store: &mut Store, cfg: &Config, request: &Join) -> HubResult<Value>
         return Err(HubError::Usage("invalid account label".to_string()));
     }
     let host = request.host.clone().or_else(local_host);
+    let session = request
+        .session
+        .clone()
+        .or_else(|| super::hooks::session_of(cfg, &Value::Null));
     store.write(|tx| {
         if let Some(parent) = &request.parent {
             worker(tx, parent)?;
@@ -232,6 +251,9 @@ pub fn join(store: &mut Store, cfg: &Config, request: &Join) -> HubResult<Value>
                 now
             ],
         )?;
+        if let Some(session) = &session {
+            super::store::set_meta(tx, &session_key(&id), session)?;
+        }
         append(
             tx,
             NewEvent {

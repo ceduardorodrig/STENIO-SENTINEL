@@ -11,9 +11,11 @@
 //! prevent them.
 
 pub mod audit;
+pub mod backup;
 pub mod cli;
 pub mod config;
 pub mod guard;
+pub mod hooks;
 pub mod ledger;
 pub mod mcp;
 pub mod quota;
