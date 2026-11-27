@@ -17,6 +17,8 @@ mod fieldname_shadow;
 mod hooks_assets;
 #[path = "frappe_desk/include_target.rs"]
 mod include_target;
+#[path = "frappe_desk/js_registered.rs"]
+mod js_registered;
 #[path = "frappe_desk/list_filter_fields.rs"]
 mod list_filter_fields;
 #[path = "frappe_desk/po_resolves.rs"]
@@ -88,6 +90,11 @@ const ITEMS: &[Item] = &[
         explain: &include_target::EXPLAIN,
         run: include_target::run,
         cases: include_target::cases,
+    },
+    Item {
+        explain: &js_registered::EXPLAIN,
+        run: js_registered::run,
+        cases: js_registered::cases,
     },
 ];
 
