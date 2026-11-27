@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 mod access_log; // FRAPPE-ACCESS-LOG-SYNC-ASSERT
 mod dead_except; // FRAPPE-DEAD-EXCEPT
+mod declared; // FRAPPE-DOCTYPE-DECLARED-EVERYWHERE
 mod masked_literal; // TEST-NO-MASKED-LITERAL
 mod patch_order; // FRAPPE-PATCH-ORDER-DEPENDENCY
 mod privacy_lists; // FRAPPE-PRIVACY-LIST-NAMES-EXIST
@@ -31,6 +32,7 @@ pub(crate) struct Item {
 pub(crate) static ITEMS: &[&Item] = &[
     &access_log::ITEM,
     &dead_except::ITEM,
+    &declared::ITEM,
     &masked_literal::ITEM,
     &patch_order::ITEM,
     &privacy_lists::ITEM,
