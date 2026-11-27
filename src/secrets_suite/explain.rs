@@ -25,4 +25,15 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         good_example: "stenio secrets-drift --store vault.enc.env --master master.env --mirror kavure=copy.enc.env --decrypt",
         remediation: "Add the key with the store script, re-encrypt and copy the store to the host; never edit a mirror by hand.",
     },
+    RuleExplanation {
+        id: "ENV-VAR-WIRED",
+        name: "Environment Variable Read But Never Wired",
+        severity: "WARN",
+        tag: "env",
+        summary: "A Python or Rust file reads an environment variable that no compose or stack file, Dockerfile or unit provides and no env example declares. Compose files come from the repository, or from the sibling `<name>-infra` repository (then only `<NAME>_*` names). Test paths and ambient variables are ignored; inert without compose files.",
+        rationale: "The assistant read MIRACENA_LLM_KEY while no service passed it and the production env lacked it: the deploy would have degraded silently.",
+        bad_example: "os.environ.get(\"APP_LLM_KEY\")   # compose.yml never mentions it",
+        good_example: "environment:\n  APP_LLM_KEY: ${APP_LLM_KEY:-}",
+        remediation: "Wire it in compose and .env.example, or declare `[env_wiring] ignore = [\"NAME\"]` in steniocheck.toml.",
+    },
 ];

@@ -4,9 +4,11 @@
 //! reports carry paths, line numbers, key names and counts only.
 
 mod drift;
+mod env_wired;
 pub mod explain;
 mod store;
 mod store_recipients;
+mod tree;
 
 use crate::engine::Violation;
 use crate::rule::Severity;
@@ -37,6 +39,18 @@ pub fn audit(root: &Path, sel: &Selection) -> Vec<Violation> {
     let mut out = Vec::new();
     if sel.scope_in(&["vault", "homelab"]) && sel.wants("sec", store_recipients::RULE_ID) {
         out.extend(store_recipients::audit(root));
+    }
+    // Captured mirrors and upstream forks are not our trees to wire.
+    if sel.scope_in(&["mirror", "snapshot", "fork", "derived", "frappe"]) {
+        return out;
+    }
+    let wired = sel.wants("env", env_wired::RULE_ID);
+    if !wired {
+        return out;
+    }
+    let files = tree::files(root);
+    if wired {
+        out.extend(env_wired::audit(root, &files));
     }
     out
 }
@@ -92,6 +106,7 @@ pub(crate) fn fixture(tag: &str, files: &[(&str, &str)]) -> PathBuf {
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut cases = store_recipients::self_test_cases();
     cases.extend(drift::self_test_cases());
+    cases.extend(env_wired::self_test_cases());
     cases
 }
 
