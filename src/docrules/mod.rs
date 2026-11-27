@@ -25,6 +25,7 @@ pub struct DocRule {
 mod contract_parity;
 mod incident;
 mod inline_style;
+mod live_claim;
 mod rule_count;
 
 #[rustfmt::skip]
@@ -33,6 +34,7 @@ pub static RULES: &[&DocRule] = &[
     &rule_count::RULE,
     &inline_style::RULE,
     &contract_parity::RULE,
+    &live_claim::RULE,
 ];
 
 /// What the rules may look at.
