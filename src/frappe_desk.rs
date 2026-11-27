@@ -13,6 +13,10 @@ mod calendar_map;
 mod desk_field_real;
 #[path = "frappe_desk/fieldname_shadow.rs"]
 mod fieldname_shadow;
+#[path = "frappe_desk/hooks_assets.rs"]
+mod hooks_assets;
+#[path = "frappe_desk/include_target.rs"]
+mod include_target;
 #[path = "frappe_desk/list_filter_fields.rs"]
 mod list_filter_fields;
 #[path = "frappe_desk/po_resolves.rs"]
@@ -79,6 +83,11 @@ const ITEMS: &[Item] = &[
         explain: &calendar_map::EXPLAIN,
         run: calendar_map::run,
         cases: calendar_map::cases,
+    },
+    Item {
+        explain: &include_target::EXPLAIN,
+        run: include_target::run,
+        cases: include_target::cases,
     },
 ];
 
