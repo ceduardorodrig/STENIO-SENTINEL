@@ -187,6 +187,24 @@ fn session_key(worker: &str) -> String {
     format!("session:{worker}")
 }
 
+fn agent_key(worker: &str) -> String {
+    format!("agent:{worker}")
+}
+
+/// The sub-agent of a session that a worker belongs to (empty for the main thread), once a hook
+/// has seen its join.
+pub fn worker_agent(conn: &Connection, worker: &str) -> HubResult<Option<String>> {
+    super::store::meta(conn, &agent_key(worker))
+}
+
+/// Binds a worker to the sub-agent that joined it. The first binding stays.
+pub fn bind_agent(conn: &Connection, worker: &str, agent: &str) -> HubResult<()> {
+    if worker_agent(conn, worker)?.is_none() {
+        super::store::set_meta(conn, &agent_key(worker), agent)?;
+    }
+    Ok(())
+}
+
 /// The workers bound to a harness session.
 pub fn session_workers(conn: &Connection, session: &str) -> HubResult<Vec<String>> {
     let mut stmt = conn.prepare(
