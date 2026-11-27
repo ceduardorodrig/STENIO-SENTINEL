@@ -15,6 +15,7 @@ use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
 mod backup_verify; // GB-051
+mod boots; // GB-155
 mod kuma; // GB-014 GB-015
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
@@ -35,6 +36,7 @@ const LINTS: &[(&str, Lint)] = &[
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
     backup_verify::EXPLAIN,      // GB-051
+    boots::EXPLAIN,              // GB-155
     kuma::EXPLAIN_LOOPBACK,      // GB-014
     kuma::EXPLAIN_NOTIFY,        // GB-015
     onfailure::EXPLAIN,          // GB-016
@@ -51,6 +53,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let rest = &argv[1..];
     match name.as_str() {
         "lint" => lint_cli(rest),
+        "boots" => boots::run_cli(rest),                   // GB-155
         "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "onfailure" => onfailure::run_cli(rest),           // GB-016
         "ports" => ports_vs_ss::run_cli(rest),             // GB-013
@@ -64,6 +67,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut all = Vec::new();
     all.extend(backup_verify::self_test_cases()); // GB-051
+    all.extend(boots::self_test_cases()); // GB-155
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
