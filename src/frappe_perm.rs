@@ -6,6 +6,7 @@
 //! it must fire (the mutation proof), executed by `--self-test` and `cargo test`.
 
 mod docperm_row;
+mod patch_owned;
 mod perm_matrix;
 mod permlevel_list_view;
 mod permlevel_row;
@@ -46,6 +47,7 @@ struct Case {
 }
 
 pub static RULES: &[&Rule] = &[
+    &patch_owned::RULE,
     &whitelist_guest::RULE,
     &perm_matrix::RULE,
     &public_drift::RULE,
