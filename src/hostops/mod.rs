@@ -25,6 +25,7 @@ mod lua_load_api; // GB-234
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
 mod proxy_env; // GB-200
+mod session_orphan; // GB-235
 mod socket_order; // GB-171
 
 
@@ -43,6 +44,7 @@ const LINTS: &[(&str, Lint)] = &[
     (fundamental_probe::RULE_ID, fundamental_probe::lint),   // GB-232
     (lua_load_api::RULE_ID, lua_load_api::lint),             // GB-234
     (proxy_env::RULE_ID, proxy_env::lint),                   // GB-200
+    (session_orphan::RULE_ID, session_orphan::lint),         // GB-235
     (socket_order::RULE_ID, socket_order::lint),             // GB-171
 ];
 
@@ -59,6 +61,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     onfailure::EXPLAIN,          // GB-016
     ports_vs_ss::EXPLAIN,        // GB-013
     proxy_env::EXPLAIN,          // GB-200
+    session_orphan::EXPLAIN,     // GB-235
     socket_order::EXPLAIN,       // GB-171
 ];
 
@@ -98,6 +101,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
     all.extend(proxy_env::self_test_cases()); // GB-200
+    all.extend(session_orphan::self_test_cases()); // GB-235
     all.extend(socket_order::self_test_cases()); // GB-171
     all
 }
