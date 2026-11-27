@@ -1978,6 +1978,20 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
         return 0;
     }
     baseline::print_banner("StenioSentinel - scope frappe");
+    if args.fix {
+        match frappe::desk::fix::apply(&args.path, &fc) {
+            Ok(changes) => {
+                for line in &changes {
+                    println!("{} {line}", "FIXED".green().bold());
+                }
+                println!("frappe fix: {} change(s)", changes.len());
+            }
+            Err(e) => {
+                eprintln!("{} {}", "ERROR".red().bold(), e);
+                return 2;
+            }
+        }
+    }
     let violations = match frappe::audit(&args.path, &fc) {
         Ok(v) => v,
         Err(e) => {

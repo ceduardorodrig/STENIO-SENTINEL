@@ -13,6 +13,8 @@ mod calendar_map;
 mod desk_field_real;
 #[path = "frappe_desk/fieldname_shadow.rs"]
 mod fieldname_shadow;
+#[path = "frappe_desk/fix.rs"]
+pub(crate) mod fix;
 #[path = "frappe_desk/hooks_assets.rs"]
 mod hooks_assets;
 #[path = "frappe_desk/include_target.rs"]
@@ -159,5 +161,9 @@ pub(super) fn audit(c: &Ctx) -> Vec<Violation> {
 }
 
 pub(super) fn self_test_cases() -> Vec<(String, bool)> {
-    ITEMS.iter().flat_map(|i| (i.cases)()).collect()
+    ITEMS
+        .iter()
+        .flat_map(|i| (i.cases)())
+        .chain(fix::cases())
+        .collect()
 }
