@@ -19,6 +19,7 @@ mod autopilot_last; // GB-175
 mod backup_verify; // GB-051
 mod boots; // GB-155
 mod false_alive; // GB-231
+mod fundamental_probe; // GB-232
 mod kuma; // GB-014 GB-015
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
@@ -38,6 +39,7 @@ type Lint = fn(&[SourceFile]) -> Vec<Violation>;
 const LINTS: &[(&str, Lint)] = &[
     (alert_independence::RULE_ID, alert_independence::lint), // GB-213
     (backup_verify::RULE_ID, backup_verify::lint),           // GB-051
+    (fundamental_probe::RULE_ID, fundamental_probe::lint),   // GB-232
     (proxy_env::RULE_ID, proxy_env::lint),                   // GB-200
     (socket_order::RULE_ID, socket_order::lint),             // GB-171
 ];
@@ -48,6 +50,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     backup_verify::EXPLAIN,      // GB-051
     boots::EXPLAIN,              // GB-155
     false_alive::EXPLAIN,        // GB-231
+    fundamental_probe::EXPLAIN,  // GB-232
     kuma::EXPLAIN_LOOPBACK,      // GB-014
     kuma::EXPLAIN_NOTIFY,        // GB-015
     onfailure::EXPLAIN,          // GB-016
@@ -86,6 +89,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(backup_verify::self_test_cases()); // GB-051
     all.extend(boots::self_test_cases()); // GB-155
     all.extend(false_alive::self_test_cases()); // GB-231
+    all.extend(fundamental_probe::self_test_cases()); // GB-232
     all.extend(kuma::self_test_cases()); // GB-014 GB-015
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
