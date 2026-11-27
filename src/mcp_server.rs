@@ -1,6 +1,8 @@
+use crate::mcp_http_policy::{HttpPolicy, enforce, parse_bind};
 use anyhow::Result;
 use axum::Router;
 use axum::extract::State;
+use axum::middleware::from_fn_with_state;
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
@@ -11,7 +13,6 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 
 use crate::baseline::Whitelist;
 use crate::engine::Engine;
@@ -32,6 +33,13 @@ pub async fn start_mcp_sse_server(
     rules: Vec<Rule>,
     whitelist: Whitelist,
 ) -> Result<()> {
+    let addr = SocketAddr::new(parse_bind(host)?, port);
+    let policy = Arc::new(HttpPolicy::from_env(addr.ip())?);
+    if !addr.ip().is_loopback() && !policy.has_token() {
+        eprintln!(
+            "⚠️  Non-loopback bind without STENIO_MCP_TOKEN: requests are NOT authenticated."
+        );
+    }
     let engine = Engine::new(rules, whitelist.clone())?;
     let state = Arc::new(ServerState {
         repo_root,
@@ -43,14 +51,9 @@ pub async fn start_mcp_sse_server(
         .route("/health", get(health_handler))
         .route("/sse", get(sse_handler))
         .route("/message", post(message_handler))
-        .layer(CorsLayer::permissive())
+        .layer(from_fn_with_state(policy, enforce))
         .with_state(state);
 
-    let bind_str = format!("{}:{}", host, port);
-    let addr: SocketAddr = match bind_str.parse() {
-        Ok(a) => a,
-        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
-    };
     println!(
         "\n{}",
         "══════════════════════════════════════════════════════════════════════════════".bold()
@@ -58,7 +61,7 @@ pub async fn start_mcp_sse_server(
     println!(
         "{} on {}",
         "StenioSentinel MCP SSE Server (Axum Native)".bold().cyan(),
-        format!("http://{}:{}", host, port).bold().green()
+        format!("http://{addr}").bold().green()
     );
     println!(
         "{}",
@@ -66,15 +69,15 @@ pub async fn start_mcp_sse_server(
     );
     println!(
         "   📡 SSE Handshake Endpoint : {}",
-        format!("http://{}:{}/sse", host, port).bold()
+        format!("http://{addr}/sse").bold()
     );
     println!(
         "   📬 Message JSON-RPC Route : {}",
-        format!("http://{}:{}/message", host, port).bold()
+        format!("http://{addr}/message").bold()
     );
     println!(
         "   ❤️  Health Status Route   : {}",
-        format!("http://{}:{}/health", host, port).bold()
+        format!("http://{addr}/health").bold()
     );
     println!("\n   ✨ Ready to receive MCP agents from Claude Code, OpenCode, Cursor!\n");
 
