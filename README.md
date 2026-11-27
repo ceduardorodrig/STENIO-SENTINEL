@@ -284,7 +284,7 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 | `FRAPPE-PATCH-SERVER-OWNED-WRITE` | Frappe | **ERROR** | A patch assigns a read-only field that app code restores from `get_doc_before_save()` and calls `.save()` (GB-217). |
 | `FRAPPE-PO-CATALOGUE-RESOLVES` | Frappe | **ERROR** | Scope `frappe`: The `locale_file` of `[frappe]` resolves neither inside the package nor under the app root (ERROR), or none is configured and no `.po` exists in `<package>/locale` or `<app>/locale` (WARN). Every catalogue rule would otherwise compare against nothing. (GB-084) |
 | `FRAPPE-REQD-MESSAGES` | Frappe | **ERROR** | Scope `frappe`: A visible field with `reqd` or `mandatory_depends_on` has no `label`, or its label has no msgid / an empty translation in the app catalogue: Frappe builds the mandatory message from the label. (GB-011) |
-| `FRAPPE-FIELDNAME-COLLIDES-WITH-PROPERTY` | Frappe | **ERROR** | Scope `frappe`: A DocType fieldname equals a reserved Document keyword, a restricted column, or `fieldtype`/`fieldname` (ERROR); `depends_on`, `mandatory_depends_on`, `read_only_depends_on`, `fetch_from` and `permlevel` shadow a DocField property and are a WARNING. `description`, `label` and `options` are ordinary field names and are not reported. (GB-089) |
+| `FRAPPE-FIELDNAME-COLLIDES-WITH-PROPERTY` | Frappe | **ERROR** | Scope `frappe`: A DocType fieldname equals a reserved Document keyword, a restricted column, or `fieldtype`/`fieldname`, `depends_on`, `mandatory_depends_on`, `read_only_depends_on`, `fetch_from` or `permlevel`. Only the last five can be a documented exception, one `DocType.fieldname \| reason` per line in `fieldname-shadow-allowlist.txt` at the app root; an entry without a reason or matching no field is an ERROR. `description`, `label` and `options` are ordinary field names and are not reported. (GB-089) |
 | `FRAPPE-TABLE-NEEDS-SECTION` | Frappe | **ERROR** | Scope `frappe`: A Table / Table MultiSelect field whose preceding field (in `field_order`) is neither a Section Break nor a Tab Break. Documented exceptions go in `table-section-allowlist.txt` at the app root, one `DocType.fieldname  # reason` per line. (GB-168) |
 | `FRAPPE-DESK-FIELD-REAL` | Frappe | **ERROR** | Scope `frappe`: A shipped Dashboard Chart, Dashboard, Number Card, Workspace, Kanban Board or List Filter record (or one of its child rows) carries a key that is not a field of that DocType in Frappe v16. Silent for an app whose Dockerfile pins an older major. (GB-092) |
 | `FRAPPE-DESK-LAYOUT-FIELDS` | Frappe | **ERROR** | Scope `frappe`: A shipped List Filter must declare `reference_doctype` and `for_user` (empty = global), and every `filters` row and `columns[].fieldname` must be a column of that DocType. A DocType the app does not ship is not resolved. (GB-102) |
@@ -297,7 +297,7 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 | `ARCH-PRINT-QTWEBKIT` | Frappe | **ERROR** | Scope `frappe`: A page of the app declaring `@page` or `@media print` lays paper content out with `display: grid` / `grid-template*`. Screen-only rules (`@media screen`, or under a class that print hides) are not reported; flexbox is not reported. (GB-174) |
 | `FRAPPE-PRINT-NO-CSS-VAR` | Frappe | **ERROR** | Scope `frappe`: A page declaring `@page` uses `var()` inside a `border*` or `background` shorthand that reaches paper. Screen-only rules and a background on html/body alone (paper is white without it) are not reported. (GB-192) |
 | `FRAPPE-TEMPLATE-LITERALS-TRANSLATED` | Frappe | **ERROR** | Scope `frappe`: A literal passed to `_()` or `__()` in an `.html` of www/ or templates/, or in a `.js` of public/js/, has no msgid in the app catalogue. Computed arguments and concatenations are skipped; an app with no catalogue is silent (FRAPPE-PO-CATALOGUE-RESOLVES reports that). (GB-204) |
-| `I18N-NO-UNTRANSLATED-INTERPOLATION` | Frappe | **WARN** | Scope `frappe`: `frappe.throw` / `frappe.msgprint` whose message starts with a literal or an f-string (not `_(...)`), or a `get_label(...)` passed raw into `.format(...)` or a `label=` argument. Tests and patches are skipped; a variable message is not judged. (GB-083) |
+| `I18N-NO-UNTRANSLATED-INTERPOLATION` | Frappe | **ERROR** | Scope `frappe`: `frappe.throw` / `frappe.msgprint` whose message starts with a literal or an f-string (not `_(...)`), or a `get_label(...)` passed raw into `.format(...)` or a `label=` argument. Tests and patches are skipped; a variable message is not judged. (GB-083) |
 | `FRAPPE-PUBLISHED-CONTENT-FOLLOWS-THE-IMAGE` | Frappe | **ERROR** | A module in `patches/` listed in `patches.txt` that reads a file shipped in the image (`Path(__file__)`, `read_text`, `open`, `pkgutil.get_data`) and writes a long-text field of a record (`content`, `body`, `html`, `markup`, `page_content`, `long_description`) must also be in `after_migrate` of hooks.py: a patch runs once, so the second edition of the document never reaches the site (GB-142, the stale manual of rc114). A patch that reads no file, a patch that writes no long-text field, and a module in `after_migrate` with no patch line are silent; a commented `after_migrate` registers nothing. |
 | `published-content` (verify-release) | Frappe | **FAIL** | For each `[[frappe.published_content]]` entry (`doctype`, `field`, `file`), size and sha256 of the Single on the live site must equal the file inside the running image; WARN with the reason when either side is unreachable (GB-149) |
 | `I18N-CASE` | i18n | **ERROR** | `.po` pairs: uppercase first letter follows the msgid; Title Case msgids (2 to 6 words) need a Title Case msgstr except small Portuguese words; sentence case is not forced. |
@@ -342,7 +342,7 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 
 ### Host and operations checks (`stenio hostops`)
 
-Static lints run in `--scope homelab` (as warnings), with `stenio --only <RULE_ID> --path <dir>` and with `stenio hostops lint --path <dir>` (declared severity). Probes are read-only and run on request; they exit 1 on findings and 2 when the input cannot be read. `stenio --explain <RULE_ID>` has the details.
+Static lints run in `--scope homelab` (as warnings, except `SOCKET-NO-AFTER-NETWORK` and `BACKUP-ARTIFACT-VERIFY`, which keep their ERROR there outside mirrored repository checkouts), with `stenio --only <RULE_ID> --path <dir>` and with `stenio hostops lint --path <dir>` (declared severity). Probes are read-only and run on request; they exit 1 on findings and 2 when the input cannot be read. `stenio --explain <RULE_ID>` has the details.
 
 | Rule | Runs as |
 |---|---|
@@ -381,8 +381,8 @@ They run on any `--path` (a directory or one document) and stay silent where the
 | `DOC-ENGLISH-ONLY-CODEBASE` | warn | Portuguese prose under a `Language tier: A` declaration |
 | `DOC-PANEL-LABEL-EXISTS` | error | panel names in client documents |
 | `DOC-PANEL-PARITY` | warn | manual menu and permission tables against the app |
-| `DOC-PDF-COVERS-SOURCE` | warn | `##` headings present in the published HTML and PDF |
-| `DOC-RESEARCH-CITE-CURRENT` | warn | research claims: URL, access date, 180 days |
+| `DOC-PDF-COVERS-SOURCE` | error | `##` headings present in the published HTML and PDF |
+| `DOC-RESEARCH-CITE-CURRENT` | error (no URL or date), warn (stale) | research claims: URL, access date, 180 days |
 | `DOC-OFFSET-SANITY` | error | declared flash size against partition ranges |
 | `LANG-ENGLISH-REQUIRED` | error | new or changed Portuguese in any tree (see below) |
 

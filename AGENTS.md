@@ -238,3 +238,14 @@ Known at release time (measured 2026-11-27 against 4.41.0): SUMAENIMA-HUB `--sco
 gains 13 `DEPLOY-SUCCESS-AFTER-WARN` / `SH-DEPLOY-CONVERGENCE` errors; the fix belongs to that
 repository. `compare-engines` does not count `--scope frappe` errors (their output is `ERROR [..]`),
 so compare that scope by exit code.
+
+## Release 4.43.0 (promotions)
+
+- `DOC-PDF-COVERS-SOURCE` is an ERROR; `DOC-RESEARCH-CITE-CURRENT` is an ERROR without URL or
+  date and a WARNING when the date is older than 180 days.
+- `SOCKET-NO-AFTER-NETWORK` and `BACKUP-ARTIFACT-VERIFY` keep ERROR in the aggregate homelab scope.
+  Mirrored repository checkouts (`<host>/homelab/…`) stay WARNING there: the repository's own scan
+  is the authority.
+- `I18N-NO-UNTRANSLATED-INTERPOLATION` is an ERROR. `FRAPPE-FIELDNAME-COLLIDES-WITH-PROPERTY` is an
+  ERROR in every tier; a DocField-property name can be declared with a reason in
+  `fieldname-shadow-allowlist.txt`, and a dead or reasonless entry is an ERROR.
