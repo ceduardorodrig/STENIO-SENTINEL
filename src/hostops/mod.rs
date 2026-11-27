@@ -14,6 +14,7 @@ use crate::engine::Violation;
 use crate::explain::RuleExplanation;
 use crate::rule::Severity;
 
+mod ports_vs_ss; // GB-013
 
 
 /// One file of a linted tree.
@@ -29,6 +30,7 @@ const LINTS: &[(&str, Lint)] = &[
 ];
 
 pub static EXPLANATIONS: &[RuleExplanation] = &[
+    ports_vs_ss::EXPLAIN,        // GB-013
 ];
 
 const USAGE: &str = "usage: stenio hostops <check> [options]\n  lint --path DIR [--only RULE_ID]";
@@ -41,6 +43,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let rest = &argv[1..];
     match name.as_str() {
         "lint" => lint_cli(rest),
+        "ports" => ports_vs_ss::run_cli(rest),             // GB-013
         _ => {
             eprintln!("unknown check '{name}'\n{USAGE}");
             2
@@ -50,6 +53,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut all = Vec::new();
+    all.extend(ports_vs_ss::self_test_cases()); // GB-013
     all
 }
 
