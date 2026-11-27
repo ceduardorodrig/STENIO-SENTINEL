@@ -23,6 +23,10 @@ mod js_registered;
 mod list_filter_fields;
 #[path = "frappe_desk/po_resolves.rs"]
 mod po_resolves;
+#[path = "frappe_desk/print_css.rs"]
+mod print_css;
+#[path = "frappe_desk/print_grid.rs"]
+mod print_grid;
 #[path = "frappe_desk/report_chart.rs"]
 mod report_chart;
 #[path = "frappe_desk/reqd_messages.rs"]
@@ -102,6 +106,11 @@ const ITEMS: &[Item] = &[
         explain: &version_endpoint::EXPLAIN,
         run: version_endpoint::run,
         cases: version_endpoint::cases,
+    },
+    Item {
+        explain: &print_grid::EXPLAIN,
+        run: print_grid::run,
+        cases: print_grid::cases,
     },
 ];
 
