@@ -1088,7 +1088,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         tag: "frappe",
         summary: "A @frappe.whitelist() function whose body calls .save(), .insert(), .delete(), .db_set(), frappe.delete_doc(), frappe.db.set_value() or frappe.db.delete() and declares no `methods` (GB-052). Reads the decorator over several lines and the `@whitelist` alias; a pure reader without methods is not accused. A write hidden behind a helper function is not seen.",
         rationale: "Without `methods` Frappe accepts GET, POST, PUT and DELETE (frappe/__init__.py:453-454), so a link, a prefetch or an <img> tag can change state. Audit 2026-11-05 found nine of 31 endpoints in that state, one of them (offboard_member) deactivating an account; FRAPPE-WHITELIST-PERMISSION returned 0 because it only matches a marker substring in the body. A gate is a path, not a statement (agent-global-rules.md 12): the verbs are read from the decorator by a machine.",
-        bad_example: "@frappe.whitelist()\ndef offboard_member(member):\n    doc = frappe.get_doc(\"Member\", member)\n    doc.save()\n# WARN [FRAPPE-WHITELIST-METHODS] changes state (`.save()` at line 4) but declares no `methods`",
+        bad_example: "@frappe.whitelist()\ndef offboard_member(member):\n    doc = frappe.get_doc(\"Member\", member)\n    doc.save()\n# ERROR [FRAPPE-WHITELIST-METHODS] changes state (`.save()` at line 4) but declares no `methods`",
         good_example: "@frappe.whitelist(methods=[\"POST\"])\ndef offboard_member(member):\n    ...",
         remediation: "Declare methods=[\"POST\"] on the decorator.",
     },
