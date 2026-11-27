@@ -43,6 +43,7 @@ mod mcp_server;
 mod mesh;
 mod migrations;
 mod opportunity;
+mod parity;
 mod ports;
 mod pre_release;
 mod reconcile;
@@ -704,6 +705,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(hook_fixtures::self_test_cases())
         .chain(shell::self_test_cases())
         .chain(lockparity::self_test_cases())
+        .chain(parity::self_test_cases())
         .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
@@ -2065,6 +2067,8 @@ fn main() -> Result<()> {
         argv.push("--static-only".to_string());
     }
     match argv.get(1).map(String::as_str) {
+        Some("binary-parity") => std::process::exit(parity::run_binary_parity(&argv[1..])),
+        Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
