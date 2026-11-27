@@ -30,6 +30,7 @@ mod proxy_env; // GB-200
 mod session_orphan; // GB-235
 mod shrink_guard; // GB-236
 mod socket_order; // GB-171
+mod vdisplay; // GB-253
 
 pub use build_age::stale_build_violation; // GB-238
 
@@ -72,6 +73,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     session_orphan::EXPLAIN,     // GB-235
     shrink_guard::EXPLAIN,       // GB-236
     socket_order::EXPLAIN,       // GB-171
+    vdisplay::EXPLAIN,           // GB-253
 ];
 
 const USAGE: &str = "usage: stenio hostops <check> [options]\n  lint --path DIR [--only RULE_ID]";
@@ -91,6 +93,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         "kuma" => kuma::run_cli(rest),                     // GB-014 GB-015
         "onfailure" => onfailure::run_cli(rest),           // GB-016
         "ports" => ports_vs_ss::run_cli(rest),             // GB-013
+        "vdisplay" => vdisplay::run_cli(rest),             // GB-253
         _ => {
             eprintln!("unknown check '{name}'\n{USAGE}");
             2
@@ -116,6 +119,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(session_orphan::self_test_cases()); // GB-235
     all.extend(shrink_guard::self_test_cases()); // GB-236
     all.extend(socket_order::self_test_cases()); // GB-171
+    all.extend(vdisplay::self_test_cases()); // GB-253
     all
 }
 
