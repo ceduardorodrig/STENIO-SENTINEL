@@ -2181,7 +2181,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Modo Aprendizado: Aprender nova regra e persistir no steniocheck.toml ──
+    // ── Learn mode: learn a new rule and persist it in steniocheck.toml ──
     if let Some(ref payload) = args.learn {
         learner::handle_learn(&args.path, payload)?;
         return Ok(());
