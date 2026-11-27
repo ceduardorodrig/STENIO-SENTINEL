@@ -7,6 +7,7 @@
 
 mod docperm_row;
 mod permlevel_row;
+mod permlevel_write;
 
 use std::collections::BTreeSet;
 use std::fs;

@@ -61,7 +61,9 @@ fn cases() -> Vec<Case> {
         files: vec![doctype_file(
             "Member",
             "",
-            &format!(r#"{{"fieldname":"email","fieldtype":"Data","permlevel":1,"read_only":{ro}}}"#),
+            &format!(
+                r#"{{"fieldname":"email","fieldtype":"Data","permlevel":1,"read_only":{ro}}}"#
+            ),
             &format!(r#"{{"role":"A","read":1,"write":1}},{level_row}"#),
         )],
         validated: &[],
