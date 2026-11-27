@@ -28,6 +28,7 @@ mod mtu_budget; // GB-254
 mod onfailure; // GB-016
 mod ports_vs_ss; // GB-013
 mod proxy_env; // GB-200
+mod router_identity; // GB-256
 mod session_orphan; // GB-235
 mod shrink_guard; // GB-236
 mod socket_order; // GB-171
@@ -51,6 +52,7 @@ const LINTS: &[(&str, Lint)] = &[
     (lua_load_api::RULE_ID, lua_load_api::lint),             // GB-234
     (lua_shutdown::RULE_ID, lua_shutdown::lint),             // GB-239
     (proxy_env::RULE_ID, proxy_env::lint),                   // GB-200
+    (router_identity::RULE_ID, router_identity::lint),       // GB-256
     (session_orphan::RULE_ID, session_orphan::lint),         // GB-235
     (shrink_guard::RULE_ID, shrink_guard::lint),             // GB-236
     (socket_order::RULE_ID, socket_order::lint),             // GB-171
@@ -72,6 +74,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     onfailure::EXPLAIN,          // GB-016
     ports_vs_ss::EXPLAIN,        // GB-013
     proxy_env::EXPLAIN,          // GB-200
+    router_identity::EXPLAIN,    // GB-256
     session_orphan::EXPLAIN,     // GB-235
     shrink_guard::EXPLAIN,       // GB-236
     socket_order::EXPLAIN,       // GB-171
@@ -120,6 +123,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     all.extend(onfailure::self_test_cases()); // GB-016
     all.extend(ports_vs_ss::self_test_cases()); // GB-013
     all.extend(proxy_env::self_test_cases()); // GB-200
+    all.extend(router_identity::self_test_cases()); // GB-256
     all.extend(session_orphan::self_test_cases()); // GB-235
     all.extend(shrink_guard::self_test_cases()); // GB-236
     all.extend(socket_order::self_test_cases()); // GB-171
