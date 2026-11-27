@@ -5203,7 +5203,7 @@ fn rel_to_fixtures(path: &str) -> bool {
 // that stores rows about a PERSON and lets one of these roles `read` or `write` needs a row-level
 // scope in `hooks.py`. Adding a role here is a policy edit, deliberate and reviewed in the
 // repository — the same way `mnemocine/network/gpu-consumers.txt` registers a GPU consumer.
-const BROAD_ROLES: &[&str] = &[
+pub(crate) const BROAD_ROLES: &[&str] = &[
     "Miracena Member",
     "Miracena Freelancer",
     "Desk User",

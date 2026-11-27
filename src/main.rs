@@ -24,6 +24,7 @@ mod entrypoints;
 mod explain;
 mod frappe;
 mod frappe_drift;
+mod frappe_perm;
 mod frappe_whitelist;
 mod frontend;
 mod gaming;
@@ -695,6 +696,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(frappe_drift::self_test_cases())
         .chain(secrets_guard::self_test_cases())
         .chain(frappe_whitelist::self_test_cases())
+        .chain(frappe_perm::self_test_cases())
         .chain(release_order::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
@@ -1963,11 +1965,14 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     let fc = cfg.frappe.clone().unwrap_or_default();
     if args.list {
-        for (id, name, sev) in frappe::RULES {
+        let perm = frappe_perm::RULES
+            .iter()
+            .map(|r| (r.id, r.name, r.severity));
+        for (id, name, sev) in frappe::RULES.iter().copied().chain(perm) {
             println!(
                 "{:<30} {:<6} {}",
                 id,
-                if *sev == Severity::Error {
+                if sev == Severity::Error {
                     "ERROR"
                 } else {
                     "WARN"
@@ -2006,8 +2011,9 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
                 v.message
             );
         }
-        for (id, _, _) in frappe::RULES {
-            let n = violations.iter().filter(|v| v.rule_id == *id).count();
+        let perm = frappe_perm::RULES.iter().map(|r| r.id);
+        for id in frappe::RULES.iter().map(|r| r.0).chain(perm) {
+            let n = violations.iter().filter(|v| v.rule_id == id).count();
             println!("  {:<30} {}", id, n);
         }
     }
