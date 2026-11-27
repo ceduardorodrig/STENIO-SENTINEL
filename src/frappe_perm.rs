@@ -295,11 +295,41 @@ fn wired_into_scope() -> bool {
     found.is_ok_and(|v| v.iter().any(|x| x.rule_id == "FRAPPE-DOCPERM-ROW"))
 }
 
+/// GB-056: both writer-verb rules block, with no list and with a list wider than POST.
+fn writer_verbs_are_errors() -> bool {
+    let py = "@frappe.whitelist()\ndef a(m):\n    m.save()\n\n@frappe.whitelist(methods=[\"GET\", \"POST\"])\ndef b(m):\n    m.delete()\n";
+    let mut files = vec![("demoapp/api.py".to_string(), py.to_string())];
+    files.push(("demoapp/hooks.py".into(), String::new()));
+    let Some(root) = crate::frappe::write_fixture("perm-verbs", &files) else {
+        return false;
+    };
+    let found = crate::frappe::audit(&root, &crate::frappe::fixture_config());
+    let _ = fs::remove_dir_all(root);
+    found.is_ok_and(|v| {
+        ["FRAPPE-WHITELIST-METHODS", "FRAPPE-WHITELIST-WRITE-POST"]
+            .iter()
+            .all(|id| {
+                v.iter()
+                    .any(|x| x.rule_id == *id && x.severity == Severity::Error)
+            })
+    })
+}
+
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let mut out = whitelist_guest::helper_cases();
     out.push((
         "frappe permission rules are wired into the scope audit".to_string(),
         wired_into_scope(),
+    ));
+    out.push((
+        "FRAPPE-WHITELIST-WRITE-POST: a writer not limited to POST is an ERROR".to_string(),
+        writer_verbs_are_errors(),
+    ));
+    out.push((
+        "every permission rule answers --explain".to_string(),
+        RULES
+            .iter()
+            .all(|r| crate::explain::get_explanation(r.id).is_some_and(|e| e.id == r.id)),
     ));
     for (r, rule) in RULES.iter().enumerate() {
         let cases = (rule.cases)();
