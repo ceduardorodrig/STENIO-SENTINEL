@@ -157,12 +157,12 @@ pub const RULES: &[(&str, &str, Severity)] = &[
     (
         "FRAPPE-WHITELIST-METHODS",
         "State-Changing Endpoint Without A Methods List",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-WRITE-POST",
         "State-Changing Endpoint Reachable By A Verb Other Than POST",
-        Severity::Warning,
+        Severity::Error,
     ),
     (
         "FRAPPE-WHITELIST-NO-CALLER",

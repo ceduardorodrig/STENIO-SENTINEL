@@ -1084,7 +1084,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "FRAPPE-WHITELIST-METHODS",
         name: "State-Changing Endpoint Without A Methods List",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "frappe",
         summary: "A @frappe.whitelist() function whose body calls .save(), .insert(), .delete(), .db_set(), frappe.delete_doc(), frappe.db.set_value() or frappe.db.delete() and declares no `methods` (GB-052). Reads the decorator over several lines and the `@whitelist` alias; a pure reader without methods is not accused. A write hidden behind a helper function is not seen.",
         rationale: "Without `methods` Frappe accepts GET, POST, PUT and DELETE (frappe/__init__.py:453-454), so a link, a prefetch or an <img> tag can change state. Audit 2026-11-05 found nine of 31 endpoints in that state, one of them (offboard_member) deactivating an account; FRAPPE-WHITELIST-PERMISSION returned 0 because it only matches a marker substring in the body. A gate is a path, not a statement (agent-global-rules.md 12): the verbs are read from the decorator by a machine.",
@@ -1095,7 +1095,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
     RuleExplanation {
         id: "FRAPPE-WHITELIST-WRITE-POST",
         name: "State-Changing Endpoint Reachable By A Verb Other Than POST",
-        severity: "WARN",
+        severity: "ERROR",
         tag: "frappe",
         summary: "Companion of FRAPPE-WHITELIST-METHODS (GB-056): the writer declares `methods` explicitly but the list holds a verb other than POST (for example [\"GET\", \"POST\"] or [\"PUT\"]). Together the two rules enforce: a state-changing whitelisted function is `methods=[\"POST\"]` exactly. A `methods` expression the reader cannot resolve (a variable) is left alone.",
         rationale: "Same incident class as FRAPPE-WHITELIST-METHODS (nine writers reachable by GET, 2026-11-05): widening the list to make a button work re-opens the hole with the rule satisfied by the letter. The split keeps each message actionable: no list at all, versus a list that is too wide.",
@@ -1591,6 +1591,7 @@ pub fn get_explanation(rule_id: &str) -> Option<&'static RuleExplanation> {
     };
     EXPLANATIONS
         .iter()
+        .chain(crate::frappe_perm::explanations())
         .find(|e| e.id.eq_ignore_ascii_case(wanted))
 }
 
