@@ -713,7 +713,7 @@ pub fn audit_compose_dir(root: &Path, gpu_consumers: &[String]) -> InfraReport {
 /// True when an assignment key names a credential: `*_PASSWORD`, `*_PASS`, `*_PWD`,
 /// `*_SECRET`, `*_SECRET_KEY`, `*_API_KEY`, `*_ACCESS_KEY`, `*PRIVATE_KEY`,
 /// `*_AUTHKEY`, `*_AUTH_KEY`, `*_CREDENTIALS`, `*_TOKEN` and the bare `PASSWORD`/`SECRET`.
-fn key_looks_secret(key: &str) -> bool {
+pub(crate) fn key_looks_secret(key: &str) -> bool {
     let k = key.to_ascii_uppercase();
     [
         "PASSWORD",
@@ -1314,7 +1314,7 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                         severity: Severity::Error,
                         file_path: path_str.clone(),
                         line_number: 1,
-                        snippet: content.lines().next().unwrap_or("").to_string(),
+                        snippet: mask_snippet(content.lines().next().unwrap_or("")),
                         message: "File with .enc extension does not contain SOPS or Age encrypted header.".to_string(),
                         suggestion: Some("Encrypt with: sops --encrypt --age <KEY> file > file.enc.yaml".to_string()),
                     });
@@ -1513,6 +1513,11 @@ pub fn audit_infrastructure(root: &Path, code_debt: bool) -> InfraReport {
                 suggestion: Some("Synchronize production immediately by executing: stenio --deploy front".to_string()),
             });
         }
+    }
+
+    // A bundle comparison means nothing when the local build predates its sources (GB-238).
+    if let Some(fe_dir) = crate::deploy::find_frontend_dir(root) {
+        violations.extend(crate::hostops::stale_build_violation(&fe_dir));
     }
 
     // ── 8. Release Integrity Audit (REL-PKGBUILD-SYNC & REL-TAG-DRIFT) ─────

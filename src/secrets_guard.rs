@@ -5,9 +5,15 @@
 //! credential-shaped path is tracked, or when a credential-shaped / secret-carrying path was
 //! committed before its `.gitignore` rule. SECURITY: the report names paths, line numbers and rule
 //! ids only; no value, no snippet, no key name is ever printed or returned.
+//!
+//! Baseline entries are `path` (accepts any number of findings, reported as unbounded) or
+//! `path count=N` (accepts at most N findings, so a new secret added to an already accepted file
+//! fails). `--history` also judges every commit of the repository (see [`history`]).
+
+mod history;
 
 use clap::Parser;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,11 +33,36 @@ struct GuardArgs {
     repo: PathBuf,
     #[arg(
         long,
-        help = "File with one repo-relative path per line (# comments): paths whose SEC-PLAINTEXT-SECRET findings are accepted"
+        help = "File with one repo-relative path per line (# comments), optionally `path count=N`: accepted SEC-PLAINTEXT-SECRET findings"
     )]
     baseline: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Fail on a baseline entry without `count=N` (it would accept any new secret in that file)"
+    )]
+    require_counts: bool,
+    #[arg(long, help = "Also judge every commit of `git log --all`")]
+    history: bool,
+    #[arg(
+        long,
+        requires = "history",
+        help = "File with one accepted `commit:path` history finding per line (# comments)"
+    )]
+    history_baseline: Option<PathBuf>,
     #[arg(long, help = "Scope label; only `mirror` is accepted")]
     scope: Option<String>,
+}
+
+/// Accepted findings per path; `None` means "any number" (a bare path entry).
+pub type Baseline = BTreeMap<String, Option<usize>>;
+
+fn baseline_entry(line: &str) -> (String, Option<usize>) {
+    if let Some((path, n)) = line.rsplit_once(" count=")
+        && let Ok(n) = n.trim().parse::<usize>()
+    {
+        return (path.trim_end().to_string(), Some(n));
+    }
+    (line.to_string(), None)
 }
 
 /// Outcome of one run; every string is already free of values.
@@ -90,13 +121,20 @@ fn git_list(repo: &Path, args: &[&str]) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn read_baseline(path: &Path) -> Result<BTreeSet<String>, String> {
+fn read_entries(path: &Path) -> Result<Vec<String>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("baseline: {e}"))?;
     Ok(text
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(str::to_string)
+        .collect())
+}
+
+fn read_baseline(path: &Path) -> Result<Baseline, String> {
+    Ok(read_entries(path)?
+        .iter()
+        .map(|l| baseline_entry(l))
         .collect())
 }
 
@@ -128,7 +166,7 @@ fn finding_lines(repo: &Path, rel: &str) -> Vec<usize> {
         .collect()
 }
 
-pub fn evaluate(repo: &Path, baseline: &BTreeSet<String>) -> Result<GuardReport, String> {
+pub fn evaluate(repo: &Path, baseline: &Baseline) -> Result<GuardReport, String> {
     let tracked = git_list(repo, &["ls-files", "-z"])?;
     let ignored = git_list(repo, &["ls-files", "-ci", "--exclude-standard", "-z"])?;
     let mut lines = Vec::new();
@@ -141,21 +179,42 @@ pub fn evaluate(repo: &Path, baseline: &BTreeSet<String>) -> Result<GuardReport,
             findings.insert(rel.clone(), hits);
         }
     }
+    let accepted = |rel: &str, n: usize| match baseline.get(rel) {
+        Some(Some(max)) => n <= *max,
+        Some(None) => true,
+        None => false,
+    };
     for (rel, hits) in &findings {
-        if !baseline.contains(rel) {
-            for l in hits {
-                fails += 1;
-                lines.push(format!(
-                    "FAIL (a) SEC-PLAINTEXT-SECRET not in baseline: {rel}:{l}"
-                ));
-            }
+        if accepted(rel, hits.len()) {
+            continue;
+        }
+        let why = match baseline.get(rel) {
+            Some(Some(max)) => format!("over the baseline count={max}"),
+            _ => "not in baseline".to_string(),
+        };
+        for l in hits {
+            fails += 1;
+            lines.push(format!("FAIL (a) SEC-PLAINTEXT-SECRET {why}: {rel}:{l}"));
+        }
+    }
+    for (rel, max) in baseline {
+        let now = findings.get(rel).map_or(0, Vec::len);
+        match max {
+            _ if now == 0 => lines.push(format!("info baseline stale, remove the entry: {rel}")),
+            Some(m) if now < *m => lines.push(format!(
+                "info baseline loose, tighten to count={now}: {rel}"
+            )),
+            None => lines.push(format!(
+                "info baseline unbounded, pin it with count={now}: {rel}"
+            )),
+            Some(_) => {}
         }
     }
     let ignored_set: BTreeSet<&String> = ignored.iter().collect();
     let mut harmless = 0usize;
     for rel in &ignored {
         let cred = credential_shaped_name(&base_name(rel));
-        let leaks = findings.contains_key(rel) && !baseline.contains(rel);
+        let leaks = findings.get(rel).is_some_and(|h| !accepted(rel, h.len()));
         if cred || leaks {
             fails += 1;
             lines.push(format!(
@@ -200,15 +259,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         eprintln!("stenio: secrets-guard --scope accepts only `mirror`");
         return 2;
     }
-    let baseline = match args.baseline.as_deref().map(read_baseline) {
-        Some(Ok(b)) => b,
-        Some(Err(e)) => {
-            eprintln!("stenio: secrets-guard {e}");
-            return 2;
-        }
-        None => BTreeSet::new(),
-    };
-    match evaluate(&args.repo, &baseline) {
+    match run(&args) {
         Ok(r) => {
             for l in &r.lines {
                 println!("{l}");
@@ -220,6 +271,54 @@ pub fn run_cli(argv: &[String]) -> i32 {
             2
         }
     }
+}
+
+/// Tree gate, then the optional strict-count and history parts, with one final verdict line.
+fn run(args: &GuardArgs) -> Result<GuardReport, String> {
+    let baseline = args
+        .baseline
+        .as_deref()
+        .map(read_baseline)
+        .transpose()?
+        .unwrap_or_default();
+    let mut report = evaluate(&args.repo, &baseline)?;
+    let summary = report.lines.pop().unwrap_or_default();
+    let mut extra = 0usize;
+    if args.require_counts {
+        for (rel, max) in &baseline {
+            if max.is_none() {
+                extra += 1;
+                report.lines.push(format!(
+                    "FAIL (d) baseline entry without count=N accepts any new secret: {rel}"
+                ));
+            }
+        }
+    }
+    if args.history {
+        let accepted = args
+            .history_baseline
+            .as_deref()
+            .map(read_entries)
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let (lines, fails) = history::evaluate(&args.repo, &accepted)?;
+        report.lines.extend(lines);
+        extra += fails;
+    }
+    let total = report.fails + extra;
+    let verdict = if total == 0 { "PASS" } else { "FAIL" };
+    let summary = summary
+        .replacen(if report.fails == 0 { "PASS" } else { "FAIL" }, verdict, 1)
+        .replacen(
+            &format!("fails={}", report.fails),
+            &format!("fails={total}"),
+            1,
+        );
+    report.lines.push(summary);
+    report.fails = total;
+    Ok(report)
 }
 
 // ── self-test fixtures: every case pairs a red (defect) with a green (good) tree ──────────────
@@ -258,8 +357,8 @@ fn fixture(tag: &str, files: &[(&str, &str)], ignore_after: Option<&str>) -> Pat
     dir
 }
 
-fn run(dir: &Path, baseline: &[&str]) -> GuardReport {
-    let b = baseline.iter().map(|s| s.to_string()).collect();
+fn judge(dir: &Path, baseline: &[&str]) -> GuardReport {
+    let b = baseline.iter().map(|s| baseline_entry(s)).collect();
     let r = evaluate(dir, &b).unwrap_or(GuardReport {
         lines: vec!["error".to_string()],
         fails: 99,
@@ -282,9 +381,9 @@ fn leaks_value(r: &GuardReport) -> bool {
 
 pub fn self_test_cases() -> Vec<(String, bool)> {
     let secret = format!("DB_PASS={FAKE}\n");
-    let r1 = run(&fixture("a", &[("app.env", &secret)], None), &[]);
-    let r2 = run(&fixture("b", &[("app.env", &secret)], None), &["app.env"]);
-    let r3 = run(
+    let r1 = judge(&fixture("a", &[("app.env", &secret)], None), &[]);
+    let r2 = judge(&fixture("b", &[("app.env", &secret)], None), &["app.env"]);
+    let r3 = judge(
         &fixture(
             "c",
             &[("leak.conf", &secret), ("ok.txt", "hello\n")],
@@ -292,11 +391,11 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         &[],
     );
-    let r4 = run(
+    let r4 = judge(
         &fixture("d", &[("README.md", "DB_PASS=${DB_PASS}\n")], None),
         &[],
     );
-    let r5 = run(
+    let r5 = judge(
         &fixture(
             "e",
             &[("logo.png", "PNG\n"), ("a.txt", "x\n")],
@@ -304,13 +403,113 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         &[],
     );
-    let r6 = run(&fixture("f", &[("app.env", "A=1\n")], Some("app.env")), &[]);
-    let r7 = run(
+    let r6 = judge(&fixture("f", &[("app.env", "A=1\n")], Some("app.env")), &[]);
+    let r7 = judge(
         &fixture("g", &[("app.env.example", "A=1\n"), ("k.pem", "x\n")], None),
         &[],
     );
-    let outputs_clean = !leaks_value(&r1) && !leaks_value(&r2) && !leaks_value(&r3);
+    // Counted baseline: the accepted file is green, one more secret in the same file is red.
+    let two = format!("DB_PASS={FAKE}\nAPI_TOKEN={FAKE}\n");
+    let c1 = judge(
+        &fixture("h", &[("a.conf", &secret)], None),
+        &["a.conf count=1"],
+    );
+    let c2 = judge(
+        &fixture("i", &[("a.conf", &two)], None),
+        &["a.conf count=1"],
+    );
+    let c3 = judge(&fixture("j", &[("a.conf", &two)], None), &["a.conf"]);
+    // History: a secret removed from the tree stays in the log until its commit:path is accepted.
+    let hist = fixture("k", &[("old.conf", &secret), ("x.env", "A=1\n")], None);
+    let _ = std::fs::remove_file(hist.join("old.conf"));
+    let _ = std::fs::remove_file(hist.join("x.env"));
+    git(&hist, &["add", "-A"]);
+    git(&hist, &["commit", "-q", "-m", "rm"]);
+    let args = |extra: &[String]| {
+        let mut v = vec![
+            "g".to_string(),
+            "--repo".to_string(),
+            hist.display().to_string(),
+        ];
+        v.extend_from_slice(extra);
+        GuardArgs::try_parse_from(v).ok().and_then(|a| run(&a).ok())
+    };
+    let tree_only = args(&[]);
+    let with_history = args(&["--history".to_string()]);
+    let accept: Vec<String> = with_history
+        .iter()
+        .flat_map(|r| &r.lines)
+        .filter(|l| l.starts_with("FAIL (h)"))
+        .filter_map(|l| {
+            l.split(": ")
+                .nth(1)
+                .and_then(|t| t.split(" lines=").next())
+                .map(str::to_string)
+        })
+        .collect();
+    let list = hist.join("history.accept");
+    let _ = std::fs::write(&list, accept.join("\n"));
+    let accepted = args(&[
+        "--history".to_string(),
+        "--history-baseline".to_string(),
+        list.display().to_string(),
+    ]);
+    let strict_list = hist.join("tree.accept");
+    let _ = std::fs::write(&strict_list, "gone.conf\n");
+    let strict = args(&[
+        "--baseline".to_string(),
+        strict_list.display().to_string(),
+        "--require-counts".to_string(),
+    ]);
+    let _ = std::fs::remove_dir_all(&hist);
+    let outputs_clean = !leaks_value(&r1)
+        && !leaks_value(&r2)
+        && !leaks_value(&r3)
+        && !leaks_value(&c2)
+        && with_history.as_ref().is_some_and(|r| !leaks_value(r));
     vec![
+        (
+            "secrets-guard: counted baseline accepts exactly N".to_string(),
+            c1.fails == 0,
+        ),
+        (
+            "secrets-guard: mutation, new secret in a baselined file fails".to_string(),
+            c2.fails == 2 && has(&c2, "over the baseline count=1"),
+        ),
+        (
+            "secrets-guard: bare baseline entry still accepts, reported unbounded".to_string(),
+            c3.fails == 0 && has(&c3, "unbounded, pin it with count=2"),
+        ),
+        (
+            "secrets-guard: deleted secret invisible without --history".to_string(),
+            tree_only.as_ref().is_some_and(|r| r.fails == 0),
+        ),
+        (
+            "secrets-guard: mutation, --history fails on deleted secret and env path".to_string(),
+            with_history.as_ref().is_some_and(|r| {
+                r.fails == 2
+                    && has(r, "added in history")
+                    && has(r, "credential-shaped path in history")
+                    && r.lines
+                        .last()
+                        .is_some_and(|l| l.contains("FAIL secrets-guard"))
+            }),
+        ),
+        (
+            "secrets-guard: accepted history passes".to_string(),
+            accepted.as_ref().is_some_and(|r| {
+                r.fails == 0
+                    && r.lines
+                        .last()
+                        .is_some_and(|l| l.contains("PASS secrets-guard"))
+            }),
+        ),
+        (
+            "secrets-guard: --require-counts fails a bare entry".to_string(),
+            strict
+                .as_ref()
+                .is_some_and(|r| r.fails == 1 && has(r, "FAIL (d)")),
+        ),
         (
             "secrets-guard: secret in app.env fails (a)+(c)".to_string(),
             r1.fails > 0 && has(&r1, "(a)") && has(&r1, "(c)") && has(&r1, "app.env:1"),

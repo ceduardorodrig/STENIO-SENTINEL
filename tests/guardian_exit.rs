@@ -13,6 +13,20 @@ impl Drop for Tree {
     }
 }
 
+/// Recursive copy: anchored modules may live in subdirectories.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &to.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 /// A copy of the engine's own `src/` directory.
 fn copy_of_sources(label: &str) -> std::io::Result<Tree> {
     let tree =
@@ -20,12 +34,7 @@ fn copy_of_sources(label: &str) -> std::io::Result<Tree> {
     let _ = fs::remove_dir_all(&tree.0);
     let to = tree.0.join("src");
     fs::create_dir_all(&to)?;
-    for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            fs::copy(entry.path(), to.join(entry.file_name()))?;
-        }
-    }
+    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &to)?;
     Ok(tree)
 }
 

@@ -91,10 +91,20 @@ pub struct CustomRuleConfig {
     pub path_exclude: Option<Vec<String>>,
 }
 
+/// One `[[frappe.published_content]]` entry: a Single field whose source of truth is a packaged file.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct PublishedContent {
+    pub doctype: String,
+    pub field: String,
+    pub file: String,
+}
+
 /// `[frappe]` table: static rules over a Frappe app tree (`--scope frappe`) and the
 /// post-deploy checks of `stenio verify-release`. No project name lives in the engine.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct FrappeConfig {
+    /// Documents `verify-release` compares between the live site and the running image (GB-149).
+    pub published_content: Option<Vec<PublishedContent>>,
     /// App package directory name (the folder with `hooks.py`); inferred when absent.
     pub app: Option<String>,
     /// File holding the registered test list (absolute, or relative to the repo root).

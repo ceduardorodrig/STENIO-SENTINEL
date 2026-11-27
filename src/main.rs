@@ -25,6 +25,7 @@ mod entrypoints;
 mod explain;
 mod frappe;
 mod frappe_drift;
+mod frappe_perm;
 mod frappe_whitelist;
 mod frontend;
 mod gaming;
@@ -35,23 +36,29 @@ mod guardian;
 mod health;
 mod homelab;
 mod hook_fixtures;
+mod hostops;
 mod i18n;
 mod infra;
 mod learner;
+mod lockparity;
 mod mcp;
 mod mcp_server;
 mod mesh;
 mod migrations;
 mod opportunity;
+mod parity;
 mod ports;
 mod pre_release;
 mod reconcile;
 mod release_engine;
+mod release_file_gate;
 mod release_order;
 pub mod remote;
 mod rule;
 mod secrets_guard;
+mod secrets_suite;
 mod semantic;
+mod shell;
 mod sweep;
 #[cfg(test)]
 mod testkit;
@@ -86,7 +93,7 @@ use vault::audit_vault;
     author = "Sumænimá Platform",
     version = env!("CARGO_PKG_VERSION"),
     about = "StenioSentinel — Universal Governance & Homelab Engine in Rust",
-    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  preflight         Alias of --pre-release --static-only"
+    after_help = "Subcommands:\n  opportunity add   Log a missing rule as a formatted GB backlog row (backlog-method.md section 9)\n                    e.g. stenio opportunity add --title <RULE> --evidence <...> --desired <...>\n                         --acceptance <...> --origin <agent, harness> [--dry-run]\n  sweep             Red runs, red PR checks, alerts without a PR and conflicting lockfile PRs across the gh account and every org (needs gh)\n  compare-engines   Old vs new engine over the owners' repos with each repo's CI scope; lists new ERROR lines (needs gh)\n  backlog          Alias of --backlog (stenio backlog --next-id GB)\n  backlog close     Move rows to backlog-archive.md and drop their ids from every pending: list\n  preflight         Alias of --pre-release --static-only"
 )]
 struct Args {
     #[arg(
@@ -695,12 +702,19 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(verify_host::self_test_cases())
         .chain(frappe_drift::self_test_cases())
         .chain(secrets_guard::self_test_cases())
+        .chain(secrets_suite::self_test_cases())
         .chain(frappe_whitelist::self_test_cases())
+        .chain(frappe_perm::self_test_cases())
         .chain(release_order::self_test_cases())
+        .chain(release_file_gate::self_test_cases())
         .chain(release_engine::self_test_cases())
         .chain(entrypoints::self_test_cases())
         .chain(dependabot::self_test_cases())
         .chain(hook_fixtures::self_test_cases())
+        .chain(hostops::self_test_cases())
+        .chain(shell::self_test_cases())
+        .chain(lockparity::self_test_cases())
+        .chain(parity::self_test_cases())
         .chain(ci::self_test_cases())
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
@@ -1966,11 +1980,11 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
 fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     let fc = cfg.frappe.clone().unwrap_or_default();
     if args.list {
-        for (id, name, sev) in frappe::RULES {
+        for (id, name, sev) in frappe::rule_table() {
             println!(
                 "{:<30} {:<6} {}",
                 id,
-                if *sev == Severity::Error {
+                if sev == Severity::Error {
                     "ERROR"
                 } else {
                     "WARN"
@@ -1981,6 +1995,20 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
         return 0;
     }
     baseline::print_banner("StenioSentinel - scope frappe");
+    if args.fix {
+        match frappe::desk::fix::apply(&args.path, &fc) {
+            Ok(changes) => {
+                for line in &changes {
+                    println!("{} {line}", "FIXED".green().bold());
+                }
+                println!("frappe fix: {} change(s)", changes.len());
+            }
+            Err(e) => {
+                eprintln!("{} {}", "ERROR".red().bold(), e);
+                return 2;
+            }
+        }
+    }
     let violations = match frappe::audit(&args.path, &fc) {
         Ok(v) => v,
         Err(e) => {
@@ -2009,7 +2037,7 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
                 v.message
             );
         }
-        for (id, _, _) in frappe::RULES {
+        for (id, _, _) in frappe::rule_table() {
             let n = violations.iter().filter(|v| v.rule_id == *id).count();
             println!("  {:<30} {}", id, n);
         }
@@ -2026,8 +2054,20 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
     i32::from(errors > 0)
 }
 
+/// The linked queues are audited here only when no homelab audit already covers them.
+fn should_audit_queues(vault: bool, homelab: bool, tag: Option<&str>) -> bool {
+    vault && !homelab && tag.is_none_or(|t| t == "doc")
+}
+
 fn main() -> Result<()> {
     let mut argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("backlog")
+        && argv.get(2).map(String::as_str) == Some("close")
+    {
+        let mut rest = vec!["stenio backlog close".to_string()];
+        rest.extend_from_slice(&argv[3..]);
+        std::process::exit(backlog::close::run_cli(&rest))
+    }
     if argv.get(1).map(String::as_str) == Some("backlog") {
         argv[1] = "--backlog".to_string(); // `stenio backlog --next-id MB`
         // GB-031: the documented subcommand form defaults --path to the vault root, so it works
@@ -2045,9 +2085,15 @@ fn main() -> Result<()> {
         argv[1] = "pre-release".to_string(); // `stenio preflight --repo R` = `pre-release --static-only`
         argv.push("--static-only".to_string());
     }
+    if let Some(code) = secrets_suite::dispatch(&argv) {
+        std::process::exit(code);
+    }
     match argv.get(1).map(String::as_str) {
+        Some("binary-parity") => std::process::exit(parity::run_binary_parity(&argv[1..])),
+        Some("drift") => std::process::exit(parity::run_drift(&argv[1..])),
         Some("verify-release") => std::process::exit(verify_release::run_cli(&argv[1..])),
         Some("verify-host") => std::process::exit(verify_host::run_cli(&argv[1..])),
+        Some("hostops") => std::process::exit(hostops::run_cli(&argv[2..])),
         Some("frappe-drift") => std::process::exit(frappe_drift::run_cli(&argv[1..])),
         Some("secrets-guard") => {
             let mut rest = vec!["stenio secrets-guard".to_string()];
@@ -2081,6 +2127,12 @@ fn main() -> Result<()> {
         _ => {}
     }
     let args = Args::parse_from(&argv);
+    // GB-165/GB-196: `--path release.sh` alone judges the order of that one script.
+    if argv.len() <= 3
+        && let Some(code) = release_file_gate::run_path(&args.path)
+    {
+        std::process::exit(code);
+    }
 
     // ── Modo Deploy Automatizado (--deploy [target]) ────────────────────────
     if let Some(ref target) = args.deploy {
@@ -2562,7 +2614,7 @@ fn main() -> Result<()> {
                 .unwrap_or(false));
     let should_audit_doc = (is_hub_active || is_homelab_active || is_vault_active)
         && (tag_lower.as_deref() == Some("doc") || tag_lower.is_none())
-        && (only_rule.is_none() || only_rule.map(|s| s.starts_with("DOC-")).unwrap_or(false));
+        && only_rule.is_none_or(|s| s.starts_with("DOC-") || s.contains("BACKLOG-"));
     let should_audit_mig = is_hub_active
         && (tag_lower.as_deref() == Some("db")
             || tag_lower.as_deref() == Some("migrations")
@@ -2765,16 +2817,52 @@ fn main() -> Result<()> {
         }
     }
 
+    // ── Linked queues under the vault scope, and a queue file named by --path ──
+    // The homelab subsystem already audits the linked queues; `--scope vault` alone did not, so a
+    // stale `pending:` link (GB-252) or a foreign row (GB-251) was invisible there.
+    let mut queue_findings = Vec::new();
+    if should_audit_queues(is_vault_active, is_homelab_active, tag_lower.as_deref()) {
+        queue_findings.extend(audit_backlog(&args.path).violations);
+    }
+    if args.path.is_file() && tag_lower.as_deref().is_none_or(|t| t == "doc") {
+        queue_findings.extend(backlog::integrity::audit_file(&args.path));
+    }
+    for v in queue_findings {
+        if only_rule.is_none_or(|r| r.eq_ignore_ascii_case(&v.rule_id)) {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
     // ── Harness entry points (AGENT-ENTRYPOINT-RULES, GB-033) ──────────────
     let should_audit_entrypoints = (is_vault_active || is_homelab_active)
         && (tag_lower.is_none() || tag_lower.as_deref() == Some("agent"))
-        && only_rule
-            .map(|s| s.eq_ignore_ascii_case(entrypoints::RULE_ID))
-            .unwrap_or(true);
+        && only_rule.map(entrypoints::owns).unwrap_or(true);
     if should_audit_entrypoints {
         let ep = entrypoints::audit(&args.path);
         doc_messages.extend(ep.messages);
         for v in ep.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Host and operations lints (`stenio hostops`) ───────────────────────
+    let hostops_only = only_rule.filter(|r| hostops::is_lint_rule(r));
+    if hostops_only.is_some() || (is_homelab_active && tag_lower.is_none() && only_rule.is_none()) {
+        let (messages, found) = hostops::audit(&args.path, hostops_only);
+        doc_messages.extend(messages);
+        for v in found {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {
@@ -2799,6 +2887,22 @@ fn main() -> Result<()> {
             report.total_violations += 1;
             report.violations.push(v);
         }
+    }
+
+    // ── Secret and environment gates (src/secrets_suite) ──────────────────
+    let suite = secrets_suite::Selection {
+        scope: &scope_opt,
+        tag: tag_lower.as_deref(),
+        only_rule,
+    };
+    for v in secrets_suite::audit(&args.path, &suite) {
+        if v.severity == Severity::Error {
+            report.error_count += 1;
+        } else {
+            report.warning_count += 1;
+        }
+        report.total_violations += 1;
+        report.violations.push(v);
     }
 
     // ── Gettext catalogues (locale/*.po and the sources next to them) ──────
@@ -2827,6 +2931,31 @@ fn main() -> Result<()> {
         let dep = dependabot::audit(dep_root, &SteniocheckConfig::load_from_dir(dep_root));
         doc_messages.extend(dep.messages);
         for v in dep.violations {
+            if v.severity == Severity::Error {
+                report.error_count += 1;
+            } else {
+                report.warning_count += 1;
+            }
+            report.total_violations += 1;
+            report.violations.push(v);
+        }
+    }
+
+    // ── Shell scripts (GB-212/221/222/224/248/249) and lockfile parity (GB-070) ──
+    let repo_ids: Vec<&str> = shell::IDS
+        .into_iter()
+        .chain([lockparity::RULE_ID])
+        .collect();
+    let wants = |r: &str| only_rule.is_none_or(|o| o.eq_ignore_ascii_case(r));
+    if tag_lower.as_deref().is_none_or(|t| t == "shell") && repo_ids.iter().any(|r| wants(r)) {
+        let repo = dependabot::repo_root(&args.path, &scan_target);
+        let mut found = shell::audit(repo);
+        found.extend(lockparity::audit(repo));
+        if let Some(base) = diff_target {
+            let changed = shell::changed_files(repo, base);
+            found.retain(|v| changed.iter().any(|c| v.file_path.ends_with(c.as_str())));
+        }
+        for v in found.into_iter().filter(|v| wants(&v.rule_id)) {
             if v.severity == Severity::Error {
                 report.error_count += 1;
             } else {

@@ -364,7 +364,7 @@ pub fn add(root: &Path, req: &AddRequest, dry_run: bool) -> Result<Added, String
 /// Writes `new` over `path` only when the file still equals `original`, through a sibling temp
 /// file and a rename. No `.bak`: the other backlog writers keep none, and the vault is
 /// Syncthing-synced, where a per-run backup would replicate itself to every device.
-fn guarded_write(path: &Path, original: &str, new: &str) -> Result<(), String> {
+pub(crate) fn guarded_write(path: &Path, original: &str, new: &str) -> Result<(), String> {
     let now =
         fs::read_to_string(path).map_err(|e| format!("cannot re-read {}: {e}", path.display()))?;
     if now != original {

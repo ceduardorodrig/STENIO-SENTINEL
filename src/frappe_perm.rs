@@ -1,0 +1,381 @@
+//! Frappe permission and security rules of `--scope frappe`, one file per rule under
+//! `frappe_perm/`. This core reads the tree once (DocType JSONs, hooks.py registrations,
+//! permission data files) and holds the shared helpers; `frappe.rs` only calls [`audit`].
+//!
+//! Every rule ships its own fixtures: at least one tree where it must stay silent and one where
+//! it must fire (the mutation proof), executed by `--self-test` and `cargo test`.
+
+mod docperm_row;
+mod patch_owned;
+mod perm_matrix;
+mod permlevel_list_view;
+mod permlevel_row;
+mod permlevel_write;
+mod public_drift;
+mod public_reason;
+mod whitelist_guest;
+
+pub use whitelist_guest::guarded_by_helper;
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::engine::Violation;
+use crate::explain::RuleExplanation;
+use crate::rule::Severity;
+
+/// One rule: metadata, check, fixtures and the `--explain` entry.
+pub struct Rule {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub severity: Severity,
+    run: fn(&Tree) -> Vec<Violation>,
+    cases: fn() -> Vec<Case>,
+    pub explain: RuleExplanation,
+}
+
+/// One synthetic tree and the number of findings the rule must report on it.
+struct Case {
+    label: &'static str,
+    files: Vec<(String, String)>,
+    /// DocType names that the app's `RULES` gate validates.
+    validated: &'static [&'static str],
+    expect: usize,
+}
+
+pub static RULES: &[&Rule] = &[
+    &patch_owned::RULE,
+    &whitelist_guest::RULE,
+    &perm_matrix::RULE,
+    &public_drift::RULE,
+    &public_reason::RULE,
+    &permlevel_list_view::RULE,
+    &permlevel_write::RULE,
+    &docperm_row::RULE,
+    &permlevel_row::RULE,
+];
+
+/// Roles that carry no identity of their own (house policy, same list as `FRAPPE-PERMISSION-SCOPE`).
+const BROAD_ROLES: &[&str] = crate::frappe::BROAD_ROLES;
+
+/// The `{...}` literal bound to `name` at the top level of hooks.py, comments removed; empty
+/// when the file does not bind it to a dict literal.
+fn hook_block(t: &Tree, name: &str) -> String {
+    let clean: Vec<String> = read(&t.pkg.join("hooks.py"))
+        .lines()
+        .map(crate::frappe::strip_comment)
+        .collect();
+    let clean = clean.join("\n");
+    let Ok(head) = regex::Regex::new(&format!(r"(?m)^{name}\s*=\s*\{{")) else {
+        return String::new();
+    };
+    head.find(&clean)
+        .and_then(|m| crate::frappe::balanced_at(&clean, m.end() - 1, b'{', b'}'))
+        .and_then(|(s, e)| clean.get(s..e))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// DocTypes (or `DocType.field`) declared public on purpose.
+const PUBLIC_FILE: &str = "permissions-public.txt";
+
+/// One `entry  # reason` line of a permission data file.
+struct Declaration {
+    file: String,
+    line: usize,
+    entry: String,
+    reason: String,
+}
+
+/// Entries of a data file read from the app package and from `--path`; comment and blank lines
+/// declare nothing.
+fn declarations(t: &Tree, name: &str) -> Vec<Declaration> {
+    let mut paths = vec![t.pkg.join(name), t.root.join(name)];
+    paths.dedup();
+    let mut out = Vec::new();
+    for p in paths {
+        for (n, raw) in read(&p).lines().enumerate() {
+            let (entry, reason) = raw.split_once('#').unwrap_or((raw, ""));
+            if !entry.trim().is_empty() {
+                out.push(Declaration {
+                    file: t.rel(&p),
+                    line: n + 1,
+                    entry: entry.trim().to_string(),
+                    reason: reason.trim().to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
+struct Doc {
+    name: String,
+    rel: String,
+    path: PathBuf,
+    text: String,
+    json: Value,
+}
+
+impl Doc {
+    fn is_child(&self) -> bool {
+        flag(&self.json, "istable")
+    }
+
+    fn fields(&self) -> &[Value] {
+        list(&self.json, "fields")
+    }
+
+    fn perms(&self) -> &[Value] {
+        list(&self.json, "permissions")
+    }
+
+    /// 1-based line that declares the field, or 1.
+    fn field_line(&self, fieldname: &str) -> usize {
+        let quoted = format!("\"{fieldname}\"");
+        self.text
+            .lines()
+            .position(|l| l.contains("\"fieldname\"") && l.contains(&quoted))
+            .map_or(1, |i| i + 1)
+    }
+
+    /// 1-based line naming the role of the `index`-th permission row.
+    fn perm_line(&self, index: usize) -> usize {
+        let perms = self.perms();
+        let Some(role) = perms.get(index).map(|p| str_of(p, "role")) else {
+            return 1;
+        };
+        let nth = perms
+            .iter()
+            .take(index)
+            .filter(|p| str_of(p, "role") == role)
+            .count();
+        let quoted = format!("\"{role}\"");
+        self.text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("\"role\"") && l.contains(&quoted))
+            .nth(nth)
+            .map_or(1, |(i, _)| i + 1)
+    }
+}
+
+struct Tree {
+    root: PathBuf,
+    pkg: PathBuf,
+    files: Vec<PathBuf>,
+    docs: Vec<Doc>,
+    validated: BTreeSet<String>,
+}
+
+impl Tree {
+    fn rel(&self, p: &Path) -> String {
+        p.strip_prefix(&self.root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+fn read(p: &Path) -> String {
+    fs::read_to_string(p).unwrap_or_default()
+}
+
+fn str_of<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn int_of(v: &Value, key: &str) -> i64 {
+    match v.get(key) {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(Value::Bool(b)) => i64::from(*b),
+        Some(Value::String(s)) => s.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn flag(v: &Value, key: &str) -> bool {
+    int_of(v, key) != 0
+}
+
+fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
+    v.get(key)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+fn viol(rule: &Rule, path: &str, line: usize, snip: &str, msg: String, hint: &str) -> Violation {
+    Violation {
+        rule_id: rule.id.to_string(),
+        rule_name: rule.name.to_string(),
+        severity: rule.severity,
+        file_path: path.to_string(),
+        line_number: line.max(1),
+        snippet: snip.chars().take(120).collect(),
+        message: msg,
+        suggestion: Some(hint.to_string()),
+    }
+}
+
+fn tree(root: &Path, pkg: &Path, files: &[PathBuf], validated: BTreeSet<String>) -> Tree {
+    let docs = files
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter(|p| {
+            let dir = p.parent();
+            dir.and_then(Path::file_name) == p.file_stem()
+                && dir.and_then(Path::parent).and_then(Path::file_name)
+                    == Some(std::ffi::OsStr::new("doctype"))
+        })
+        .filter_map(|p| {
+            let text = read(p);
+            let json: Value = serde_json::from_str(&text).ok()?;
+            (str_of(&json, "doctype") == "DocType").then(|| Doc {
+                name: str_of(&json, "name").to_string(),
+                rel: p
+                    .strip_prefix(root)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .to_string(),
+                path: p.clone(),
+                text,
+                json,
+            })
+        })
+        .collect();
+    Tree {
+        root: root.to_path_buf(),
+        pkg: pkg.to_path_buf(),
+        files: files.to_vec(),
+        docs,
+        validated,
+    }
+}
+
+/// Runs every permission rule over an app tree already walked by `frappe.rs`.
+pub fn audit(
+    root: &Path,
+    pkg: &Path,
+    files: &[PathBuf],
+    validated: BTreeSet<String>,
+) -> Vec<Violation> {
+    let t = tree(root, pkg, files, validated);
+    RULES.iter().flat_map(|r| (r.run)(&t)).collect()
+}
+
+pub fn explanations() -> impl Iterator<Item = &'static RuleExplanation> {
+    RULES.iter().map(|r| &r.explain)
+}
+
+fn run_case(rule: &Rule, tag: &str, case: &Case) -> Option<usize> {
+    let root = crate::frappe::write_fixture(tag, &case.files)?;
+    let pkg = root.join("demoapp");
+    let files: Vec<PathBuf> = case.files.iter().map(|(p, _)| root.join(p)).collect();
+    let validated = case.validated.iter().map(|s| s.to_string()).collect();
+    let found = (rule.run)(&tree(&root, &pkg, &files, validated))
+        .iter()
+        .filter(|v| v.rule_id == rule.id)
+        .count();
+    let _ = fs::remove_dir_all(root);
+    Some(found)
+}
+
+/// Mutation proof of the registration: the full `--scope frappe` audit must reach these rules.
+fn wired_into_scope() -> bool {
+    let mut files = vec![doctype_file("Thing", "", "", r#"{"role":"A","report":1}"#)];
+    files.push(("demoapp/hooks.py".into(), String::new()));
+    let Some(root) = crate::frappe::write_fixture("perm-wired", &files) else {
+        return false;
+    };
+    let found = crate::frappe::audit(&root, &crate::frappe::fixture_config());
+    let _ = fs::remove_dir_all(root);
+    found.is_ok_and(|v| v.iter().any(|x| x.rule_id == "FRAPPE-DOCPERM-ROW"))
+}
+
+/// GB-056: both writer-verb rules block, with no list and with a list wider than POST.
+fn writer_verbs_are_errors() -> bool {
+    let py = "@frappe.whitelist()\ndef a(m):\n    m.save()\n\n@frappe.whitelist(methods=[\"GET\", \"POST\"])\ndef b(m):\n    m.delete()\n";
+    let mut files = vec![("demoapp/api.py".to_string(), py.to_string())];
+    files.push(("demoapp/hooks.py".into(), String::new()));
+    let Some(root) = crate::frappe::write_fixture("perm-verbs", &files) else {
+        return false;
+    };
+    let found = crate::frappe::audit(&root, &crate::frappe::fixture_config());
+    let _ = fs::remove_dir_all(root);
+    found.is_ok_and(|v| {
+        ["FRAPPE-WHITELIST-METHODS", "FRAPPE-WHITELIST-WRITE-POST"]
+            .iter()
+            .all(|id| {
+                v.iter()
+                    .any(|x| x.rule_id == *id && x.severity == Severity::Error)
+            })
+    })
+}
+
+pub fn self_test_cases() -> Vec<(String, bool)> {
+    let mut out = whitelist_guest::helper_cases();
+    out.push((
+        "frappe permission rules are wired into the scope audit".to_string(),
+        wired_into_scope(),
+    ));
+    out.push((
+        "FRAPPE-WHITELIST-WRITE-POST: a writer not limited to POST is an ERROR".to_string(),
+        writer_verbs_are_errors(),
+    ));
+    out.push((
+        "every permission rule answers --explain".to_string(),
+        RULES
+            .iter()
+            .all(|r| crate::explain::get_explanation(r.id).is_some_and(|e| e.id == r.id)),
+    ));
+    for (r, rule) in RULES.iter().enumerate() {
+        let cases = (rule.cases)();
+        // a rule never seen both silent and red proves nothing
+        let proof = cases.iter().any(|c| c.expect == 0) && cases.iter().any(|c| c.expect > 0);
+        out.push((
+            format!("{}: has silent and firing fixtures", rule.id),
+            proof,
+        ));
+        for (n, case) in cases.iter().enumerate() {
+            let tag = format!("perm-{r}-{n}");
+            out.push((
+                format!("{}: {}", rule.id, case.label),
+                run_case(rule, &tag, case) == Some(case.expect),
+            ));
+        }
+    }
+    out
+}
+
+/// A field that holds a value (layout fields carry no permission of their own).
+fn data_field(f: &Value) -> bool {
+    !matches!(
+        str_of(f, "fieldtype"),
+        "Section Break" | "Column Break" | "Tab Break" | "Fold" | "Heading" | "HTML" | "Button"
+    )
+}
+
+/// Fixture helper: a DocType JSON at its canonical path (`demoapp/m/doctype/<slug>/<slug>.json`).
+fn doctype_file(name: &str, extra: &str, fields: &str, perms: &str) -> (String, String) {
+    let slug = name.to_lowercase().replace(' ', "_");
+    (
+        format!("demoapp/m/doctype/{slug}/{slug}.json"),
+        format!(
+            "{{\"doctype\":\"DocType\",\"name\":\"{name}\",{extra}\"fields\":[{fields}],\"permissions\":[{perms}]}}"
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn self_test_cases_all_pass() {
+        // fixtures share temp tags with `--self-test`; one thread runs them all
+        for (name, ok) in super::self_test_cases() {
+            assert!(ok, "{name}");
+        }
+    }
+}
