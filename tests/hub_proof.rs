@@ -8,16 +8,6 @@ use std::process::{Child, Command, Stdio};
 
 type Fallible = Result<(), Box<dyn std::error::Error>>;
 
-/// The embedded declaration without its quota sources.
-fn config_head() -> &'static str {
-    let text = include_str!("../src/hub/defaults.toml");
-    text.split("[[quota.source]]").next().unwrap_or(text)
-}
-
-fn row(n: usize) -> String {
-    format!("| **GB-00{n}** | fixture item {n} | [`area.md`](area.md) | 🟡 | open | a | — |\n")
-}
-
 struct Fixture {
     root: PathBuf,
 }
