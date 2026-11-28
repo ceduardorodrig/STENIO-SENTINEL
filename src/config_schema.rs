@@ -169,6 +169,8 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("gpu.active_whisper_model", "unset"),
     ("gpu.min_model_size_mb", "unset"),
     ("gpu.banned_bloat_dirs", "unset"),
+    ("docs.enforce_doc_anchors", "unset"),
+    ("docs.doc_anchor_prefix", "unset"),
     ("dry.enabled", "unset"),
     ("dry.min_lines", "unset"),
     ("dry.strict", "unset"),
@@ -386,7 +388,7 @@ mod tests {
         for (table, ty) in fields(source, "SteniocheckConfig") {
             let inner = ty.trim_start_matches("Option<").trim_end_matches('>');
             let keys = fields(source, inner);
-            if keys.is_empty() && !ty.contains("DocsConfig") {
+            if keys.is_empty() {
                 wanted.push(table);
             } else {
                 wanted.extend(keys.into_iter().map(|(k, _)| format!("{table}.{k}")));

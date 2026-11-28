@@ -824,6 +824,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
                 // are engine-only, preventing artificial context rule creation.
                 requires_pattern: None,
                 severity_without_requires: None,
+                declared_targets: None,
             };
             rules.push(rule);
         }

@@ -350,7 +350,6 @@ fn plant(root: &Path, case: &Case, content: &str) -> Result<(), String> {
 }
 
 fn reported(case: &Case, content: &str, label: &str) -> Result<bool, String> {
-    let text = |e: std::io::Error| e.to_string();
     let root = Tree(std::env::temp_dir().join(format!(
         "stenio-rule-{}-{}-{label}",
         std::process::id(),
@@ -405,34 +404,35 @@ fn every_rule_of_the_registry_fires_on_its_fixture_and_only_there() -> Result<()
     Ok(())
 }
 
-/// GB-375: the scan and the delivery gate are one pipeline. Under the default scope they report
+/// GB-375: the scan and the delivery gate are one pipeline. Under scope `all` they report
 /// the same errors on every fixture; under a narrow scope the gate only adds (it also judges
 /// governance, documentation and the queues, deliberately).
 #[test]
 fn the_gate_reports_what_the_scan_reports_on_every_fixture() -> Result<(), String> {
     // Duplication and engine integrity are judged by the gate alone.
     const GATE_ONLY: [&str; 2] = ["ARCH-DRY-DUPLICATION", "GUARDIAN-TAMPER"];
-    let mut wrong = Vec::new();
-    for case in cases() {
+    use rayon::prelude::*;
+    let judged = |case: &Case| -> Result<Vec<String>, String> {
+        let mut wrong = Vec::new();
         if case.how == How::Staged {
-            continue;
+            return Ok(wrong);
         }
         let root = Tree(std::env::temp_dir().join(format!(
             "stenio-parity-{}-{}",
             std::process::id(),
             case.id
         )));
-        plant(&root.0, &case, &case.bad)?;
+        plant(&root.0, case, &case.bad)?;
         let own = match case.how {
             How::Scan(scope) => scope,
             _ => "project",
         };
-        for scope in [None, Some(own)] {
+        for scope in ["all", own] {
             let errors = |gate: bool| -> Result<BTreeSet<(String, String, usize)>, String> {
                 let outcome = pipeline::run(&Request {
                     path: root.0.clone(),
                     path_explicit: true,
-                    scope: scope.map(str::to_string),
+                    scope: Some(scope.to_string()),
                     gate,
                     ..Request::default()
                 })?;
@@ -446,21 +446,29 @@ fn the_gate_reports_what_the_scan_reports_on_every_fixture() -> Result<(), Strin
                     .collect())
             };
             let (scan, gate) = (errors(false)?, errors(true)?);
-            let same = if scope.is_none() {
+            let same = if scope == "all" {
                 scan == gate
             } else {
                 scan.is_subset(&gate)
             };
             if !same {
                 wrong.push(format!(
-                    "{} scope={scope:?}: scan only {:?}, gate only {:?}",
+                    "{} scope={scope}: scan only {:?}, gate only {:?}",
                     case.id,
                     scan.difference(&gate).collect::<Vec<_>>(),
                     gate.difference(&scan).collect::<Vec<_>>()
                 ));
             }
         }
-    }
+        Ok(wrong)
+    };
+    let all = cases();
+    // The wide scope reads outside the tree (GB-383), so the cases run side by side.
+    let wrong: Vec<String> = all
+        .par_iter()
+        .map(judged)
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
     assert!(wrong.is_empty(), "{wrong:#?}");
     Ok(())
 }
