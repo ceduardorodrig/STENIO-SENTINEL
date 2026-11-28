@@ -691,7 +691,10 @@ fn noted(
     run: Option<&str>,
     outcome: HubResult<Value>,
 ) -> HubResult<Value> {
-    if let Err(HubError::Refused(r)) = &outcome {
+    // A write refused for the text it carries stores nothing at all (GB-355).
+    if let Err(HubError::Refused(r)) = &outcome
+        && !matches!(r.code, "secret_text" | "hidden_characters")
+    {
         let (code, message) = (r.code, r.message.clone());
         let _unrecorded = store.write(|tx| {
             worker(tx, worker_id)?;
