@@ -2226,7 +2226,9 @@ fn main() -> Result<()> {
 
     // ── Learn mode: learn a new rule and persist it in steniocheck.toml ──
     if let Some(ref payload) = args.learn {
-        learner::handle_learn(&args.path, payload)?;
+        if let Err(e) = learner::handle_learn(&args.path, payload) {
+            refuse(&format!("--learn: {e:#}"));
+        }
         return Ok(());
     }
 

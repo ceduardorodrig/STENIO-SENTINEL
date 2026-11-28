@@ -2,9 +2,10 @@
 //! did not look must never be green. `STENIO_TEST_BIN` points the suite at another build.
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 type Fallible = Result<(), Box<dyn std::error::Error>>;
 
@@ -173,7 +174,7 @@ fn learn_cannot_corrupt_the_configuration() -> Fallible {
 
     let broken = t.put("steniocheck.toml", "oops = =\n")?;
     let (code, text) = run(&t.0, &["--path", ".", "--learn", r#"{"pattern":"x"}"#])?;
-    assert_ne!(code, 0, "{text}");
+    assert_eq!(code, 2, "{text}");
     assert_eq!(fs::read_to_string(broken)?, "oops = =\n");
     Ok(())
 }
@@ -227,6 +228,28 @@ fn a_git_failure_is_an_error_not_an_empty_change_set() -> Fallible {
         let (code, text) = scan(&plain.0, &[mode])?;
         assert_eq!(code, 2, "{mode}: {text}");
     }
+    Ok(())
+}
+
+#[test]
+fn the_mcp_diff_tool_fails_on_a_bad_revision() -> Fallible {
+    let t = repository("mcp")?;
+    let bin = std::env::var("STENIO_TEST_BIN")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_stenio").to_string());
+    let mut child = Command::new(bin)
+        .current_dir(&t.0)
+        .args(["--mcp", "--path", "."])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stenio_diff","arguments":{"rev":"no-such-rev"}}}"#;
+    if let Some(mut stdin) = child.stdin.take() {
+        writeln!(stdin, "{request}")?;
+    }
+    let out = child.wait_with_output()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"isError\":true"), "{text}");
     Ok(())
 }
 
