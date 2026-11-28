@@ -34,17 +34,11 @@ const CODE_EXTENSIONS: &[&str] = &[
 ];
 
 fn external(root: &Path) -> Vec<String> {
-    std::fs::read_to_string(root.join("steniocheck.toml"))
-        .ok()
-        .and_then(|s| s.parse::<toml::Table>().ok())
-        .and_then(|t| {
-            let list = t.get("stack_env")?.get("external")?.as_array()?;
-            Some(
-                list.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect(),
-            )
-        })
+    // An unreadable file already refused the run (`SteniocheckConfig::for_run`).
+    crate::config::SteniocheckConfig::load_from_dir(root)
+        .unwrap_or_default()
+        .stack_env
+        .and_then(|c| c.external)
         .unwrap_or_default()
 }
 

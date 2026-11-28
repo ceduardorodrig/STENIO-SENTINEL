@@ -6,9 +6,9 @@ use std::path::Path;
 
 use crate::Violation;
 use crate::baseline::Whitelist;
-use crate::engine::Engine;
 use crate::guardian::audit_stenio_integrity;
-use crate::rule::{Rule, Severity};
+use crate::pipeline::Request;
+use crate::rule::Severity;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpRequest {
@@ -34,7 +34,6 @@ pub struct McpResponse {
 pub fn dispatch_mcp_request(
     req: &McpRequest,
     repo_root: &Path,
-    engine: &Engine,
     whitelist: &Whitelist,
 ) -> Option<McpResponse> {
     let req_id = req.id.clone().unwrap_or(Value::Null);
@@ -216,103 +215,31 @@ pub fn dispatch_mcp_request(
             let mut failed = false;
             let content_text = match tool_name {
                 "stenio_scan" => {
-                    let path_str = arguments
-                        .get("path")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(".");
-                    let tag = arguments.get("tag").and_then(|v| v.as_str());
-                    let only = arguments.get("only_rule").and_then(|v| v.as_str());
-                    let target_path = repo_root.join(path_str);
-
-                    let unknown = tag
-                        .map(|t| crate::selectors::check_tag(t, engine.rules()))
-                        .into_iter()
-                        .chain(only.map(|o| crate::selectors::check_only(o, "", engine.rules())))
-                        .find_map(Result::err);
-                    if let Some(reason) = unknown {
-                        failed = true;
-                        reason
-                    } else if !target_path.exists() {
-                        failed = true;
-                        format!("Path '{}' does not exist.", path_str)
-                    } else if target_path.is_file() {
-                        let parent = target_path.parent().unwrap_or(repo_root);
-                        let violations = engine.scan_file(parent, &target_path, tag, only);
-                        failed = violations.iter().any(|v| v.severity == Severity::Error);
-                        if violations.is_empty() {
-                            format!("✨ File '{}' 100% compliant. Zero violations.", path_str)
-                        } else {
-                            let lines: Vec<String> =
-                                violations.iter().map(format_violation_line).collect();
-                            lines.join("\n")
-                        }
-                    } else {
-                        match engine
-                            .scan_directory(&target_path, tag, only, false, None, false)
-                            .map(|r| with_language(r, &target_path, only))
-                        {
-                            Ok(report) => {
-                                failed = report.error_count > 0;
-                                if report.violations.is_empty() {
-                                    format!(
-                                        "✨ Directory '{}' 100% compliant. Zero violations across {} files.",
-                                        path_str, report.total_files_scanned
-                                    )
-                                } else {
-                                    let mut lines = Vec::new();
-                                    lines.push(format!(
-                                        "Audit on '{}': {} error(s), {} warning(s) across {} file(s)",
-                                        path_str, report.error_count, report.warning_count, report.total_files_scanned
-                                    ));
-                                    for v in report.violations.iter().take(30) {
-                                        lines.push(format_violation_line(v));
-                                    }
-                                    if report.violations.len() > 30 {
-                                        lines.push(format!(
-                                            "... and {} more violation(s).",
-                                            report.violations.len() - 30
-                                        ));
-                                    }
-                                    lines.join("\n")
-                                }
-                            }
-                            Err(e) => {
-                                failed = true;
-                                format!("Error scanning directory: {}", e)
-                            }
-                        }
-                    }
+                    let text = |key: &str| {
+                        arguments
+                            .get(key)
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    };
+                    let path = text("path").unwrap_or_else(|| ".".to_string());
+                    let request = Request {
+                        path: repo_root.join(&path),
+                        path_explicit: true,
+                        tag: text("tag"),
+                        only: text("only_rule"),
+                        ..Request::default()
+                    };
+                    scan_reply(&request, &path, &mut failed)
                 }
                 "stenio_diff" => {
                     let rev = arguments.get("rev").and_then(|v| v.as_str());
-                    match engine
-                        .scan_directory(repo_root, None, None, false, rev, false)
-                        .map(|r| with_language(r, repo_root, None))
-                    {
-                        Ok(report) => {
-                            failed = report.error_count > 0;
-                            if report.violations.is_empty() {
-                                format!(
-                                    "✨ Clean surgical scan! Zero violations in {} modified files.",
-                                    report.total_files_scanned
-                                )
-                            } else {
-                                let mut lines = Vec::new();
-                                lines.push(format!(
-                                    "Surgical scan: {} error(s), {} warning(s) in modified files:",
-                                    report.error_count, report.warning_count
-                                ));
-                                for v in &report.violations {
-                                    lines.push(format_violation_line(v));
-                                }
-                                lines.join("\n")
-                            }
-                        }
-                        Err(e) => {
-                            failed = true;
-                            format!("Error executing diff: {}", e)
-                        }
-                    }
+                    let request = Request {
+                        path: repo_root.to_path_buf(),
+                        path_explicit: true,
+                        diff: Some(rev.unwrap_or_default().to_string()),
+                        ..Request::default()
+                    };
+                    scan_reply(&request, "the changed files", &mut failed)
                 }
                 "stenio_guardian" => {
                     let rep = audit_stenio_integrity(repo_root);
@@ -331,12 +258,13 @@ pub fn dispatch_mcp_request(
                 }
                 "stenio_context" => {
                     format!(
-                        "# Canonical Context StenioSentinel v4.10.0\n\n\
+                        "# Canonical Context StenioSentinel v{}\n\n\
                         - Platform: Monorepo / Obsidian Vault at /mnt/NVME_PCI/agentic-ai\n\
                         - Homelab Mnemocine: psicopompo (dev/gpu), ybyra (edge), kuaray (media), ybytu (cloud exit), kavure (services)\n\
                         - GPU: RTX 5050 Blackwell with local CUDA acceleration\n\
                         - Core Rules: Raw sudo forbidden (use sudoers NOPASSWD or SOPS), GNU legacy tools forbidden in Rust (use xh, walkdir, regex), soft NFS mounts mandatory.\n\
-                        - CLI Tools: use stenio --diff for fast delta scans."
+                        - CLI Tools: use stenio --diff for fast delta scans.",
+                        env!("CARGO_PKG_VERSION")
                     )
                 }
                 "stenio_explain" => {
@@ -358,76 +286,17 @@ pub fn dispatch_mcp_request(
                     }
                 }
                 "stenio_gate" => {
-                    let path_str = arguments
+                    let path = arguments
                         .get("path")
                         .and_then(|v| v.as_str())
                         .unwrap_or(".");
-                    let target_path = repo_root.join(path_str);
-                    match engine
-                        .scan_directory(&target_path, None, None, false, None, false)
-                        .map(|r| with_language(r, &target_path, None))
-                    {
-                        Ok(report) => {
-                            let mut errors = Vec::new();
-                            for v in &report.violations {
-                                if v.severity == Severity::Error {
-                                    errors.push(format!(
-                                        "[{}] {}:{}: {} (💡 {})",
-                                        v.rule_id,
-                                        v.file_path,
-                                        v.line_number,
-                                        v.message,
-                                        v.suggestion.as_deref().unwrap_or("N/A")
-                                    ));
-                                }
-                            }
-                            let gov = crate::gov::audit_governance(&target_path);
-                            for err in &gov.errors {
-                                errors.push(format!("[GOV] {}", err));
-                            }
-
-                            let (dry_violations, _, _) =
-                                crate::dry::scan_dry_directory(&target_path, 6, whitelist);
-                            for dv in &dry_violations {
-                                errors.push(format!(
-                                    "[DRY] {}:{}: {} (💡 {})",
-                                    dv.file_path,
-                                    dv.line_number,
-                                    dv.message,
-                                    dv.suggestion
-                                        .as_deref()
-                                        .unwrap_or("Extract and deduplicate common logic.")
-                                ));
-                            }
-
-                            failed = !errors.is_empty() || !target_path.exists();
-                            if !target_path.exists() {
-                                format!("Path '{}' does not exist.", path_str)
-                            } else if errors.is_empty() {
-                                format!(
-                                    "🎉 [GATE PASSED] Zero blocking errors and zero duplications across {} files. Code is 100% compliant. Task approved for delivery!",
-                                    report.total_files_scanned
-                                )
-                            } else {
-                                format!(
-                                    "🛑 [GATE REJECTED — MANDATORY DELIVERY BLOCK]\n\
-                                    The task CANNOT be marked as complete. STRICTLY FORBIDDEN:\n\
-                                    1. Proposing changes to the Stenio governance engine or creating new governance crates (ARCH-SCOPE-ISOLATION violation).\n\
-                                    2. Claiming errors or DRY duplications are 'pre-existing issues' to avoid fixing them.\n\
-                                    3. Replacing unwrap() with expect() (Both violate RUST-NO-UNWRAP with fatal error).\n\
-                                    4. Adding // stenio-ignore comments or suppression directives (AGENT-NO-SUPPRESSION-DIRECTIVES violation).\n\n\
-                                    The model MUST resolve the following {} violation(s) directly in the application code before finishing:\n\n{}\n\n\
-                                    Consult 'stenio_explain' with the rule_id for official remediation instructions.",
-                                    errors.len(),
-                                    errors.join("\n")
-                                )
-                            }
-                        }
-                        Err(e) => {
-                            failed = true;
-                            format!("Error executing Quality Gate: {}", e)
-                        }
-                    }
+                    let request = Request {
+                        path: repo_root.join(path),
+                        path_explicit: true,
+                        gate: true,
+                        ..Request::default()
+                    };
+                    gate_reply(&request, &mut failed)
                 }
                 "stenio_dry" => {
                     let path_str = arguments
@@ -679,9 +548,8 @@ pub fn dispatch_mcp_request(
     }
 }
 
-pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) -> Result<()> {
+pub fn run_mcp_server(repo_root: &Path, whitelist: Whitelist) -> Result<()> {
     eprintln!("🦀 StenioSentinel MCP Server initialized on stdio (JSON-RPC 2.0)");
-    let engine = Engine::new(rules, whitelist.clone())?;
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -707,7 +575,7 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
 
         // The work ledger is local: its tools exist on this stdio transport only.
         let response = crate::hub::mcp::intercept(&req, repo_root, None).or_else(|| {
-            dispatch_mcp_request(&req, repo_root, &engine, &whitelist).map(|mut resp| {
+            dispatch_mcp_request(&req, repo_root, &whitelist).map(|mut resp| {
                 crate::hub::mcp::extend(&req, &mut resp);
                 resp
             })
@@ -722,20 +590,75 @@ pub fn run_mcp_server(repo_root: &Path, rules: Vec<Rule>, whitelist: Whitelist) 
     Ok(())
 }
 
-/// Adds the language gate to a scan report: every harness that asks over MCP gets it.
-fn with_language(
-    mut report: crate::engine::ScanReport,
-    target: &Path,
-    only: Option<&str>,
-) -> crate::engine::ScanReport {
-    if only.is_none_or(|o| o.starts_with("LANG-")) {
-        let found = crate::docrules::language_findings(target);
-        report.error_count += found.len();
-        report.total_violations += found.len();
-        // First, so that a truncated listing still shows the blockers.
-        report.violations.splice(0..0, found);
+/// The reply of a scan or diff: the findings of the shared pipeline, errors first.
+fn scan_reply(request: &Request, what: &str, failed: &mut bool) -> String {
+    let mut report = match crate::pipeline::run(request) {
+        Ok(outcome) => outcome.report,
+        Err(e) => {
+            *failed = true;
+            return format!("stenio refused the request: {e}");
+        }
+    };
+    *failed = report.error_count > 0;
+    if report.violations.is_empty() {
+        return format!(
+            "✨ Zero violations in {what} ({} files).",
+            report.total_files_scanned
+        );
     }
+    // A truncated listing still shows the blockers.
     report
+        .violations
+        .sort_by_key(|v| v.severity != Severity::Error);
+    let mut lines = vec![format!(
+        "Audit of {what}: {} error(s), {} warning(s) across {} file(s)",
+        report.error_count, report.warning_count, report.total_files_scanned
+    )];
+    let shown = report.error_count.max(30);
+    lines.extend(
+        report
+            .violations
+            .iter()
+            .take(shown)
+            .map(format_violation_line),
+    );
+    if report.violations.len() > shown {
+        lines.push(format!(
+            "... and {} more warning(s).",
+            report.violations.len() - shown
+        ));
+    }
+    lines.join("\n")
+}
+
+fn gate_reply(request: &Request, failed: &mut bool) -> String {
+    let report = match crate::pipeline::run(request) {
+        Ok(outcome) => outcome.report,
+        Err(e) => {
+            *failed = true;
+            return format!("🛑 [GATE REJECTED] stenio refused the request: {e}");
+        }
+    };
+    let errors = crate::pipeline::blockers(&report.violations);
+    *failed = !errors.is_empty();
+    if errors.is_empty() {
+        return format!(
+            "🎉 [GATE PASSED] Zero blocking errors across {} files. Task approved for delivery!",
+            report.total_files_scanned
+        );
+    }
+    format!(
+        "🛑 [GATE REJECTED — MANDATORY DELIVERY BLOCK]\n\
+        The task CANNOT be marked as complete. STRICTLY FORBIDDEN:\n\
+        1. Changing the Stenio engine or its configuration to make this pass (ARCH-SCOPE-ISOLATION).\n\
+        2. Calling an error or a duplication 'pre-existing' to avoid fixing it.\n\
+        3. Replacing unwrap() with expect() (both violate RUST-NO-UNWRAP).\n\
+        4. Adding suppression comments (AGENT-NO-SUPPRESSION-DIRECTIVES).\n\n\
+        Resolve these {} violation(s) in the code before finishing:\n\n{}\n\n\
+        Consult 'stenio_explain' with the rule_id for remediation instructions.",
+        errors.len(),
+        errors.join("\n")
+    )
 }
 
 fn invalid_arguments(error: String, failed: &mut bool) -> String {

@@ -1,27 +1,76 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::engine::Violation;
+use crate::rule::Severity;
 
 #[derive(Debug, Default, Clone)]
 pub struct Whitelist {
-    ignored_patterns: HashSet<String>,
+    /// The scanned tree the keys are relative to.
+    root: PathBuf,
+    /// Exact paths relative to `root`.
+    exempt: HashSet<String>,
 }
 
+pub const STALE_ID: &str = "SCAN-EXEMPTION-STALE";
+
 impl Whitelist {
-    pub fn load_from_file(path: &Path) -> Self {
-        let mut ignored_patterns = HashSet::new();
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(path) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(obj) = val.as_object() {
-                        for (file_key, _) in obj {
-                            ignored_patterns.insert(file_key.clone());
-                        }
-                    }
-                }
-            }
+    /// The registry of a tree; absent means no exemption. A file that cannot be read, is not a
+    /// JSON object or holds an empty key is an error: it must never exempt more than it names.
+    pub fn load_from_file(path: &Path, root: &Path) -> Result<Self, String> {
+        let fail = |cause: String| format!("exemption registry {}: {cause}", path.display());
+        let mut list = Self {
+            root: root.to_path_buf(),
+            exempt: HashSet::new(),
+        };
+        if fs::symlink_metadata(path).is_err() {
+            return Ok(list);
         }
-        Self { ignored_patterns }
+        let content = fs::read_to_string(path).map_err(|e| fail(e.to_string()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| fail(e.to_string()))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| fail("not a JSON object of file paths".to_string()))?;
+        for key in object.keys() {
+            let name = key.trim().trim_start_matches("./");
+            if name.is_empty() {
+                return Err(fail("empty file path".to_string()));
+            }
+            list.exempt.insert(name.to_string());
+        }
+        Ok(list)
+    }
+
+    /// Entries that name no file of the tree exempt nothing and are reported.
+    pub fn stale_findings(&self) -> Vec<Violation> {
+        let mut missing: Vec<&String> = self
+            .exempt
+            .iter()
+            .filter(|name| !self.root.join(name).is_file())
+            .collect();
+        missing.sort();
+        missing
+            .into_iter()
+            .map(|name| Violation {
+                rule_id: STALE_ID.to_string(),
+                rule_name: "Stale Exemption".to_string(),
+                severity: Severity::Warning,
+                file_path: ".steniocheck-whitelist-registry.json".to_string(),
+                line_number: 1,
+                snippet: name.clone(),
+                message: format!("the exemption of `{name}` names no file: it does nothing"),
+                suggestion: Some("Delete the entry.".to_string()),
+            })
+            .collect()
+    }
+
+    fn names(&self, file_path: &str) -> bool {
+        let path = Path::new(file_path);
+        let relative = path.strip_prefix(&self.root).unwrap_or(path);
+        let relative = relative.to_string_lossy();
+        self.exempt.contains(relative.trim_start_matches("./"))
     }
 
     pub fn is_ignored(&self, file_path: &str, rule_id: &str, line_content: &str) -> bool {
@@ -70,13 +119,7 @@ impl Whitelist {
         }
 
         // 3. Check file whitelist (.steniocheck-whitelist-registry.json)
-        for pattern in &self.ignored_patterns {
-            if file_path.contains(pattern) {
-                return true;
-            }
-        }
-
-        false
+        self.names(file_path)
     }
 }
 

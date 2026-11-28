@@ -15,13 +15,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::baseline::Whitelist;
-use crate::engine::Engine;
 use crate::mcp::{McpRequest, dispatch_mcp_request};
-use crate::rule::Rule;
 
 pub struct ServerState {
     pub repo_root: PathBuf,
-    pub engine: Engine,
     pub whitelist: Whitelist,
 }
 
@@ -30,7 +27,6 @@ pub async fn start_mcp_sse_server(
     repo_root: PathBuf,
     host: &str,
     port: u16,
-    rules: Vec<Rule>,
     whitelist: Whitelist,
 ) -> Result<()> {
     let addr = SocketAddr::new(parse_bind(host)?, port);
@@ -40,10 +36,8 @@ pub async fn start_mcp_sse_server(
             "⚠️  Non-loopback bind without STENIO_MCP_TOKEN: requests are NOT authenticated."
         );
     }
-    let engine = Engine::new(rules, whitelist.clone())?;
     let state = Arc::new(ServerState {
         repo_root,
-        engine,
         whitelist,
     });
 
@@ -116,12 +110,14 @@ async fn message_handler(
     State(state): State<Arc<ServerState>>,
     Json(req): Json<McpRequest>,
 ) -> impl IntoResponse {
-    let response = dispatch_mcp_request(&req, &state.repo_root, &state.engine, &state.whitelist)
-        .unwrap_or_else(|| crate::mcp::McpResponse {
-            jsonrpc: "2.0".to_string(),
-            id: req.id.unwrap_or(serde_json::Value::Null),
-            result: Some(json!({})),
-            error: None,
+    let response =
+        dispatch_mcp_request(&req, &state.repo_root, &state.whitelist).unwrap_or_else(|| {
+            crate::mcp::McpResponse {
+                jsonrpc: "2.0".to_string(),
+                id: req.id.unwrap_or(serde_json::Value::Null),
+                result: Some(json!({})),
+                error: None,
+            }
         });
 
     Json(response)

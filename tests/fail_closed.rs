@@ -93,8 +93,21 @@ fn a_broken_or_missing_configuration_is_a_usage_error() -> Fallible {
         let t = Tree::new(label)?;
         t.put("steniocheck.toml", body)?;
         t.put("a.txt", "forbidden_word\n")?;
-        for args in [&[][..], &["--gate"][..]] {
-            let (code, text) = run(&t.0, &[&["--path", "."], args].concat())?;
+        for args in [
+            &["--path", "."][..],
+            &["--path", ".", "--gate"][..],
+            &[
+                "pre-release",
+                "--repo",
+                ".",
+                "--tag",
+                "v1.0.0",
+                "--static-only",
+            ][..],
+            &["verify-host", "--host", "h", "--config", "steniocheck.toml"][..],
+            &["verify-release", "--host", "h", "--tag", "1", "--repo", "."][..],
+        ] {
+            let (code, text) = run(&t.0, args)?;
             assert_eq!(code, 2, "{label} {args:?}: {text}");
             assert!(text.contains("steniocheck.toml"), "{text}");
         }
@@ -105,6 +118,7 @@ fn a_broken_or_missing_configuration_is_a_usage_error() -> Fallible {
     t.put("a.txt", "x\n")?;
     for args in [
         &["--path", ".", "--config", "nope.toml"][..],
+        &["--path", ".", "--gate", "--config", "nope.toml"][..],
         &["--scope", "frappe", "--path", ".", "--config", "nope.toml"][..],
         &[
             "pre-release",
@@ -233,7 +247,14 @@ fn a_git_failure_is_an_error_not_an_empty_change_set() -> Fallible {
 
 #[test]
 fn the_mcp_diff_tool_fails_on_a_bad_revision() -> Fallible {
-    let t = repository("mcp")?;
+    let bad_revision = repository("mcp")?;
+    assert_mcp_diff_fails(&bad_revision)?;
+    let no_repository = Tree::new("mcp-plain")?;
+    no_repository.put("a.rs", DIRTY)?;
+    assert_mcp_diff_fails(&no_repository)
+}
+
+fn assert_mcp_diff_fails(t: &Tree) -> Fallible {
     let bin = std::env::var("STENIO_TEST_BIN")
         .unwrap_or_else(|_| env!("CARGO_BIN_EXE_stenio").to_string());
     let mut child = Command::new(bin)

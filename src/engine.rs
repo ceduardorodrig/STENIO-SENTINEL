@@ -168,10 +168,6 @@ impl Engine {
         })
     }
 
-    pub fn rules(&self) -> &[Rule] {
-        &self.rules
-    }
-
     pub fn check_scope_isolation(file_paths: &[PathBuf]) -> Option<Violation> {
         let has_stenio_engine_files = file_paths.iter().any(|p| {
             let s = p.to_string_lossy();

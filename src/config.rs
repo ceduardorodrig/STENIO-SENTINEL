@@ -246,6 +246,18 @@ pub struct CiConfig {
     pub parity_exclude: Option<Vec<CiParityExclude>>,
 }
 
+/// `[env_wiring]`: names `ENV-VAR-WIRED` accepts without a compose entry.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct EnvWiringConfig {
+    pub ignore: Option<Vec<String>>,
+}
+
+/// `[stack_env]`: names a stack requires that something outside the repository consumes.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct StackEnvConfig {
+    pub external: Option<Vec<String>>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SteniocheckConfig {
@@ -263,6 +275,8 @@ pub struct SteniocheckConfig {
     pub parity: Option<ParityConfig>,
     pub dependabot: Option<DependabotConfig>,
     pub ci: Option<CiConfig>,
+    pub env_wiring: Option<EnvWiringConfig>,
+    pub stack_env: Option<StackEnvConfig>,
 }
 
 /// A configuration file that exists (or was named by the caller) but cannot be used. It is always
@@ -347,20 +361,39 @@ impl SteniocheckConfig {
         }
     }
 
-    /// The configuration of a run over `root`: the explicit file when one is named, else the
-    /// tree's own. Every `steniocheck.toml` between `root` and the repository root must parse
-    /// too, because directory rules read the nearest one.
-    pub fn for_run(root: &Path, explicit: Option<&Path>) -> Result<Self, ConfigError> {
+    /// The configuration of a run over `root` and the file it came from: the explicit file when
+    /// one is named, else the nearest `steniocheck.toml` from `root` up to the repository root
+    /// (outside a repository, up to the home directory, which is never read). Every such file on
+    /// the way must parse, because directory rules read the nearest one.
+    pub fn for_run(
+        root: &Path,
+        explicit: Option<&Path>,
+    ) -> Result<(Self, Option<PathBuf>), ConfigError> {
         let absolute = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let mut nearest = None;
         for dir in absolute.ancestors() {
-            Self::load_from_dir(dir)?;
+            if dir != absolute && (home.as_deref() == Some(dir) || dir.parent().is_none()) {
+                break;
+            }
+            let config = Self::load_from_dir(dir)?;
+            if nearest.is_none() && dir.join(FILE_NAME).is_file() {
+                // Printed as the caller spelled the tree when it is the tree's own file.
+                let file = if dir == absolute {
+                    root.join(FILE_NAME)
+                } else {
+                    dir.join(FILE_NAME)
+                };
+                nearest = Some((config, file));
+            }
             if dir.join(".git").exists() {
                 break;
             }
         }
-        match explicit {
-            Some(file) => Self::load_from_file(file),
-            None => Self::load_from_dir(root),
+        match (explicit, nearest) {
+            (Some(file), _) => Ok((Self::load_from_file(file)?, Some(file.to_path_buf()))),
+            (None, Some((config, file))) => Ok((config, Some(file))),
+            (None, None) => Ok((Self::default(), None)),
         }
     }
 }

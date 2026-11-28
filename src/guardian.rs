@@ -1044,10 +1044,19 @@ pub fn audit_stenio_integrity(stenio_src_dir: &Path) -> GuardianReport {
             &[
                 "run_self_tests",
                 "run_quality_gate",
+                "pipeline::run_prepared",
+            ],
+        ),
+        (
+            "pipeline.rs",
+            &[
                 "audit_stenio_integrity",
                 "audit_governance",
                 "audit_homelab",
                 "audit_infrastructure",
+                "scan_dry_directory",
+                "selectors::wanted",
+                "SteniocheckConfig::for_run",
             ],
         ),
     ];
