@@ -398,7 +398,8 @@ fn a8_the_fleet_ceiling_holds() -> Fallible {
     let f = Fixture::new("fleet")?;
     f.ok(&["run", "start", "--rows", ROWS, "--slots", "2"])?;
     let w1 = f.join("claude")?;
-    f.claim(&w1, "fleet:slot")?;
+    f.ok(&["claim", "--worker", &w1, "--run", "run-1", "fleet:slot"])?;
+    // A slot claimed outside the run still counts against its ceiling.
     f.claim(&w1, "fleet:slot")?;
     f.refused(&["claim", "--worker", &w1, "fleet:slot"], "fleet_full")?;
     f.refused(&["claim", "--worker", &w1, "fleet:slot/1"], "fleet_full")?;

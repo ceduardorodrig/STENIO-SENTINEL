@@ -757,7 +757,15 @@ fn claim_once(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubRes
         if wanted.iter().any(Resource::starts_work) {
             quota::gate(tx, &cfg.quota, &who)?;
         }
-        let ceiling = match &run {
+        // The slots of the only open run still bound the fleet, even for a claim outside it.
+        let bounding = match &run {
+            Some(run) => Some(run.clone()),
+            None => match open_runs(tx)?.as_slice() {
+                [only] => only["run"].as_str().map(str::to_string),
+                _ => None,
+            },
+        };
+        let ceiling = match &bounding {
             Some(run) => run_state(tx, run)?.1.min(cfg.fleet.ceiling),
             None => cfg.fleet.ceiling,
         };
