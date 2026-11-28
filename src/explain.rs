@@ -735,7 +735,7 @@ pub static EXPLANATIONS: &[RuleExplanation] = &[
         severity: "ERROR",
         tag: "infra",
         summary: "Ensures deployments and services target only authorized nodes in the homelab topology.",
-        rationale: "Decommissioned or legacy nodes must not receive workloads. Every deployment target must be registered in 'steniocheck.toml [topology.authorized_hub_nodes]'.",
+        rationale: "Decommissioned or legacy nodes must not receive workloads. Listed but not enforced: no engine code emits this rule and the '[topology]' table of 'steniocheck.toml' is not applied.",
         bad_example: "deploy_target=\"kuaray\" # decommissioned node",
         good_example: "deploy_target=\"kavure\" # canonical active node",
         remediation: "Update scripts to target authorized canonical nodes: kavure (backend/GPU), ybyra (frontend), psicopompo (workstation).",
