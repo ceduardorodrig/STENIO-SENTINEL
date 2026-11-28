@@ -30,6 +30,7 @@ mod frappe_whitelist;
 mod frontend;
 mod gaming;
 mod gate;
+mod gitfiles;
 mod gov;
 mod gpu;
 mod graph;
@@ -53,6 +54,7 @@ mod parity;
 mod ports;
 mod pre_release;
 mod reconcile;
+mod registry;
 mod release_engine;
 mod release_file_gate;
 mod release_order;
@@ -61,11 +63,13 @@ mod rollout;
 mod rule;
 mod secrets_guard;
 mod secrets_suite;
+mod selectors;
 mod semantic;
 mod shell;
 mod sweep;
 #[cfg(test)]
 mod testkit;
+mod testscope;
 mod tools;
 mod typegen;
 mod util;
@@ -1854,6 +1858,14 @@ fn collect_blocking(out: &mut Vec<String>, violations: &[Violation]) {
     }
 }
 
+/// The configuration of a tree a subsystem resolved on its own; broken is a usage error.
+fn config_of(root: &Path) -> SteniocheckConfig {
+    match SteniocheckConfig::load_from_dir(root) {
+        Ok(cfg) => cfg,
+        Err(e) => refuse(&e.to_string()),
+    }
+}
+
 fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Result<()> {
     baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Rigorous Pre-Delivery Inspection");
     println!(
@@ -1899,7 +1911,7 @@ fn run_quality_gate(args: &Args, rules: &[Rule], whitelist: &Whitelist) -> Resul
     collect_blocking(&mut blocker_errors, &i18n_result.violations);
 
     // 3d. Dependabot lockfile coverage (inert without .github/dependabot.yml)
-    let dependabot_cfg = SteniocheckConfig::load_from_dir(&args.path);
+    let dependabot_cfg = config_of(&args.path);
     let dependabot_result = dependabot::audit(&args.path, &dependabot_cfg);
     collect_blocking(&mut blocker_errors, &dependabot_result.violations);
 
@@ -2024,6 +2036,7 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
         }
     };
     violations.extend(docrules::language_findings(&args.path));
+    violations.retain(|v| selectors::wanted(v, args.only.as_deref()));
     if args.json {
         println!(
             "{}",
@@ -2065,6 +2078,28 @@ fn run_frappe_scope(args: &Args, cfg: &SteniocheckConfig) -> i32 {
 /// The linked queues are audited here only when no homelab audit already covers them.
 fn should_audit_queues(vault: bool, homelab: bool, tag: Option<&str>) -> bool {
     vault && !homelab && tag.is_none_or(|t| t == "doc")
+}
+
+/// A request the engine cannot honour: nothing was judged, so the exit code is the usage one.
+fn refuse(reason: &str) -> ! {
+    eprintln!("stenio: {reason}");
+    std::process::exit(2);
+}
+
+fn check_selectors(args: &Args, scope: &str, rules: &[Rule]) -> Result<(), String> {
+    if !scope.is_empty() {
+        selectors::check_scope(scope)?;
+    }
+    if let Some(tag) = args.tag.as_deref() {
+        if scope.eq_ignore_ascii_case("frappe") {
+            return Err("--tag does not apply to --scope frappe; use --only".to_string());
+        }
+        selectors::check_tag(tag, rules)?;
+    }
+    if let Some(only) = args.only.as_deref() {
+        selectors::check_only(only, scope, rules)?;
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -2409,12 +2444,21 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if (args.gate || args.dry) && (args.tag.is_some() || args.only.is_some() || args.diff.is_some())
+    {
+        refuse("--gate and --dry judge the whole tree: --tag, --only and --diff do not apply");
+    }
+
     let whitelist_path = args.path.join(".steniocheck-whitelist-registry.json");
     let whitelist = Whitelist::load_from_file(&whitelist_path);
 
     // Load canonical configuration steniocheck.toml
-    let steniocheck_cfg = SteniocheckConfig::load_from_dir(&args.path);
+    let steniocheck_cfg = match SteniocheckConfig::for_run(&args.path, args.config.as_deref()) {
+        Ok(cfg) => cfg,
+        Err(e) => refuse(&e.to_string()),
+    };
     let mut rules = get_rules_from_config(&steniocheck_cfg);
+    let all_rules = rules.clone();
 
     // ── Scope `fork`: DERIVED repository (third-party fork) ───────────────
     //
@@ -2448,13 +2492,11 @@ fn main() -> Result<()> {
     } else {
         cfg_scope_val
     };
+    if let Err(e) = check_selectors(&args, scope_opt, &all_rules) {
+        refuse(&e);
+    }
     if scope_opt.eq_ignore_ascii_case("frappe") {
-        let cfg = args
-            .config
-            .as_deref()
-            .map(|p| SteniocheckConfig::load_from_file(p))
-            .unwrap_or_else(|| steniocheck_cfg.clone());
-        std::process::exit(run_frappe_scope(&args, &cfg));
+        std::process::exit(run_frappe_scope(&args, &steniocheck_cfg));
     }
 
     if scope_opt.eq_ignore_ascii_case("fork") || scope_opt.eq_ignore_ascii_case("derived") {
@@ -2760,19 +2802,22 @@ fn main() -> Result<()> {
         },
     );
 
-    let mut report = scan_res?;
+    let mut report = match scan_res {
+        Ok(report) => report,
+        Err(e) => match e.downcast_ref::<engine::ScanRefused>() {
+            Some(refused) => refuse(&refused.0),
+            None => return Err(e),
+        },
+    };
 
     // ── Opt-in git history scan (--history) ────────────────────────────────
     if args.history {
         match guardian::scan_git_history(&args.path) {
-            Ok(found) => {
-                for v in found {
-                    report.error_count += 1;
-                    report.total_violations += 1;
-                    report.violations.push(v);
-                }
+            Ok(mut found) => {
+                selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
+                report.violations.extend(found);
             }
-            Err(e) => eprintln!("--history: {e}"),
+            Err(e) => refuse(&format!("--history: {e}")),
         }
     }
 
@@ -2781,8 +2826,6 @@ fn main() -> Result<()> {
     if let Some(gov) = gov_res {
         gov_messages = gov.messages;
         if !gov.errors.is_empty() {
-            report.error_count += gov.errors.len();
-            report.total_violations += gov.errors.len();
             for err in gov.errors {
                 report.violations.push(engine::Violation {
                     rule_id: "GOV-AGENT-LAWS".to_string(),
@@ -2798,9 +2841,8 @@ fn main() -> Result<()> {
                 });
             }
         }
-        for warn in gov.naming_warnings {
-            report.warning_count += 1;
-            report.total_violations += 1;
+        for mut warn in gov.naming_warnings {
+            warn.severity = Severity::Warning;
             report.violations.push(warn);
         }
     }
@@ -2809,27 +2851,14 @@ fn main() -> Result<()> {
     let mut doc_messages = Vec::new();
     if let Some(doc) = doc_res {
         doc_messages = doc.messages;
-        for v in doc.violations {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report.violations.extend(doc.violations);
     }
 
     // ── Document rules (src/docrules/) ─────────────────────────────────────
     if scope != "mirror" && docrules::applies(&args.path, tag_lower.as_deref(), only_rule) {
-        for v in docrules::audit(&args.path, tag_lower.as_deref(), only_rule) {
-            match v.severity {
-                Severity::Error => report.error_count += 1,
-                Severity::Warning => report.warning_count += 1,
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report
+            .violations
+            .extend(docrules::audit(&args.path, tag_lower.as_deref(), only_rule));
     }
 
     // ── Linked queues under the vault scope, and a queue file named by --path ──
@@ -2842,17 +2871,7 @@ fn main() -> Result<()> {
     if args.path.is_file() && tag_lower.as_deref().is_none_or(|t| t == "doc") {
         queue_findings.extend(backlog::integrity::audit_file(&args.path));
     }
-    for v in queue_findings {
-        if only_rule.is_none_or(|r| r.eq_ignore_ascii_case(&v.rule_id)) {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
-    }
+    report.violations.extend(queue_findings);
 
     // ── Harness entry points (AGENT-ENTRYPOINT-RULES, GB-033) ──────────────
     let should_audit_entrypoints = (is_vault_active || is_homelab_active)
@@ -2861,15 +2880,7 @@ fn main() -> Result<()> {
     if should_audit_entrypoints {
         let ep = entrypoints::audit(&args.path);
         doc_messages.extend(ep.messages);
-        for v in ep.violations {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report.violations.extend(ep.violations);
     }
 
     // ── Host and operations lints (`stenio hostops`) ───────────────────────
@@ -2877,15 +2888,7 @@ fn main() -> Result<()> {
     if hostops_only.is_some() || (is_homelab_active && tag_lower.is_none() && only_rule.is_none()) {
         let (messages, found) = hostops::audit(&args.path, hostops_only);
         doc_messages.extend(messages);
-        for v in found {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report.violations.extend(found);
     }
 
     // ── Agent hook fixtures (AGENT-HOOK-FIXTURES-IN-PIPELINE, GB-275) ──────
@@ -2897,9 +2900,8 @@ fn main() -> Result<()> {
     if should_audit_hook_fixtures {
         let hf = hook_fixtures::audit(&args.path);
         doc_messages.extend(hf.messages);
-        for v in hf.violations {
-            report.warning_count += 1;
-            report.total_violations += 1;
+        for mut v in hf.violations {
+            v.severity = Severity::Warning;
             report.violations.push(v);
         }
     }
@@ -2910,15 +2912,9 @@ fn main() -> Result<()> {
         tag: tag_lower.as_deref(),
         only_rule,
     };
-    for v in secrets_suite::audit(&args.path, &suite) {
-        if v.severity == Severity::Error {
-            report.error_count += 1;
-        } else {
-            report.warning_count += 1;
-        }
-        report.total_violations += 1;
-        report.violations.push(v);
-    }
+    report
+        .violations
+        .extend(secrets_suite::audit(&args.path, &suite));
 
     // ── Gettext catalogues (locale/*.po and the sources next to them) ──────
     let should_audit_i18n = (tag_lower.as_deref() == Some("i18n") || tag_lower.is_none())
@@ -2927,9 +2923,8 @@ fn main() -> Result<()> {
                 .map(|s| s.eq_ignore_ascii_case(i18n::RULE_ID))
                 .unwrap_or(false));
     if should_audit_i18n {
-        for v in i18n::audit_gettext(&args.path).violations {
-            report.error_count += 1;
-            report.total_violations += 1;
+        for mut v in i18n::audit_gettext(&args.path).violations {
+            v.severity = Severity::Error;
             report.violations.push(v);
         }
     }
@@ -2943,17 +2938,9 @@ fn main() -> Result<()> {
         // The path the user passed wins; the scope's resolved target only helps when `--path`
         // is a parent folder of the repository (hub scope).
         let dep_root = dependabot::repo_root(&args.path, &scan_target);
-        let dep = dependabot::audit(dep_root, &SteniocheckConfig::load_from_dir(dep_root));
+        let dep = dependabot::audit(dep_root, &config_of(dep_root));
         doc_messages.extend(dep.messages);
-        for v in dep.violations {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report.violations.extend(dep.violations);
     }
 
     // ── Shell scripts (GB-212/221/222/224/248/249) and lockfile parity (GB-070) ──
@@ -2967,18 +2954,18 @@ fn main() -> Result<()> {
         let mut found = shell::audit(repo);
         found.extend(lockparity::audit(repo));
         if let Some(base) = diff_target {
-            let changed = shell::changed_files(repo, base);
-            found.retain(|v| changed.iter().any(|c| v.file_path.ends_with(c.as_str())));
+            let changed = match gitfiles::changed(repo, base) {
+                Ok(files) => files,
+                Err(e) => refuse(&e),
+            };
+            found.retain(|v| {
+                changed.iter().any(|c| {
+                    let name = c.strip_prefix(repo).unwrap_or(c);
+                    Path::new(&v.file_path).ends_with(name)
+                })
+            });
         }
-        for v in found.into_iter().filter(|v| wants(&v.rule_id)) {
-            if v.severity == Severity::Error {
-                report.error_count += 1;
-            } else {
-                report.warning_count += 1;
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        report.violations.extend(found);
     }
 
     // ── CI workflow rules (CI-STEP-STENIO-PARITY GB-262, CI-RUST-COMPILE-ON-DEPENDENCY-PR GB-272, CI-RULE-SCOPE-NEVER-INVOKED GB-283)
@@ -2994,14 +2981,11 @@ fn main() -> Result<()> {
             .unwrap_or(true);
     if should_audit_ci {
         let ci_root = dependabot::repo_root(&args.path, &scan_target);
-        let found = ci::audit(ci_root, &SteniocheckConfig::load_from_dir(ci_root));
+        let found = ci::audit(ci_root, &config_of(ci_root));
         doc_messages.extend(found.messages);
-        for v in found.violations {
-            if only_rule.is_none_or(|r| r.eq_ignore_ascii_case(&v.rule_id)) {
-                report.warning_count += 1;
-                report.total_violations += 1;
-                report.violations.push(v);
-            }
+        for mut v in found.violations {
+            v.severity = Severity::Warning;
+            report.violations.push(v);
         }
     }
 
@@ -3010,8 +2994,6 @@ fn main() -> Result<()> {
     if let Some(gpu) = gpu_res {
         gpu_messages = gpu.messages;
         if !gpu.errors.is_empty() {
-            report.error_count += gpu.errors.len();
-            report.total_violations += gpu.errors.len();
             for gpu_err in gpu.errors {
                 report.violations.push(engine::Violation {
                     rule_id: "GPU-BLOAT-OR-MODEL".to_string(),
@@ -3032,8 +3014,6 @@ fn main() -> Result<()> {
     if let Some(mig) = mig_res {
         mig_messages = mig.messages;
         for err in &mig.errors {
-            report.error_count += 1;
-            report.total_violations += 1;
             report.violations.push(Violation {
                 rule_id: "DB-IDEMPOTENT-MIGRATION".to_string(),
                 rule_name: "Non-Idempotent SQL Migration".to_string(),
@@ -3055,14 +3035,9 @@ fn main() -> Result<()> {
     if let Some(hl) = homelab_res {
         report.total_files_scanned += hl.total_files_scanned;
         homelab_messages = hl.messages;
-        for v in hl.violations {
-            match v.severity {
-                Severity::Error => report.error_count += 1,
-                Severity::Warning => report.warning_count += 1,
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        let mut found = hl.violations;
+        selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
+        report.violations.extend(found);
     }
 
     // ── Infrastructure Subsystem (Compose, Systemd, SOPS) ─────────────────
@@ -3071,14 +3046,9 @@ fn main() -> Result<()> {
         for msg in inf.messages {
             homelab_messages.push(msg);
         }
-        for v in inf.violations {
-            match v.severity {
-                Severity::Error => report.error_count += 1,
-                Severity::Warning => report.warning_count += 1,
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        let mut found = inf.violations;
+        selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
+        report.violations.extend(found);
     }
 
     // ── Obsidian Vault Subsystem (Universal Governance) ───────────────────
@@ -3086,14 +3056,9 @@ fn main() -> Result<()> {
     if let Some(vl) = vault_res {
         report.total_files_scanned += vl.total_files_scanned;
         vault_messages = vl.messages;
-        for v in vl.violations {
-            match v.severity {
-                Severity::Error => report.error_count += 1,
-                Severity::Warning => report.warning_count += 1,
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        let mut found = vl.violations;
+        selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
+        report.violations.extend(found);
     }
 
     // ── Bilingual Curriculum Vitae Subsystem (curriculum-vitae/) ──────────
@@ -3101,15 +3066,23 @@ fn main() -> Result<()> {
     if let Some(cv) = cv_res {
         report.total_files_scanned += cv.total_files_scanned;
         cv_messages = cv.messages;
-        for v in cv.violations {
-            match v.severity {
-                Severity::Error => report.error_count += 1,
-                Severity::Warning => report.warning_count += 1,
-            }
-            report.total_violations += 1;
-            report.violations.push(v);
-        }
+        let mut found = cv.violations;
+        selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
+        report.violations.extend(found);
     }
+
+    report
+        .violations
+        .retain(|v| selectors::wanted(v, only_rule));
+    report.recount();
+    // `--fix` that could not write fails the run in every mode.
+    let fix_failed = report
+        .violations
+        .iter()
+        .any(|v| v.rule_id == engine::FIX_FAILED_ID);
+    // `--pre-commit check` is a gate: an error blocks it with or without `--strict`.
+    let strict = args.strict || args.pre_commit.as_deref() == Some("check");
+    let strict_exit = fix_failed || (strict && report.error_count > 0);
 
     for v in &mut report.violations {
         v.file_path = relativize(&v.file_path, &scan_target);
@@ -3117,7 +3090,7 @@ fn main() -> Result<()> {
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
-        if args.strict && report.error_count > 0 {
+        if strict_exit {
             std::process::exit(1);
         }
         return Ok(());
@@ -3145,10 +3118,16 @@ fn main() -> Result<()> {
                 report.total_files_scanned,
                 report.error_count,
                 report.warning_count,
-                args.strict,
+                strict || fix_failed,
             )
         );
-        if args.strict && report.error_count > 0 {
+        if report.total_files_skipped > 0 {
+            println!(
+                "stenio: skipped={} (listed above, not judged)",
+                report.total_files_skipped
+            );
+        }
+        if strict_exit {
             std::process::exit(1);
         }
         return Ok(());
@@ -3172,7 +3151,7 @@ fn main() -> Result<()> {
                 );
             }
         }
-        if args.strict && report.error_count > 0 {
+        if strict_exit {
             std::process::exit(1);
         }
         return Ok(());
@@ -3329,7 +3308,7 @@ fn main() -> Result<()> {
     );
     println!();
 
-    if args.strict && report.error_count > 0 {
+    if strict_exit {
         std::process::exit(1);
     }
 

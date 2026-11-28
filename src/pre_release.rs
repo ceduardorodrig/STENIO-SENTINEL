@@ -817,10 +817,19 @@ pub fn run_cli(argv: &[String]) -> i32 {
         .config
         .clone()
         .unwrap_or_else(|| a.repo.join("steniocheck.toml"));
+    let loaded = match &a.config {
+        Some(_) => SteniocheckConfig::load_from_file(&cfg),
+        None => SteniocheckConfig::load_from_dir(&a.repo),
+    };
+    let fc = match loaded {
+        Ok(cfg) => cfg.frappe.unwrap_or_default(),
+        Err(e) => {
+            eprintln!("stenio: {e}");
+            return 2;
+        }
+    };
     let o = Opts {
-        fc: SteniocheckConfig::load_from_file(&cfg)
-            .frappe
-            .unwrap_or_default(),
+        fc,
         repo: a.repo,
         tag: a.tag.unwrap_or_default(),
         prev: a.prev,

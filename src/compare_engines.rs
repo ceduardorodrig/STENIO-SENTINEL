@@ -53,7 +53,9 @@ struct Args {
 /// Distinct CI scopes of the workflows under `root`, in order of appearance; `["all"]` when no
 /// step names one.
 pub fn ci_scopes(root: &Path) -> Vec<String> {
+    // A broken file makes both engines fail on their own run; here it only names no scope.
     let default_scope = crate::config::SteniocheckConfig::load_from_dir(root)
+        .unwrap_or_default()
         .general
         .and_then(|g| g.scope);
     let mut out: Vec<String> = Vec::new();

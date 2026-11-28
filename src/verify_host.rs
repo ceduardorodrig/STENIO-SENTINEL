@@ -218,7 +218,13 @@ pub fn run_cli(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    let cfg = SteniocheckConfig::load_from_file(&a.config);
+    let cfg = match SteniocheckConfig::load_from_file(&a.config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("stenio: {e}");
+            return 2;
+        }
+    };
     let parity = cfg.parity.clone().unwrap_or_default();
     let container = parity.stenio_container.clone().unwrap_or_default();
     let files: Vec<ParityFile> = parity

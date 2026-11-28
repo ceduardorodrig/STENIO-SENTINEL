@@ -585,7 +585,11 @@ fn scope_of(dir: &Path, fallback: &Path) -> Option<Scope> {
         let declared = ancestor
             .join("steniocheck.toml")
             .is_file()
-            .then(|| SteniocheckConfig::load_from_dir(ancestor).language)
+            .then(|| {
+                SteniocheckConfig::load_from_dir(ancestor)
+                    .unwrap_or_default()
+                    .language
+            })
             .flatten();
         if let Some(language) = declared {
             return scope_at(ancestor, language);
@@ -951,7 +955,12 @@ fn inherited_baseline(root: &Path) -> Option<(PathBuf, HashMap<u64, usize>)> {
         if !dir.join("steniocheck.toml").is_file() {
             return None;
         }
-        let file = dir.join(SteniocheckConfig::load_from_dir(dir).language?.baseline?);
+        let file = dir.join(
+            SteniocheckConfig::load_from_dir(dir)
+                .ok()?
+                .language?
+                .baseline?,
+        );
         let allowed = read_baseline(&file)?;
         Some((file, allowed))
     })

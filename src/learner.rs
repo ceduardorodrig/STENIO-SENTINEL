@@ -1,9 +1,9 @@
+use crate::config::{CustomRuleConfig, SteniocheckConfig};
 use anyhow::{Context, Result, bail};
 use colored::*;
 use regex::Regex;
-use serde::Deserialize;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +24,11 @@ pub struct LearnPayload {
     pub path_exclude: Option<Vec<String>>,
 }
 
+#[derive(Serialize)]
+struct LearnedRules {
+    custom_rules: Vec<CustomRuleConfig>,
+}
+
 pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
     let payload: LearnPayload = serde_json::from_str(raw_payload)
         .context("Failed to parse learn JSON payload. Expected format: '{\"id\":\"...\", \"pattern\":\"...\", \"extensions\":[\"...\"]}'")?;
@@ -41,108 +46,78 @@ pub fn handle_learn(repo_root: &Path, raw_payload: &str) -> Result<()> {
         .description
         .or(payload.message)
         .unwrap_or_else(|| format!("Violation detected by learned rule {}", id));
-    let severity = payload
-        .severity
-        .map(|s| s.to_lowercase())
-        .filter(|s| s == "warning" || s == "warn")
-        .map(|_| "warning".to_string())
-        .unwrap_or_else(|| "error".to_string());
+    let severity = match payload.severity.map(|s| s.to_lowercase()) {
+        Some(s) if s == "warn" => "warning".to_string(),
+        Some(s) => s,
+        None => "error".to_string(),
+    };
     let tag = payload.tag.unwrap_or_else(|| "custom".to_string());
     let extensions = payload
         .extensions
         .or(payload.file_extensions)
         .unwrap_or_else(|| vec!["ts".to_string(), "tsx".to_string(), "rs".to_string()]);
-    let must_match = payload.must_match.unwrap_or(false);
-    let suggestion = payload.suggestion;
+    let extensions_fmt = extensions.join(", ");
 
-    // 2. Read and verify duplicates in steniocheck.toml
-    let toml_path = repo_root.join("steniocheck.toml");
+    // 2. The current file must parse before anything is added to it
+    let toml_path = repo_root.join(crate::config::FILE_NAME);
     if !toml_path.is_file() {
         bail!(
             "Configuration file steniocheck.toml not found in {:?}",
             repo_root
         );
     }
-
-    let current_content = fs::read_to_string(&toml_path)?;
-    let id_marker = format!("id = \"{}\"", id);
-    if current_content.contains(&id_marker) {
+    let current = SteniocheckConfig::load_from_file(&toml_path)?;
+    if current
+        .custom_rules
+        .iter()
+        .flatten()
+        .any(|r| r.id.eq_ignore_ascii_case(&id))
+    {
         bail!("Rule with ID '{}' already exists in steniocheck.toml!", id);
     }
 
-    // 3. TOML block formatting
-    let extensions_fmt = extensions
-        .iter()
-        .map(|e| format!("\"{}\"", e))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    // Safe escaping for TOML string
-    let escaped_pattern = payload.pattern.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_desc = description.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
-    let suggestion_line = match &suggestion {
-        Some(s) => format!(
-            "suggestion = \"{}\"\n",
-            s.replace('\\', "\\\\").replace('"', "\\\"")
-        ),
-        None => "".to_string(),
+    // 3. Serialization by the TOML library, then a parse of the whole new file
+    let block = LearnedRules {
+        custom_rules: vec![CustomRuleConfig {
+            id: id.clone(),
+            tag: Some(tag.clone()),
+            severity: Some(severity.clone()),
+            name: name.clone(),
+            description: description.clone(),
+            pattern: payload.pattern.clone(),
+            extensions,
+            must_match: Some(payload.must_match.unwrap_or(false)),
+            suggestion: payload.suggestion,
+            fix_replacement: payload.fix_replacement,
+            path_include: payload.path_include,
+            path_exclude: payload.path_exclude,
+        }],
     };
-    let fix_line = match &payload.fix_replacement {
-        Some(f) => format!(
-            "fix_replacement = \"{}\"\n",
-            f.replace('\\', "\\\\").replace('"', "\\\"")
-        ),
-        None => "".to_string(),
-    };
-    let path_inc_line = match &payload.path_include {
-        Some(inc) => {
-            let list = inc
-                .iter()
-                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("path_include = [{}]\n", list)
-        }
-        None => "".to_string(),
-    };
-    let path_exc_line = match &payload.path_exclude {
-        Some(exc) => {
-            let list = exc
-                .iter()
-                .map(|s| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("path_exclude = [{}]\n", list)
-        }
-        None => "".to_string(),
-    };
+    let entry = toml::to_string(&block).context("Failed to serialize the learned rule")?;
+    let mut next = fs::read_to_string(&toml_path)?;
+    if !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push('\n');
+    next.push_str(&entry);
+    if let Err(cause) = SteniocheckConfig::parse(&next) {
+        bail!("the new rule would break steniocheck.toml, nothing was written: {cause}");
+    }
 
-    let toml_entry = format!(
-        "\n[[custom_rules]]\nid = \"{}\"\ntag = \"{}\"\nseverity = \"{}\"\nname = \"{}\"\ndescription = \"{}\"\npattern = \"{}\"\nextensions = [{}]\nmust_match = {}\n{}{}{}{}",
-        id,
-        tag,
-        severity,
-        escaped_name,
-        escaped_desc,
-        escaped_pattern,
-        extensions_fmt,
-        must_match,
-        suggestion_line,
-        fix_line,
-        path_inc_line,
-        path_exc_line
-    );
-
-    // 4. Atomic persistence / append
-    let mut file = OpenOptions::new()
-        .create(false)
-        .append(true)
-        .open(&toml_path)
-        .context("Failed to open steniocheck.toml for writing")?;
-
-    file.write_all(toml_entry.as_bytes())
-        .context("Failed to write learned rule into steniocheck.toml")?;
+    // 4. Atomic persistence: temporary file beside the target, then rename
+    let temp = repo_root.join(format!(".steniocheck.toml.{}.tmp", std::process::id()));
+    let permissions = fs::metadata(&toml_path)?.permissions();
+    if permissions.readonly() {
+        bail!("steniocheck.toml is read-only, nothing was written");
+    }
+    let target = fs::canonicalize(&toml_path)?;
+    let written = fs::write(&temp, &next)
+        .and_then(|()| fs::set_permissions(&temp, permissions))
+        .and_then(|()| fs::rename(&temp, &target));
+    if let Err(e) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(e).context("Failed to write learned rule into steniocheck.toml");
+    }
 
     crate::baseline::print_banner_green(&format!(
         "✨ StenioKernel — New Rule Learned Successfully! [{}]",
