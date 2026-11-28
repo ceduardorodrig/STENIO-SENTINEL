@@ -3,7 +3,6 @@
 //! error, never an empty change set.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Directory Git runs in and, when the scan target is a single file, that file.
 fn split(root: &Path) -> (PathBuf, Option<PathBuf>) {
@@ -19,8 +18,7 @@ fn split(root: &Path) -> (PathBuf, Option<PathBuf>) {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = Command::new("git")
-        .current_dir(dir)
+    let out = crate::staged::git_command(dir)
         .args(args)
         .output()
         .map_err(|e| format!("cannot run git in {}: {e}", dir.display()))?;
@@ -64,6 +62,20 @@ fn untracked(dir: &Path) -> Result<Vec<PathBuf>, String> {
         &["ls-files", "-z", "--others", "--exclude-standard", "--"],
     )?;
     Ok(names(&raw).collect())
+}
+
+/// The tracked files below `dir`; empty outside a work tree.
+pub fn tracked(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let inside =
+        git(dir, &["rev-parse", "--is-inside-work-tree"]).map(|raw| raw.starts_with(b"true"));
+    if inside != Ok(true) {
+        return Ok(Vec::new());
+    }
+    let raw = git(dir, &["ls-files", "-z", "--cached", "--"])?;
+    Ok(names(&raw)
+        .map(|name| dir.join(name))
+        .filter(|p| p.is_file() && !p.is_symlink())
+        .collect())
 }
 
 /// Everything that differs from `HEAD` (or is tracked, before the first commit) plus the

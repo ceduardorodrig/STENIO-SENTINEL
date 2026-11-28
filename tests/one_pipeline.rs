@@ -180,7 +180,7 @@ fn keys_without_effect_are_named() -> Fallible {
     let t = Tree::new("keys")?;
     t.put(
         "steniocheck.toml",
-        "[securty]\nx = 1\n[dry]\nenabled = false\n[general]\nname = \"n\"\n",
+        "[securty]\nx = 1\n[dry]\nenabled = false\n[general]\nscope = \"project\"\nname = \"n\"\n",
     )?;
     let (code, text) = run(&t.0, &["--path", ".", "--strict", "--compact"])?;
     assert_eq!(code, 1, "{text}");
@@ -195,7 +195,8 @@ fn keys_without_effect_are_named() -> Fallible {
     let (code, shown) = run(&t.0, &["config", "show", "--path", "."])?;
     assert_eq!(code, 0, "{shown}");
     assert!(
-        shown.contains("general.name = \"n\"  [applied; ./steniocheck.toml:6]"),
+        shown.contains("general.scope = \"project\"  [applied; ./steniocheck.toml:6]")
+            && shown.contains("general.name = \"n\"  [not applied; ./steniocheck.toml:7]"),
         "{shown}"
     );
     assert!(shown.contains("securty.x = 1  [unknown;"), "{shown}");

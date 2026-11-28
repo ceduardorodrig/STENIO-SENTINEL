@@ -14,6 +14,8 @@ pub const UNUSED_ID: &str = "SCAN-CONFIG-UNUSED-KEY";
 /// Declared tables and keys that no code path applies. A trailing dot covers a whole table.
 /// The test below fails when the sources start reading one of them.
 pub const UNUSED: &[&str] = &[
+    "general.name",
+    "general.version",
     "general.min_laws_count",
     "general.agents_md",
     "security.prohibit_bare_sudo",
@@ -228,7 +230,10 @@ mod tests {
         for entry in UNUSED {
             let (table, key) = entry.split_once('.').unwrap_or((entry, ""));
             // A read goes through the table (`.dry`) or names the field (`.min_laws_count`).
-            let pattern = if key.is_empty() {
+            // `name` and `version` are fields of many structures: only a read of `general` counts.
+            let pattern = if table == "general" && matches!(key, "name" | "version") {
+                format!(r"general[^;]{{0,80}}\.\s*{key}\b")
+            } else if key.is_empty() {
                 format!(r"(config|cfg)\s*\.\s*{table}\b")
             } else {
                 format!(r"\.\s*{key}\b")
@@ -245,13 +250,15 @@ mod tests {
     fn unknown_and_unused_keys_are_named() {
         let found = diagnose_text(
             "steniocheck.toml",
-            "[securty]\nx = 1\n[general]\nnope = 1\nname = \"n\"\n[dry]\nenabled = false\n[env_wiring]\nignore = []\n",
+            "[securty]\nx = 1\n[general]\nnope = 1\nname = \"n\"\nversion = \"1\"\nscope = \"project\"\n[dry]\nenabled = false\n[env_wiring]\nignore = []\n",
         );
         let named = |id: &str, key: &str| found.iter().any(|v| v.rule_id == id && v.snippet == key);
         assert!(named(UNKNOWN_ID, "securty"), "{found:?}");
         assert!(named(UNKNOWN_ID, "general.nope"), "{found:?}");
         assert!(named(UNUSED_ID, "dry.enabled"), "{found:?}");
         assert!(!found.iter().any(|v| v.snippet.contains("env_wiring")));
-        assert!(!found.iter().any(|v| v.snippet == "general.name"));
+        assert!(named(UNUSED_ID, "general.name"), "{found:?}");
+        assert!(named(UNUSED_ID, "general.version"), "{found:?}");
+        assert!(!found.iter().any(|v| v.snippet == "general.scope"));
     }
 }
