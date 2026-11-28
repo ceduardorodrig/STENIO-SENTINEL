@@ -227,6 +227,7 @@ impl Engine {
     ) -> Result<ScanReport> {
         let t0 = Instant::now();
 
+        let selected = diff_target.is_some() || fast_mode;
         let file_paths = if let Some(diff_spec) = diff_target {
             crate::gitfiles::changed(root, diff_spec).map_err(ScanRefused)?
         } else if fast_mode {
@@ -242,16 +243,34 @@ impl Engine {
                 self.apply_auto_fixes(root, &file_paths, tag_filter, only_rule);
         }
 
+        // A full scan adds the dot files, for the credential rules only; a changed dot file
+        // is selected by Git and judged like any other changed file.
+        let dot_files = if selected {
+            Vec::new()
+        } else {
+            let walked: std::collections::HashSet<&PathBuf> = file_paths.iter().collect();
+            crate::hidden::files(root, |p| is_generated_path(root, p))
+                .map_err(ScanRefused)?
+                .into_iter()
+                .filter(|p| !walked.contains(p))
+                .collect::<Vec<_>>()
+        };
+
         // Process all files in parallel with Rayon
         let mut violations: Vec<Violation> = file_paths
             .par_iter()
             .flat_map(|path| self.scan_file(root, path, tag_filter, only_rule))
+            .chain(
+                dot_files
+                    .par_iter()
+                    .flat_map(|path| self.scan_as(root, path, tag_filter, only_rule, true)),
+            )
             .collect();
         let total_files_skipped = violations
             .iter()
             .filter(|v| v.rule_id == UNREADABLE_ID)
             .count();
-        let total_files_scanned = file_paths.len() - total_files_skipped;
+        let total_files_scanned = file_paths.len() + dot_files.len() - total_files_skipped;
         violations.extend(fix_failures);
 
         // Automatic Scope Isolation Check (Single Responsibility Worktree)
@@ -379,17 +398,44 @@ impl Engine {
         tag_filter: Option<&str>,
         only_rule: Option<&str>,
     ) -> Vec<Violation> {
+        self.scan_as(root, path, tag_filter, only_rule, false)
+    }
+
+    /// `credentials_only` is how a full scan judges the dot files.
+    fn scan_as(
+        &self,
+        root: &Path,
+        path: &Path,
+        tag_filter: Option<&str>,
+        only_rule: Option<&str>,
+        credentials_only: bool,
+    ) -> Vec<Violation> {
         let ext = crate::rule::effective_extension(path);
         let path_str = path.to_string_lossy().to_string();
 
-        let content = match fs::read_to_string(path) {
+        let dot_file = crate::hidden::is_hidden(root, path);
+        let dotenv = dot_file
+            && crate::guardian::is_env_like_name(
+                &path.file_name().unwrap_or_default().to_string_lossy(),
+            );
+        let read = if credentials_only {
+            match crate::hidden::read_text(path) {
+                Ok(Some(text)) => Ok(text),
+                Ok(None) => return Vec::new(),
+                Err(e) => Err(e),
+            }
+        } else {
+            fs::read_to_string(path)
+        };
+        let content = match read {
             Ok(c) => c,
             Err(e) => {
                 // A file no active rule reads (an image, a binary) is not a gap.
-                let judged = self
-                    .rules
-                    .iter()
-                    .any(|r| r.matches_filter(tag_filter, only_rule, &ext));
+                let judged = credentials_only
+                    || self
+                        .rules
+                        .iter()
+                        .any(|r| r.matches_filter(tag_filter, only_rule, &ext));
                 if !judged {
                     return Vec::new();
                 }
@@ -403,7 +449,7 @@ impl Engine {
             }
         };
 
-        let restricted = secrets_only(root, path, &content);
+        let restricted = credentials_only || secrets_only(root, path, &content);
         let test_lines = std::cell::OnceCell::new();
         let mut file_violations = Vec::new();
 
@@ -438,9 +484,29 @@ impl Engine {
             }
         }
 
+        let plaintext = crate::hidden::PLAINTEXT_ID;
+        if dot_file
+            && tag_filter.is_none_or(|t| t == "sec")
+            && only_rule.is_none_or(|r| r.eq_ignore_ascii_case(plaintext))
+        {
+            file_violations.extend(
+                crate::hidden::dotenv_findings(path, &content)
+                    .into_iter()
+                    .filter(|v| {
+                        let line = content.lines().nth(v.line_number - 1).unwrap_or("");
+                        !self.whitelist.is_ignored(&path_str, plaintext, line)
+                    }),
+            );
+        }
+
         // 2. Rule Automaton Audit
         for (idx, rule) in self.rules.iter().enumerate() {
-            if !rule.matches_filter(tag_filter, only_rule, &ext) {
+            // A credential in a dot file counts whatever its extension.
+            let judged_as = match rule.file_extensions.first() {
+                Some(any) if dot_file && rule.id.starts_with("SEC-SECRET") => any.as_str(),
+                _ => ext.as_str(),
+            };
+            if !rule.matches_filter(tag_filter, only_rule, judged_as) {
                 continue;
             }
 
@@ -595,7 +661,8 @@ impl Engine {
                                 severity,
                                 file_path: path_str.clone(),
                                 line_number: line_idx + 1,
-                                snippet: if rule.id.starts_with("SEC-SECRET") {
+                                // No line of a dotenv file is printed: it may hold a value.
+                                snippet: if dotenv || rule.id.starts_with("SEC-SECRET") {
                                     crate::infra::mask_snippet(line)
                                 } else {
                                     line.trim().to_string()

@@ -19,7 +19,7 @@ use crate::vault::audit_vault;
 use crate::{
     ci, config_schema, dependabot, docrules, dry, entrypoints, frappe, gitfiles, guardian,
     hook_fixtures, hostops, i18n, lockparity, relativize, resolve_scan_target, secrets_suite,
-    selectors, shell, should_audit_queues,
+    selectors, shell, should_audit_queues, staged,
 };
 
 /// What a caller asks for. Every field left at its default means a full scan of `path`.
@@ -130,10 +130,35 @@ pub fn run(req: &Request) -> Result<Outcome, String> {
 
 pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String> {
     let started = std::time::Instant::now();
-    let registry = req.path.join(".steniocheck-whitelist-registry.json");
+    // `--diff staged` over a working copy that differs from the index audits the index.
+    let staged_request = matches!(
+        req.diff.as_deref().map(str::trim),
+        Some("staged" | "cached")
+    );
+    let snapshot = if staged_request {
+        staged::snapshot(&req.path)?
+    } else {
+        None
+    };
+    if snapshot.is_some() && req.fix {
+        return Err("--fix cannot rewrite staged content that differs from the working copy: stage or stash the other changes first".to_string());
+    }
+    let asked = req;
+    let judged = Request {
+        path: snapshot
+            .as_ref()
+            .map_or_else(|| asked.path.clone(), |s| s.map(&asked.path)),
+        ..asked.clone()
+    };
+    let req = &judged;
+    let registry = asked.path.join(".steniocheck-whitelist-registry.json");
     let whitelist = Whitelist::load_from_file(&registry, &req.path)?;
     let diagnostics = config_schema::diagnose(prepared.config_file.as_deref());
-    let exemption_findings = whitelist.stale_findings();
+    // An exemption is stale against the tree the user edits, not against the snapshot.
+    let exemption_findings = match &snapshot {
+        Some(_) => Whitelist::load_from_file(&registry, &asked.path)?.stale_findings(),
+        None => whitelist.stale_findings(),
+    };
     let Prepared {
         config,
         rules,
@@ -142,8 +167,12 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
         ..
     } = prepared;
     let explicit_config = req.config.as_deref();
+    // Configuration is always the one of the working copy.
     let config_of = |root: &Path| -> Result<SteniocheckConfig, String> {
-        SteniocheckConfig::for_run(root, explicit_config)
+        let root = snapshot
+            .as_ref()
+            .map_or_else(|| root.to_path_buf(), |s| s.unmap(root));
+        SteniocheckConfig::for_run(&root, explicit_config)
             .map(|(c, _)| c)
             .map_err(|e| e.to_string())
     };
@@ -176,7 +205,10 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
     let diff_target: Option<&str> = req.diff.as_deref();
     let tag_lower = req.tag.as_deref().map(|s| s.to_lowercase());
     let only_rule = req.only.as_deref();
-    let p_canon = req.path.canonicalize().unwrap_or_else(|_| req.path.clone());
+    let p_canon = asked
+        .path
+        .canonicalize()
+        .unwrap_or_else(|_| asked.path.clone());
     let p_str = p_canon.to_string_lossy();
     let scope = if !scope_opt.is_empty() {
         scope_opt.to_lowercase()
@@ -364,7 +396,7 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
 
     // ── Opt-in git history scan (--history) ────────────────────────────────
     if req.history {
-        match guardian::scan_git_history(&req.path) {
+        match guardian::scan_git_history(&asked.path) {
             Ok(mut found) => {
                 selectors::retain_tag(&mut found, tag_lower.as_deref(), &all_rules);
                 report.violations.extend(found);
@@ -664,6 +696,10 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
     report.recount();
     for v in &mut report.violations {
         v.file_path = relativize(&v.file_path, &scan_target);
+        if let Some(s) = &snapshot {
+            v.file_path = s.restore(&v.file_path);
+            v.message = s.restore(&v.message);
+        }
     }
 
     let mut sections = Vec::new();
@@ -704,6 +740,17 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
             sections.push((title, messages));
         }
     }
+    let scan_target = match &snapshot {
+        Some(s) => {
+            for (_, messages) in &mut sections {
+                for message in messages.iter_mut() {
+                    *message = s.restore(message);
+                }
+            }
+            s.unmap(&scan_target)
+        }
+        None => scan_target,
+    };
     Ok(Outcome {
         report,
         rules_run,

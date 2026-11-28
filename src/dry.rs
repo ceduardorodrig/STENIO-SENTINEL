@@ -206,11 +206,15 @@ pub fn detect_dry_duplication(
     // Key: (file_idx, sub_idx)
     let mut reported_positions: HashSet<(usize, usize)> = HashSet::new();
 
-    for (_hash, occurrences) in window_map {
-        if occurrences.len() < 2 {
-            continue;
-        }
+    // By position: which block is seen first decides what is already covered, so the order must
+    // not depend on the hash map.
+    let mut groups: Vec<Vec<(usize, usize)>> = window_map
+        .into_values()
+        .filter(|occurrences| occurrences.len() > 1)
+        .collect();
+    groups.sort_unstable();
 
+    for occurrences in groups {
         // Compare each pair of occurrences
         for i in 0..occurrences.len() {
             let (f1, idx1) = occurrences[i];
@@ -341,7 +345,8 @@ pub fn scan_dry_directory(
     let mut file_records = Vec::new();
     let mut ast_files: Vec<(String, Vec<crate::dry_ast::AstUnit>)> = Vec::new();
 
-    let walker = crate::baseline::create_standard_walker(root);
+    let mut walker = crate::baseline::create_standard_walker(root);
+    walker.sort_by_file_path(|a, b| a.cmp(b));
 
     for entry in walker.build().flatten() {
         if entry.file_type().map_or(false, |ft| ft.is_file()) {
@@ -366,6 +371,9 @@ pub fn scan_dry_directory(
         &ast_files,
         AST_MIN_TOKENS,
     ));
+    violations.sort_by(|a, b| {
+        (&a.file_path, a.line_number, &a.message).cmp(&(&b.file_path, b.line_number, &b.message))
+    });
     (violations, files_count, t0.elapsed())
 }
 

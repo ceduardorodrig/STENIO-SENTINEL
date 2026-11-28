@@ -37,6 +37,7 @@ mod gpu;
 mod graph;
 mod guardian;
 mod health;
+mod hidden;
 mod homelab;
 mod hook_fixtures;
 mod hostops;
@@ -70,6 +71,7 @@ mod secrets_suite;
 mod selectors;
 mod semantic;
 mod shell;
+mod staged;
 mod sweep;
 #[cfg(test)]
 mod testkit;

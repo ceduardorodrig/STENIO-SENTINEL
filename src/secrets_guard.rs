@@ -104,9 +104,7 @@ pub fn credential_shaped_name(name: &str) -> bool {
 }
 
 fn git_list(repo: &Path, args: &[&str]) -> Result<Vec<String>, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let out = crate::staged::git_command(repo)
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
