@@ -2041,7 +2041,21 @@ fn run_config_cli(argv: &[String]) -> i32 {
     match config_schema::show(&root, value("--config").as_deref()) {
         Ok(text) => {
             print!("{text}");
-            0
+            match hub::config::Config::load() {
+                Ok(hub_config) => {
+                    let source = hub::config::Config::override_file().map_or_else(
+                        || "embedded hub declaration".to_string(),
+                        |p| p.display().to_string(),
+                    );
+                    // A served ledger applies the declaration of its own host.
+                    print!("{}", hub_config.quota.describe(&source));
+                    0
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    2
+                }
+            }
         }
         Err(e) => {
             eprintln!("stenio: {e}");
@@ -2084,7 +2098,25 @@ fn print_rule_list(rules: &[Rule]) {
     println!();
 }
 
+/// A reader that closes the pipe (`| head`, `| rg -q`) ends the run quietly instead of
+/// panicking. The status stays non zero (128 + SIGPIPE), so a cut report is never a pass.
+fn end_quietly_on_a_closed_pipe() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let said = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or_default();
+        if said.starts_with("failed printing to std") && said.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        report(info);
+    }));
+}
+
 fn main() -> Result<()> {
+    end_quietly_on_a_closed_pipe();
     let mut argv: Vec<String> = std::env::args().collect();
     if let Some(code) = cli_help::announce(&argv) {
         std::process::exit(code);

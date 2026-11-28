@@ -46,7 +46,7 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Engine release tag to pin (ex.: v3.2.0). Defaults to the latest published release."
+    description: "Engine release tag to pin (ex.: v4.60.0). Defaults to the release this action track serves."
     required: false
     default: ""
 
@@ -71,7 +71,9 @@ runs:
       env:
         INPUT_VERSION: ${{ inputs.version }}
       run: |
-        VERSION="${INPUT_VERSION:-latest}"
+        # This track (`@v1`: engine 4.x) never floats to a later major: the default is the
+        # release of this very commit, and `cargo test` keeps it equal to Cargo.toml.
+        VERSION="${INPUT_VERSION:-v4.60.0}"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "🛡️ StenioSentinel: usando a release '$VERSION'"
 

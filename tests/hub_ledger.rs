@@ -26,9 +26,21 @@ impl Drop for Fixture {
 }
 
 /// The embedded declaration without its quota sources.
-fn config_head() -> &'static str {
+/// The gate tests declare their own limits, so a change of the shipped policy leaves them.
+fn config_head() -> String {
+    shipped_head()
+        .replace("stop_percent = 100.0", "stop_percent = 80.0")
+        .replace("throttle_percent = 100.0", "throttle_percent = 60.0")
+        .replace("throttle_workers = 5", "throttle_workers = 2")
+        .replace("unknown_workers = 5", "unknown_workers = 1")
+}
+
+/// The shipped declaration without its quota sources.
+fn shipped_head() -> String {
     let text = include_str!("../src/hub/defaults.toml");
-    text.split("[[quota.source]]").next().unwrap_or(text)
+    // The comment about `[[quota.limit]]` stays; the sources start at the first table.
+    let head = text.split("\n[[quota.source]]").next().unwrap_or(text);
+    format!("{head}\n")
 }
 
 fn row(n: usize) -> String {
@@ -1255,5 +1267,63 @@ fn a_claim_reads_the_declared_source_of_the_account_itself() -> Fallible {
         .ok_or("not listed")?;
     assert_eq!(item["confidence"], "unknown", "{item}");
     assert!(item["used_pct"].is_null(), "{item}");
+    Ok(())
+}
+
+#[test]
+fn gb414_the_shipped_policy_refuses_only_an_exhausted_window() -> Fallible {
+    let f = Fixture::new("shipped-quota")?;
+    fs::write(f.root.join("hub.toml"), shipped_head())?;
+    let w = f.join("claude")?;
+    let sample = |used: &str, window: &str| {
+        f.ok(&[
+            "quota",
+            "put",
+            "--account",
+            "claude",
+            "--window",
+            window,
+            "--used",
+            used,
+        ])
+    };
+    sample("85", "week")?;
+    let taken = f.ok(&["claim", "--worker", &w, "row:GB-001"])?;
+    assert!(
+        taken["warning"]
+            .as_str()
+            .is_some_and(|t| t.contains("85%") && t.contains("do not start a release")),
+        "{taken}"
+    );
+    sample("99", "week")?;
+    let other = f.join("claude")?;
+    f.ok(&["claim", "--worker", &other, "row:GB-002"])?;
+    sample("100", "week")?;
+    let no = f.refused(&["claim", "--worker", &w, "row:GB-003"], "quota")?;
+    assert!(
+        no["message"].as_str().is_some_and(|m| m.contains("week")),
+        "{no}"
+    );
+    let shown = f.ok(&["status"])?.to_string();
+    assert!(shown.contains("\"level\":\"exhausted\""), "{shown}");
+    assert!(shown.contains("\"stop_percent\":100.0"), "{shown}");
+    // One window may be held to a lower limit.
+    fs::write(
+        f.root.join("hub.toml"),
+        format!(
+            "{}\n[[quota.limit]]\naccount = \"claude\"\nwindow = \"session\"\nstop_percent = 50.0\n",
+            shipped_head()
+        ),
+    )?;
+    sample("10", "week")?;
+    sample("55", "session")?;
+    f.refused(&["claim", "--worker", &w, "row:GB-003"], "quota")?;
+    let out = f.command().args(["config", "show"]).output()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("hub.quota.stop_percent = 100  [applied;")
+            && text.contains("hub.quota.limit.0 = account claude window session"),
+        "{text}"
+    );
     Ok(())
 }
