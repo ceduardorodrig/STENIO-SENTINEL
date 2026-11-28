@@ -97,8 +97,7 @@ pub fn run_binary_parity(argv: &[String]) -> i32 {
     let a = match BinArgs::try_parse_from(argv) {
         Ok(a) => a,
         Err(e) => {
-            let _ = e.print();
-            return 2;
+            return crate::util::usage_exit(&e);
         }
     };
     let Some(built) = a.built.or_else(|| std::env::current_exe().ok()) else {
@@ -178,8 +177,7 @@ pub fn run_drift(argv: &[String]) -> i32 {
     let a = match DriftArgs::try_parse_from(argv) {
         Ok(a) => a,
         Err(e) => {
-            let _ = e.print();
-            return 2;
+            return crate::util::usage_exit(&e);
         }
     };
     let Ok(entries) = fs::read_dir(&a.repo) else {

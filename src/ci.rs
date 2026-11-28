@@ -823,6 +823,30 @@ pub fn evaluate_log_en_coverage(rules: &[(String, String, Vec<String>)]) -> Vec<
         .collect()
 }
 
+/// Line (1-based) of the `pattern` key of the custom rule `id` in a configuration text, else 1.
+fn custom_pattern_line(content: &str, id: &str) -> usize {
+    let key_value = |line: &str, key: &str| -> Option<String> {
+        let rest = line.trim().strip_prefix(key)?.trim_start();
+        Some(rest.strip_prefix('=')?.trim().to_string())
+    };
+    let (mut here, mut pattern) = (false, None);
+    for (n, line) in content.lines().enumerate() {
+        if line.trim_start().starts_with('[') {
+            (here, pattern) = (false, None);
+        }
+        if let Some(value) = key_value(line, "id") {
+            here = value.trim_matches(['"', '\'']) == id;
+        }
+        if key_value(line, "pattern").is_some() {
+            pattern = Some(n + 1);
+        }
+        if here && let Some(found) = pattern {
+            return found;
+        }
+    }
+    1
+}
+
 /// True when the tree carries a Frappe app: a `[frappe]` table or `doctype/<n>/<n>.json` files.
 fn has_frappe_app(root: &Path, cfg: &SteniocheckConfig) -> bool {
     cfg.frappe.is_some()
@@ -989,7 +1013,18 @@ pub fn audit(root: &Path, cfg: &SteniocheckConfig) -> CiReport {
         .flatten()
         .map(|r| (r.id.clone(), r.pattern.clone(), r.extensions.clone()))
         .collect();
-    report.violations.extend(evaluate_log_en_coverage(&log_en));
+    let declared = fs::read_to_string(root.join("steniocheck.toml")).unwrap_or_default();
+    report
+        .violations
+        .extend(evaluate_log_en_coverage(&log_en).into_iter().map(|mut v| {
+            if let Some((id, _, _)) = log_en
+                .iter()
+                .find(|(id, _, _)| v.message.contains(&format!("`{id}`")))
+            {
+                v.line_number = custom_pattern_line(&declared, id);
+            }
+            v
+        }));
     report.messages.push(format!(
         "{COMPILE_ID}/{PARITY_ID}/{SCOPE_ID}/{TAG_FAIL_ID}: {} workflow(s), {} finding(s)",
         workflows.len(),
@@ -1136,6 +1171,19 @@ fn log_en_case(pattern: &str, ext: &[&str]) -> usize {
         ext.iter().map(|e| e.to_string()).collect(),
     )])
     .len()
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::custom_pattern_line;
+
+    #[test]
+    fn a_custom_rule_finding_cites_its_pattern_line() {
+        let text = "[general]\nscope = \"all\"\n\n[[custom_rules]]\nid = \"OTHER\"\npattern = \"a\"\n\n[[custom_rules]]\npattern = \"b\"\nid = \"GOV-LOG-EN\"\n";
+        assert_eq!(custom_pattern_line(text, "GOV-LOG-EN"), 9);
+        assert_eq!(custom_pattern_line(text, "OTHER"), 6);
+        assert_eq!(custom_pattern_line(text, "ABSENT"), 1);
+    }
 }
 
 /// Findings of GB-288 on a tree with one custom rule tagged `miracena` of the given severity.

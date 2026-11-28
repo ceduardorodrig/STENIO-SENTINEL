@@ -3,8 +3,8 @@
 //! engine. It replaces the scratch scripts of 2026-11-23 (4.38.0 recall check, 15 repos).
 //!
 //! For every non-archived repository of every `--owner` (and every `--repo owner/name`) it
-//! shallow-clones through `gh` under `timeout 60` (a clone that hangs is skipped and reported,
-//! never waited for), reads the CI scope(s) from the repository's workflows (`--scope X` in a run
+//! shallow-clones through `gh` under `timeout --clone-timeout` (a clone that hangs is reported,
+//! never waited for, and fails the comparison unless `--allow-skip` names it: GB-316), reads the CI scope(s) from the repository's workflows (`--scope X` in a run
 //! step, `scope:` of the stenio-check action, a script a step calls; `all` when none), runs both
 //! binaries with `--scope <s> --strict --compact` and prints per target the ERROR lines the new
 //! engine adds. Exit 1 when any target gains an ERROR line, or when an engine run or a branch
@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use crate::release_engine::{Real, Runner};
 
-const CLONE_TIMEOUT_S: u64 = 60;
+const CLONE_TIMEOUT_S: u64 = 180;
 const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
 const SHOWN: usize = 20;
@@ -49,6 +49,13 @@ struct Args {
     old: String,
     #[arg(long, help = "The candidate engine")]
     new: String,
+    #[arg(long, default_value_t = CLONE_TIMEOUT_S, help = "Seconds one clone may take")]
+    clone_timeout: u64,
+    #[arg(
+        long = "allow-skip",
+        help = "owner/name whose failed clone does not fail the comparison (repeatable)"
+    )]
+    allow_skip: Vec<String>,
     #[arg(long = "owner", help = "GitHub owner or org (repeatable)")]
     owners: Vec<String>,
     #[arg(long = "repo", help = "Single owner/name repository (repeatable)")]
@@ -144,7 +151,8 @@ fn error_counts(out: &str) -> BTreeMap<String, usize> {
     for l in out.lines().map(str::trim) {
         let found = match gate_finding(l) {
             Some(finding) => Some(finding),
-            None => l.contains("[ERROR]").then_some(l),
+            // The frappe scope prints `ERROR [RULE] file:line` without brackets (GB-302).
+            None => (l.contains("[ERROR]") || l.starts_with("ERROR [")).then_some(l),
         };
         if let Some(f) = found {
             *m.entry(f.to_string()).or_insert(0) += 1;
@@ -262,10 +270,16 @@ fn head_branch(r: &dyn Runner, dir: &Path) -> Result<String, String> {
     Ok(o.stdout.trim().to_string())
 }
 
-fn clone_repo(r: &dyn Runner, full: &str, branch: Option<&str>, dir: &Path) -> Result<(), String> {
+fn clone_repo(
+    r: &dyn Runner,
+    full: &str,
+    branch: Option<&str>,
+    dir: &Path,
+    seconds: u64,
+) -> Result<(), String> {
     let mut argv: Vec<String> = [
         "timeout",
-        &CLONE_TIMEOUT_S.to_string(),
+        &seconds.to_string(),
         "gh",
         "repo",
         "clone",
@@ -282,11 +296,27 @@ fn clone_repo(r: &dyn Runner, full: &str, branch: Option<&str>, dir: &Path) -> R
     if let Some(b) = branch {
         argv.extend(["--branch".to_string(), b.to_string()]);
     }
-    let o = r.run(None, &argv, Duration::from_secs(CLONE_TIMEOUT_S + 10))?;
+    let o = r.run(None, &argv, Duration::from_secs(seconds.saturating_add(10)))?;
     if o.code == 0 {
         Ok(())
     } else {
         Err(format!("clone exit {} (124 = timed out)", o.code))
+    }
+}
+
+/// How repositories are cloned and which failures are accepted.
+pub struct Clones {
+    pub seconds: u64,
+    /// `owner/name` whose failed clone is reported and does not fail the comparison.
+    pub allow_skip: Vec<String>,
+}
+
+impl Default for Clones {
+    fn default() -> Self {
+        Self {
+            seconds: CLONE_TIMEOUT_S,
+            allow_skip: Vec::new(),
+        }
     }
 }
 
@@ -299,6 +329,7 @@ pub fn compare(
     extra: &[String],
     trees: &[Tree],
     work: &Path,
+    clones: &Clones,
 ) -> (Vec<String>, bool) {
     let mut lines = Vec::new();
     let mut ok = true;
@@ -324,9 +355,8 @@ pub fn compare(
         let slug = full.replace('/', "__");
         let dir: PathBuf = work.join(&slug);
         tally.declared += 1;
-        if let Err(e) = clone_repo(r, full, None, &dir) {
-            tally.skipped += 1;
-            lines.push(format!("SKIP {full}: {e}"));
+        if let Err(e) = clone_repo(r, full, None, &dir, clones.seconds) {
+            tally.skip(clones, full, full, &e, &mut lines);
             continue;
         }
         compare_target(r, &engines, full, &dir, &[], &mut lines, &mut tally);
@@ -359,9 +389,8 @@ pub fn compare(
             ));
             tally.declared += 1;
             tally.branches += 1;
-            if let Err(e) = clone_repo(r, full, Some(&branch), &dir) {
-                tally.skipped += 1;
-                lines.push(format!("SKIP {target}: {e}"));
+            if let Err(e) = clone_repo(r, full, Some(&branch), &dir, clones.seconds) {
+                tally.skip(clones, full, &target, &e, &mut lines);
                 continue;
             }
             let own = crate::ci::load_branch_filters(&dir);
@@ -440,6 +469,27 @@ struct Tally {
     gained: usize,
     /// An engine run or a branch listing failed, so safety is not proven.
     broken: bool,
+}
+
+impl Tally {
+    /// A target that was not compared proves nothing unless its repository is allowed to fail.
+    fn skip(
+        &mut self,
+        clones: &Clones,
+        repo: &str,
+        target: &str,
+        why: &str,
+        lines: &mut Vec<String>,
+    ) {
+        self.skipped += 1;
+        let allowed = clones
+            .allow_skip
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(repo));
+        self.broken |= !allowed;
+        let label = if allowed { "SKIP" } else { "FAIL" };
+        lines.push(format!("{label} {target}: not compared, {why}"));
+    }
 }
 
 /// Runs both engines over one checkout at its scopes (else its CI scopes) and its gate, and
@@ -556,6 +606,10 @@ pub fn run_cli(argv: &[String]) -> i32 {
         &a.repos,
         &trees,
         &work,
+        &Clones {
+            seconds: a.clone_timeout,
+            allow_skip: a.allow_skip.clone(),
+        },
     );
     for l in &lines {
         println!("{l}");
@@ -651,9 +705,21 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let w2 = base.join("w2");
     let _ = std::fs::create_dir_all(&w1);
     let _ = std::fs::create_dir_all(&w2);
-    let (red, red_ok) = compare(&Fixture, &o, &n, &owners, &[], &[], &w1);
+    let (red, red_ok) = compare(&Fixture, &o, &n, &owners, &[], &[], &w1, &Clones::default());
     let red = red.join("\n");
-    let (green, green_ok) = compare(&Fixture, &o, &o, &owners, &[], &[], &w2);
+    let (green, green_ok) = compare(
+        &Fixture,
+        &o,
+        &o,
+        &owners,
+        &[],
+        &[],
+        &w2,
+        &Clones {
+            allow_skip: vec!["o/hang".to_string()],
+            ..Clones::default()
+        },
+    );
     let green = green.join("\n");
     let local = base.join("tree");
     let _ = std::fs::create_dir_all(&local);
@@ -682,12 +748,18 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             &[],
             trees,
             &w1,
+            &Clones::default(),
         );
         (lines.join("\n"), ok)
     };
     let (tree_red, tree_red_ok) = run_tree(&gate_new, &declared);
     let (tree_green, tree_green_ok) = run_tree(&gate_old, &declared);
     let (tree_crash, tree_crash_ok) = run_tree(&crash, &declared);
+    // The same identical engines, the hung clone not allowed.
+    let (unallowed, unallowed_ok) =
+        compare(&Fixture, &o, &o, &owners, &[], &[], &w2, &Clones::default());
+    let unallowed = unallowed.join("\n");
+    let frappe = delta("", "ERROR [FRAPPE-X] a.json:1 broken\n").2;
     let missing = parse_tree("absent", &base).into_iter().collect::<Vec<_>>();
     let (tree_missing, tree_missing_ok) = run_tree(&gate_old, &missing);
     let tree_name = format!("tree {}", local.display());
@@ -771,8 +843,19 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
             green_ok && green.contains("gained_error=0 PASS"),
         ),
         (
-            "compare-engines: a hung clone is skipped and reported, not waited for".to_string(),
-            red.contains("SKIP o/hang") && green.contains("skipped=1"),
+            "compare-engines: GB-316 a hung clone is reported by name and fails unless allowed"
+                .to_string(),
+            red.contains("FAIL o/hang: not compared")
+                && !unallowed_ok
+                && unallowed.contains("FAIL o/hang")
+                && unallowed.contains("gained_error=0 FAIL")
+                && green.contains("SKIP o/hang")
+                && green.contains("skipped=1"),
+        ),
+        (
+            "compare-engines: GB-302 a gained error of the frappe scope output is counted"
+                .to_string(),
+            frappe == ["ERROR [FRAPPE-X] a.json:1 broken"],
         ),
         (
             "compare-engines: the CI scope comes from the workflow, default all".to_string(),

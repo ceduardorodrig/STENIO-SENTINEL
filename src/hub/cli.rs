@@ -562,9 +562,19 @@ fn execute_remote(server: &remote::Remote, command: Cmd) -> HubResult<Value> {
         }
         Cmd::Questions { all, cursor } => send("questions", json!({"all": all, "cursor": cursor})),
         local @ Cmd::Backlog { .. } => execute_local(local),
-        Cmd::Receipt { .. } | Cmd::Closable { .. } => Err(HubError::Usage(
-            "receipts run on the machine that holds the ledger".to_string(),
-        )),
+        Cmd::Receipt {
+            who,
+            row,
+            tree,
+            command,
+        } => receipt::run(
+            &mut receipt::Ledger::Served(server),
+            &who.id()?,
+            &row,
+            &tree,
+            &command,
+        ),
+        Cmd::Closable { row } => receipt::closable(&mut receipt::Ledger::Served(server), &row),
         Cmd::Quota { command } => match command {
             QuotaCmd::Refresh => send("quota_refresh", json!({})),
             QuotaCmd::Put {
@@ -806,8 +816,14 @@ fn execute_local(command: Cmd) -> HubResult<Value> {
             row,
             tree,
             command,
-        } => receipt::run(&mut open()?, &who.id()?, &row, &tree, &command),
-        Cmd::Closable { row } => receipt::closable(&mut open()?, &row),
+        } => receipt::run(
+            &mut receipt::Ledger::Local(&mut open()?),
+            &who.id()?,
+            &row,
+            &tree,
+            &command,
+        ),
+        Cmd::Closable { row } => receipt::closable(&mut receipt::Ledger::Local(&mut open()?), &row),
         Cmd::ResetAttempts { row, reason } => {
             ledger::reset_attempts(&mut open()?, &row, &reason, std::io::stdin().is_terminal())
         }

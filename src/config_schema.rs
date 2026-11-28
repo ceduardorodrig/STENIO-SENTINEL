@@ -148,7 +148,7 @@ pub fn diagnose(file: Option<&Path>) -> Vec<Violation> {
 const DEFAULTS: &[(&str, &str)] = &[
     ("general.name", "unset"),
     ("general.version", "unset"),
-    ("general.scope", "\"all\""),
+    ("general.scope", "unset: chosen by path"),
     ("general.min_laws_count", "unset"),
     ("general.agents_md", "unset"),
     ("security.banned_python_packages", "@packages"),
