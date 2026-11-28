@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Command;
 
+use super::remote::{self, Remote};
 use super::store::{NewEvent, Store, append};
 use super::{HubError, HubResult, config, ledger, resource};
 
@@ -101,24 +102,99 @@ fn require_holder(conn: &Connection, worker: &str, name: &str) -> HubResult<()> 
     if held.iter().any(|c| c.holder == worker) {
         return Ok(());
     }
-    Err(HubError::refused(
+    Err(not_holder(worker, name))
+}
+
+fn not_holder(worker: &str, name: &str) -> HubError {
+    HubError::refused(
         "not_holder",
         format!("{worker} does not hold {name}"),
         "claim the row first",
-    ))
+    )
+}
+
+/// Where receipts are recorded. The command and its tree always stay on this machine.
+pub enum Ledger<'a> {
+    Local(&'a mut Store),
+    Served(&'a Remote),
+}
+
+impl Ledger<'_> {
+    fn check_holder(&mut self, worker: &str, name: &str) -> HubResult<()> {
+        match self {
+            Ledger::Local(store) => {
+                ledger::sweep_now(store)?;
+                store.read(|conn| require_holder(conn, worker, name))
+            }
+            Ledger::Served(server) => {
+                let found = server.call("claim_holder", json!({"resource": name}))?;
+                if found["holder"] == json!(worker) {
+                    return Ok(());
+                }
+                Err(not_holder(worker, name))
+            }
+        }
+    }
+
+    fn put(&mut self, worker: &str, name: &str, payload: &Value) -> HubResult<()> {
+        match self {
+            Ledger::Local(store) => record(store, worker, name, payload),
+            Ledger::Served(server) => server
+                .call(
+                    "receipt_put",
+                    json!({"worker": worker, "row": name, "payload": payload}),
+                )
+                .map(|_| ()),
+        }
+    }
+
+    fn latest(&mut self, name: &str) -> HubResult<Option<Value>> {
+        match self {
+            Ledger::Local(store) => store.read(|conn| latest(conn, name)),
+            Ledger::Served(server) => {
+                let found = server.call("receipt_latest", json!({"row": name}))?;
+                Ok(Some(found["receipt"].clone()).filter(|r| !r.is_null()))
+            }
+        }
+    }
+}
+
+/// Stores a receipt of a row its worker holds.
+pub fn record(store: &mut Store, worker: &str, row: &str, payload: &Value) -> HubResult<()> {
+    let name = row_name(row)?;
+    store.write(|tx| {
+        require_holder(tx, worker, &name)?;
+        append(
+            tx,
+            NewEvent {
+                worker,
+                run: None,
+                kind: KIND,
+                resource: &name,
+                payload: payload.clone(),
+            },
+        )?;
+        Ok(())
+    })
+}
+
+/// The newest receipt of a row, `null` when it has none.
+pub fn latest_of(store: &mut Store, row: &str) -> HubResult<Value> {
+    let name = row_name(row)?;
+    let receipt = store.read(|conn| latest(conn, &name))?;
+    Ok(json!({"ok": true, "receipt": receipt}))
 }
 
 /// Runs `command` in `dir` and records the receipt of that run for the row.
 pub fn run(
-    store: &mut Store,
+    book: &mut Ledger<'_>,
     worker: &str,
     row: &str,
     dir: &Path,
     command: &[String],
 ) -> HubResult<Value> {
     let name = row_name(row)?;
-    ledger::sweep_now(store)?;
-    store.read(|conn| require_holder(conn, worker, &name))?;
+    book.check_holder(worker, &name)?;
     let dir = dir
         .canonicalize()
         .map_err(|e| HubError::Usage(format!("--tree {}: {e}", dir.display())))?;
@@ -146,20 +222,7 @@ pub fn run(
         "hash_before": before.tree, "command": command, "exit": exit,
         "output_sha256": hex(&output.finalize()), "authoritative": authoritative,
     });
-    store.write(|tx| {
-        require_holder(tx, worker, &name)?;
-        append(
-            tx,
-            NewEvent {
-                worker,
-                run: None,
-                kind: KIND,
-                resource: &name,
-                payload: payload.clone(),
-            },
-        )?;
-        Ok(())
-    })?;
+    book.put(worker, &name, &payload)?;
     let mut answer = payload;
     answer["ok"] = json!(authoritative && exit == 0);
     answer["row"] = json!(name);
@@ -215,9 +278,9 @@ fn judge(receipt: &Value) -> HubResult<()> {
 }
 
 /// `stenio hub closable --row R`: the newest receipt of the row, still valid.
-pub fn closable(store: &mut Store, row: &str) -> HubResult<Value> {
+pub fn closable(book: &mut Ledger<'_>, row: &str) -> HubResult<Value> {
     let name = row_name(row)?;
-    let Some(receipt) = store.read(|conn| latest(conn, &name))? else {
+    let Some(receipt) = book.latest(&name)? else {
         return Err(HubError::refused(
             "no_receipt",
             format!("{name} has no replay receipt"),
@@ -229,17 +292,24 @@ pub fn closable(store: &mut Store, row: &str) -> HubResult<Value> {
         "command": receipt["command"]}))
 }
 
-/// For `backlog close`: a row that has a receipt in this ledger closes only while it is valid.
+/// For `backlog close`: a row that has a receipt in the ledger closes only while it is valid.
 /// Rows without one, and machines without a ledger, are not judged here.
 pub fn refuse_invalid(ids: &[String]) -> HubResult<()> {
-    let path = config::db_path()?;
-    if !path.exists() {
-        return Ok(());
-    }
-    let store = &mut Store::open(&path)?;
+    let server = remote::declared()?;
+    let mut store = None;
+    let mut book = match &server {
+        Some(server) => Ledger::Served(server),
+        None => {
+            let path = config::db_path()?;
+            if !path.exists() {
+                return Ok(());
+            }
+            Ledger::Local(store.insert(Store::open(&path)?))
+        }
+    };
     for id in ids {
         let name = row_name(id)?;
-        if let Some(receipt) = store.read(|conn| latest(conn, &name))? {
+        if let Some(receipt) = book.latest(&name)? {
             judge(&receipt).map_err(|e| e.with("row", name.clone()))?;
         }
     }

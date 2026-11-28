@@ -21,7 +21,9 @@ use std::sync::Arc;
 use super::config::Config;
 use super::resource::{self, Resource};
 use super::store::{NewEvent, Store, append, meta, next_counter, set_meta};
-use super::{HubError, HubResult, audit, guard, hooks, iso, ledger, mcp, now_ms, quota, view};
+use super::{
+    HubError, HubResult, audit, guard, hooks, iso, ledger, mcp, now_ms, quota, receipt, view,
+};
 
 /// How long the queue write claim of one engine write lasts if its end never arrives.
 const WRITE_LEASE_MS: i64 = 120_000;
@@ -390,6 +392,18 @@ pub fn dispatch(
                 true,
             );
         }
+        "receipt_put" => {
+            let worker = required(&args, "worker")?;
+            own_worker(&mut store, client, &worker)?;
+            ledger::sweep_now(&mut store)?;
+            let payload = args
+                .get("payload")
+                .filter(|p| p.is_object())
+                .ok_or_else(|| HubError::Usage("missing argument 'payload'".to_string()))?;
+            receipt::record(&mut store, &worker, &required(&args, "row")?, payload)?;
+            return Ok(json!({"ok": true}));
+        }
+        "receipt_latest" => return receipt::latest_of(&mut store, &required(&args, "row")?),
         "claim_holder" => {
             ledger::sweep_now(&mut store)?;
             let name = Resource::parse(&required(&args, "resource")?)?.name;

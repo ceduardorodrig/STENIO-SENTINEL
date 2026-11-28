@@ -866,6 +866,24 @@ pub(crate) fn plaintext_secret_violations(
     violations
 }
 
+/// A `$...` value, quoted or not, followed by more words: `(value, rest of the line)`.
+fn leading_reference(text: &str) -> Option<(&str, &str)> {
+    let (body, quote) = match text.chars().next()? {
+        q @ ('"' | '\'') => (&text[1..], Some(q)),
+        _ => (text, None),
+    };
+    if !body.starts_with('$') {
+        return None;
+    }
+    let end = match quote {
+        Some(q) => body.find(q)?,
+        None => body.find(char::is_whitespace)?,
+    };
+    let rest = &body[end + usize::from(quote.is_some())..];
+    rest.starts_with(char::is_whitespace)
+        .then_some((&body[..end], rest))
+}
+
 /// Key-name heuristic for one trimmed line (see [`plaintext_secret_violations`]).
 fn keyword_secret_hit(trimmed: &str) -> bool {
     // Matches pattern even with YAML/Compose prefixes
@@ -893,6 +911,15 @@ fn keyword_secret_hit(trimmed: &str) -> bool {
         .trim_matches(['"', '\'']);
     // A shell/YAML expansion or bracket fragment is code, never a credential name.
     let key_is_code = key.contains(['$', '{', '}', '[', ']', '(', ')']);
+    // GB-407: `NAME="$VAR" cmd` assigns a reference and then runs a command: the reference is
+    // no literal, and the rest of the line is judged on its own (it may assign one).
+    if !key_is_code
+        && key_looks_secret(key)
+        && let Some((reference, rest)) = leading_reference(maybe_value.trim_start())
+        && value_is_placeholder(reference)
+    {
+        return keyword_secret_hit(rest.trim_start());
+    }
     let value = maybe_value.trim().trim_matches(['"', '\'']);
     let looks_like_secret_key = !key_is_code && key_looks_secret(key);
 
@@ -1103,6 +1130,16 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
     let hits = |content: &str| plaintext_secret_violations("x.env", content, false).len();
     let gh = concat!("ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789");
     let mut cases = vec![
+        (
+            "GB-407 a reference before a command is silent",
+            hits("DB_PASSWORD=\"$DB_SECRET\" ./backup.sh --now") == 0
+                && hits("DB_PASSWORD=$DB_SECRET ./backup.sh") == 0,
+        ),
+        (
+            "GB-407 a literal before a command or after a reference fires",
+            hits("DB_PASSWORD=\"Xk29sLm4Qp7vRt8z\" ./backup.sh") == 1
+                && hits("DB_PASSWORD=\"$A\" API_TOKEN=Xk29sLm4Qp7vRt8z ./run.sh") == 1,
+        ),
         ("suffix _AUTHKEY", hits("TS_AUTHKEY=Xk29sLm4Qp7vRt8z") == 1),
         (
             "suffix _AUTH_KEY",

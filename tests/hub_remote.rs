@@ -349,3 +349,68 @@ fn only_an_owner_client_may_reset_attempts() -> Fallible {
     }
     Ok(())
 }
+
+fn git(dir: &Path, args: &[&str]) -> Fallible {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()?;
+    assert!(out.status.success(), "git {args:?}");
+    Ok(())
+}
+
+#[test]
+fn a_client_of_the_served_ledger_records_and_checks_receipts() -> Fallible {
+    let f = Fixture::new("receipt")?;
+    let worker = f.join("alpha")?;
+    let clone = f.root.join("clone");
+    fs::create_dir_all(&clone)?;
+    fs::write(clone.join("a.txt"), "one\n")?;
+    git(&clone, &["init", "-q"])?;
+    git(&clone, &["add", "-A"])?;
+    git(&clone, &["commit", "-qm", "c"])?;
+    let tree = clone.to_str().ok_or("path")?;
+    let receipt = [
+        "receipt", "--worker", &worker, "--row", "GB-001", "--tree", tree,
+    ];
+    let run = || -> Made<(i32, Value)> {
+        // `--json` belongs before the command that follows `--`.
+        let mut c = f.client("alpha");
+        c.arg("hub").args(receipt).args(["--json", "--", "true"]);
+        let out = c.output()?;
+        Ok((
+            out.status.code().unwrap_or(-1),
+            serde_json::from_slice(&out.stdout)?,
+        ))
+    };
+    let (code, no) = run()?;
+    assert_eq!((code, no["code"].as_str()), (1, Some("not_holder")), "{no}");
+    f.ok("alpha", &["claim", "--worker", &worker, "row:GB-001"])?;
+    f.refused("alpha", &["closable", "--row", "GB-001"], "no_receipt")?;
+    let (code, green) = run()?;
+    assert_eq!(code, 0, "{green}");
+    f.ok("alpha", &["closable", "--row", "GB-001"])?;
+    fs::write(clone.join("a.txt"), "two\n")?;
+    f.refused("alpha", &["closable", "--row", "GB-001"], "stale_receipt")?;
+    let close = f
+        .client("alpha")
+        .args([
+            "backlog",
+            "close",
+            "GB-001",
+            "--note",
+            "n",
+            "--dry-run",
+            "--path",
+        ])
+        .arg(f.root.join("vault"))
+        .output()?;
+    let why = String::from_utf8_lossy(&close.stderr).into_owned();
+    assert!(
+        !close.status.success() && why.contains("stale_receipt"),
+        "{why}"
+    );
+    Ok(())
+}
