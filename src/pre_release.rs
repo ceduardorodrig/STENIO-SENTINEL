@@ -809,8 +809,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let a = match PreArgs::try_parse_from(argv) {
         Ok(a) => a,
         Err(e) => {
-            let _ = e.print();
-            return 2;
+            return crate::util::usage_exit(&e);
         }
     };
     let cfg = a

@@ -92,6 +92,10 @@ pub fn run_cli(argv: &[String]) -> i32 {
     };
     let rest = &argv[1..];
     match name.as_str() {
+        "--help" | "-h" => {
+            println!("{USAGE}");
+            0
+        }
         "lint" => lint_cli(rest),
         "autopilot-last" => autopilot_last::run_cli(rest), // GB-175
         "boots" => boots::run_cli(rest),                   // GB-155

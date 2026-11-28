@@ -84,6 +84,10 @@ const COMMANDS: &[(&str, Command)] = &[
     ("secrets-helper-check", helper_check::run_cli),
 ];
 
+pub fn command_names() -> impl Iterator<Item = &'static str> {
+    COMMANDS.iter().map(|(name, _)| *name)
+}
+
 /// Runs `argv[1]` when it is a suite subcommand; `None` lets the engine parse the line.
 pub fn dispatch(argv: &[String]) -> Option<i32> {
     let name = argv.get(1)?;

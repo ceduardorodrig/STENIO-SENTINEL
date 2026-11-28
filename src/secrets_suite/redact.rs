@@ -166,8 +166,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
     let args = match Args::try_parse_from(argv) {
         Ok(a) => a,
         Err(e) => {
-            let _ = e.print();
-            return 2;
+            return crate::util::usage_exit(&e);
         }
     };
     run(&args).unwrap_or_else(|e| {

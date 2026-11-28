@@ -1,4 +1,4 @@
-# 🛡️ StenioSentinel (v4.14.0) — High-Performance AI Governance Engine in Rust
+# 🛡️ StenioSentinel — High-Performance AI Governance Engine in Rust
 
 [![CI](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square&logo=githubactions)](https://github.com/ceduardorodrig/STENIO-SENTINEL)
 [![Rust 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
@@ -14,7 +14,7 @@
 
 - 🎯 [Overview & Purpose](#-overview--purpose)
 - 🧠 [The AI Coding Problem (Why StenioSentinel?)](#-the-ai-coding-problem-why-steniosentinel)
-- ⚡ [Key Capabilities (v4.18.0 Superpowers)](#-key-capabilities)
+- ⚡ [Key Capabilities](#-key-capabilities)
 - 📐 [Architecture Diagram](#-architecture-diagram)
 - 🚀 [Installation & Quick Start](#-installation--quick-start)
 - 🛠️ [CLI Command Reference](#️-cli-command-reference)
@@ -33,7 +33,7 @@ Built to pair with autonomous AI agents (Claude Code, Gemini CLI, Cursor, Codex,
 
 ---
 
-## ⚡ Key Capabilities (v4.14.0 Superpowers)
+## ⚡ Key Capabilities
 
 ### 1. Sub-Millisecond Multi-Threaded Engine
 Leveraging Rayon and the memory-mapped `ignore` walker, StenioSentinel traverses directories concurrently while honoring `.gitignore` and Syncthing `.stignore` rules. Full audits complete in **1ms to 200ms**.
@@ -225,6 +225,7 @@ Configured by the `[frappe]` table of the app's `steniocheck.toml` (no project n
 - Since 4.57.0 `stenio config show` prints every effective value with its source (`file:line` or `built-in default`).
 - `INFRA-TOPOLOGY-COMPLIANCE` (enforced since 4.57.0): with a `[topology]` table (`authorized_hub_nodes`, `edge_nodes`, `backend_nodes`, `dev_gpu_nodes`), a `DEPLOY_TARGET`, `DEPLOY_HOST` or `DEPLOY_NODES` assignment in `.sh`, `.ini`, `.yml` or `.yaml` that names an undeclared host is an error; without the table the rule judges nothing. Variables are not resolved.
 - Since 4.58.0 the ledger refuses text with a secret shape or an invisible or bidirectional character (nothing is stored) and labels answers that carry worker text as `untrusted`; `stenio hub receipt --row R --tree DIR -- CMD` records commit, tree fingerprint, exit and output hash, and `stenio hub closable` and `stenio backlog close` refuse a stale, failed or tree-changing receipt.
+- Since 4.59.0: `stenio <subcommand> --help` names the subcommand on its first line (`backlog` and `preflight` print their own text), the `--scope` help is derived from the accepted scopes, `GOV-LOG-EN-PRINT-COVERAGE` cites the pattern line, and the version stated by the gate banner, this README and `AGENTS.md` comes from `Cargo.toml` (a stale one fails the self-test).
 - The scan and the gate report the same errors under `--scope all` (tested on every rule fixture, 4.57.0). Under a narrower scope the gate also judges governance, documentation and the queues, and it alone adds duplication and engine integrity.
 - A binary file that no rule reads is left after its first block (4.57.0): a vault scan went from about 1 GB of peak memory to 83 MB.
 - `stenio hub <command> [--json]`: the shared work ledger (v4.46.0), a local SQLite file written only by the engine (`$STENIO_HUB_DB`, else `$XDG_STATE_HOME/stenio/hub.db`; refused on network filesystems and synchronised folders). Commands: `join`, `run start|show|close`, `claim` (all or nothing, one fence per call, leases with expiry and takeover), `beat` (`--from-hook` for harness hooks), `release`, `status`, `event` (checkpoint handed to the successor), `handback` (refused for a stale fence; recorded, not replayed), `ask`/`answer`/`questions`, `backlog`, `quota refresh|put|show` (a source that cannot be read is `unknown`, never 0%), `audit` (hash chain plus state tables), `export` (JSON lines), `guide`. Exit codes: 0 done, 1 refused, 2 usage, 3 ledger unavailable. `backlog close` and `opportunity add` lock the queue directories and refuse to write while another worker holds `backlog:<prefix>:write` (`claim --path <root>` binds the claim to one queue directory). `handback` without `--row` returns a fence that holds no row. A claim of a row or slot reads the account's declared quota source when no fresh sample exists. Policy and quota sources are declared in `src/hub/defaults.toml` (override: `$STENIO_HUB_CONFIG` or `~/.config/stenio/hub.toml`). Since v4.51.0 the harness hook `guard` also refuses a file edit (every path argument and every file of a patch) inside the live `tree:` claim of another worker; `join` binds the declared session variable of its harness (`[session.harness]`) and warns when the worker is not bound; a row left to expire or handed back `failed` three times (`[attempts]`) is refused until the owner runs `reset-attempts`. Limits: one ledger per server or host and one Unix user, so edits are detected, not prevented.

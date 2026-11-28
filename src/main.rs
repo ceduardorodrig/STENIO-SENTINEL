@@ -8,6 +8,7 @@ mod backlog;
 mod baseline;
 mod ci;
 mod clean;
+mod cli_help;
 mod comments;
 mod compare_engines;
 mod config;
@@ -82,6 +83,7 @@ mod util;
 mod vault;
 mod verify_host;
 mod verify_release;
+mod version_text;
 mod watch;
 
 use guardian::audit_stenio_integrity;
@@ -103,7 +105,7 @@ struct Args {
     #[arg(
         short = 's',
         long,
-        help = "Audit scope: hub, homelab, vault, cv, fork (derived repo), mirror (generated repo), all [default: all]"
+        help = selectors::scope_help()
     )]
     scope: Option<String>,
 
@@ -724,6 +726,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(sweep::self_test_cases())
         .chain(hub::self_test_cases())
         .chain(hub::hygiene::self_test_cases())
+        .chain(version_text::self_test_cases())
         .chain(gate::self_test_cases())
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())
@@ -1839,7 +1842,11 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
 /// Formats a blocking violation for the gate report: `[RULE] file:line: msg (💡 hint)`.
 
 fn run_quality_gate(request: &pipeline::Request, prepared: pipeline::Prepared) -> Result<()> {
-    baseline::print_banner("StenioSentinel Quality Gate (v3.2) — Rigorous Pre-Delivery Inspection");
+    baseline::print_banner(concat!(
+        "StenioSentinel Quality Gate (v",
+        env!("CARGO_PKG_VERSION"),
+        ") — Rigorous Pre-Delivery Inspection"
+    ));
     println!(
         "{}",
         "🛡️  Executing holistic zero-tolerance audit for task release...\n".white()
@@ -2022,6 +2029,10 @@ fn run_config_cli(argv: &[String]) -> i32 {
             .step_by(2)
             .all(|a| a == "--path" || a == "--config")
         && argv.len() % 2 == 1;
+    if matches!(argv, [flag] if flag == "--help" || flag == "-h") {
+        println!("usage: stenio config show [--path <dir>] [--config <file>]");
+        return 0;
+    }
     if !known {
         eprintln!("usage: stenio config show [--path <dir>] [--config <file>]");
         return 2;
@@ -2075,6 +2086,9 @@ fn print_rule_list(rules: &[Rule]) {
 
 fn main() -> Result<()> {
     let mut argv: Vec<String> = std::env::args().collect();
+    if let Some(code) = cli_help::announce(&argv) {
+        std::process::exit(code);
+    }
     if argv.get(1).map(String::as_str) == Some("backlog")
         && argv.get(2).map(String::as_str) == Some("close")
     {

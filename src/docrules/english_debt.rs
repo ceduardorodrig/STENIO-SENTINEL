@@ -522,6 +522,10 @@ fn verify(o: &Options) -> i32 {
 
 /// `stenio language ...`.
 pub fn run_cli(args: &[String]) -> i32 {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        usage();
+        return 0;
+    }
     let Some((verb, o)) = parse(args) else {
         return usage();
     };

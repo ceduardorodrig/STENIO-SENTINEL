@@ -106,6 +106,14 @@ fn tags(rules: &[Rule]) -> impl Iterator<Item = &str> {
         .chain(SUBSYSTEM_TAGS.iter().map(|(t, _)| *t))
 }
 
+/// The `--scope` help, listing every accepted scope.
+pub fn scope_help() -> String {
+    format!(
+        "Audit scope: {} (fork: derived repo, mirror: generated repo) [default: the configured one, else by path]",
+        SCOPES.join(", ")
+    )
+}
+
 pub fn check_scope(scope: &str) -> Result<(), String> {
     if SCOPES.iter().any(|s| s.eq_ignore_ascii_case(scope)) {
         return Ok(());
