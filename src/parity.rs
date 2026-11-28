@@ -54,16 +54,11 @@ struct DriftArgs {
 /// The subcommand parsers exit 2 after `--help`, so the usage line decides, not the status
 /// (`backlog` is rewritten to a flag of the main parser, so there the status is all there is).
 fn usage_answers(sub: &str, status_ok: bool, text: &str) -> bool {
-    let name = if sub == "preflight" {
-        "pre-release"
-    } else {
-        sub
-    };
     match sub {
         "backlog" => status_ok,
         _ => text
             .lines()
-            .any(|l| l.starts_with("Usage:") && l.contains(name)),
+            .any(|l| l.starts_with("Usage:") && l.contains(sub)),
     }
 }
 
@@ -247,7 +242,7 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         (
             "binary parity: the usage line decides, not the exit status".to_string(),
             usage_answers("verify-host", false, "x\nUsage: verify-host [OPTIONS]")
-                && usage_answers("preflight", false, "Usage: pre-release [OPTIONS]")
+                && usage_answers("preflight", true, "Usage: stenio preflight --repo <dir>")
                 && !usage_answers("verify-host", true, "Usage: stenio [OPTIONS]"),
         ),
         (

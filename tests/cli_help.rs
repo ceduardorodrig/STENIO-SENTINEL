@@ -82,3 +82,11 @@ fn the_scope_help_lists_every_accepted_scope() -> Fallible {
     }
     Ok(())
 }
+
+#[test]
+fn the_binary_passes_its_own_subcommand_parity() -> Fallible {
+    let own = env!("CARGO_BIN_EXE_stenio");
+    let out = help(&["binary-parity", "--installed", own, "--built", own])?;
+    assert!(out.contains("binary-parity: 0 finding(s)"), "{out}");
+    Ok(())
+}
