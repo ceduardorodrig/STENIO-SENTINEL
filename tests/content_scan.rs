@@ -283,3 +283,20 @@ fn the_duplication_report_is_identical_for_twenty_runs() -> Fallible {
     }
     Ok(())
 }
+
+#[test]
+fn a_visible_dotenv_file_is_judged_by_the_key_name_rule() -> Fallible {
+    // GB-401: `prod.env` is as published as `.env`.
+    let tree = Tree::repo("visible")?;
+    tree.put("deploy/prod.env", &format!("DB_PASSWORD={PASSWORD}\n"))?;
+    let found = tree.scan(&[])?;
+    assert_found(&found, "SEC-PLAINTEXT-SECRET", "prod.env");
+    assert!(!found.1.contains(PASSWORD), "a value was printed");
+    tree.put("deploy/prod.env", "DB_PASSWORD=changeme\n")?;
+    tree.put(
+        "deploy/prod.env.example",
+        &format!("DB_PASSWORD={PASSWORD}\n"),
+    )?;
+    assert_pass(&tree.scan(&[])?);
+    Ok(())
+}
