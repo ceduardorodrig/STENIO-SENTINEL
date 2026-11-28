@@ -1,6 +1,6 @@
 [package]
 name = "stenio-sentinel"
-version = "4.53.0"
+version = "4.54.0"
 edition = "2024"
 description = "Sub-millisecond static governance engine, anti-bypass quality gate, and architectural integrity sentinel for AI coding agents written in Rust 2024."
 license = "AGPL-3.0-only"
@@ -25,6 +25,7 @@ ignore = "0.4"
 regex = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_ignored = "0.1"
 sha2 = "0.10"
 colored = "2.1"
 anyhow = "1.0"
@@ -51,3 +52,7 @@ lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# Tests hash the executable (guardian); an unoptimised digest takes half a minute a run.
+[profile.dev.package.sha2]
+opt-level = 3
