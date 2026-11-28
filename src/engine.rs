@@ -98,6 +98,16 @@ fn has_component(path: &Path, names: &[&str]) -> bool {
 }
 
 /// Build output, dependencies and caches: nobody authors these, no rule reads them.
+/// True when the first block holds a NUL byte. A file that cannot be read is not called binary:
+/// the full read reports it.
+fn starts_binary(path: &Path) -> bool {
+    use std::io::Read;
+    let mut block = Vec::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(8192).read_to_end(&mut block))
+        .is_ok_and(|_| block.contains(&0))
+}
+
 fn is_generated_path(root: &Path, path: &Path) -> bool {
     has_component(
         below(root, path),
@@ -418,6 +428,16 @@ impl Engine {
         let dotenv = crate::guardian::is_env_like_name(
             &path.file_name().unwrap_or_default().to_string_lossy(),
         );
+        // A binary file no rule reads (an archive, an image) is left after its first block:
+        // reading them whole took a vault scan to 1 GB and out of memory (GB-403).
+        let judged = credentials_only
+            || self
+                .rules
+                .iter()
+                .any(|r| r.matches_filter(tag_filter, only_rule, &ext));
+        if (!judged || credentials_only) && !dotenv && starts_binary(path) {
+            return Vec::new();
+        }
         let read = if credentials_only {
             match crate::hidden::read_text(path) {
                 Ok(Some(text)) => Ok(text),
@@ -431,11 +451,6 @@ impl Engine {
             Ok(c) => c,
             Err(e) => {
                 // A file no active rule reads (an image, a binary) is not a gap.
-                let judged = credentials_only
-                    || self
-                        .rules
-                        .iter()
-                        .any(|r| r.matches_filter(tag_filter, only_rule, &ext));
                 if !judged {
                     return Vec::new();
                 }
