@@ -765,6 +765,11 @@ fn check_backup(t: &dyn Transport, c: &Ctx, max_hours: u64) -> Check {
     }
 }
 
+/// `frappe.scheduled_backup_max_age_hours` when absent (the timer period plus slack).
+pub const DEFAULT_SCHEDULED_BACKUP_MAX_AGE_HOURS: u64 = 26;
+/// `frappe.site` when absent.
+pub const DEFAULT_SITE: &str = "frontend";
+
 /// Age of the newest scheduled dump (`[frappe] scheduled_backup_glob`). A fresh manual `bench backup`
 /// never masks a stopped timer: this line reads only what the timer wrote.
 fn check_scheduled_backup(t: &dyn Transport, c: &Ctx, fc: &FrappeConfig) -> Check {
@@ -775,7 +780,9 @@ fn check_scheduled_backup(t: &dyn Transport, c: &Ctx, fc: &FrappeConfig) -> Chec
             "not configured ([frappe] scheduled_backup_glob)",
         );
     };
-    let max_hours = fc.scheduled_backup_max_age_hours.unwrap_or(26);
+    let max_hours = fc
+        .scheduled_backup_max_age_hours
+        .unwrap_or(DEFAULT_SCHEDULED_BACKUP_MAX_AGE_HOURS);
     let (newest, now) = (
         t.run(&Cmd::ScheduledBackupNewest(glob.to_string()), c),
         t.run(&Cmd::RemoteNow, c),
@@ -1213,7 +1220,7 @@ pub fn run_cli(argv: &[String]) -> i32 {
         protected,
         max_backup_age_hours: a.max_backup_age_hours,
         wait_secs: a.wait_secs,
-        site: fc.site.clone().unwrap_or_else(|| "frontend".into()),
+        site: fc.site.clone().unwrap_or_else(|| DEFAULT_SITE.into()),
         dir: a.project_dir.clone(),
         repo: a.repo.clone(),
         public_url: a.public_url.clone().or_else(|| fc.public_url.clone()),

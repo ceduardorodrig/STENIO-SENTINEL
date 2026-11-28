@@ -524,6 +524,11 @@ impl Engine {
                 continue;
             }
 
+            // A rule over declared targets is inert until something declares them.
+            if rule.declared_targets.as_ref().is_some_and(Vec::is_empty) {
+                continue;
+            }
+
             // Server async runtime rules (Axum/Tokio)
             if rule.id == "RUST-STRUCTURED-LOGGING"
                 || rule.id == "RUST-ASYNC-BLOCKING-CMD"
@@ -626,6 +631,15 @@ impl Engine {
                     let trimmed = line.trim();
 
                     if re.is_match(line) {
+                        if rule.declared_targets.is_some()
+                            && !re
+                                .captures(line)
+                                .and_then(|c| c.name("target"))
+                                .is_some_and(|t| rule.names_undeclared(t.as_str()))
+                        {
+                            continue;
+                        }
+
                         // Skip pure comments for hardcoded text rules
                         if rule.id == "BACKEND-NO-HARDCODED-TEXT"
                             && (trimmed.starts_with("//")
