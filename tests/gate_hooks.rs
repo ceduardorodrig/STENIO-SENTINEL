@@ -155,3 +155,24 @@ fn an_override_needs_the_owner_at_a_terminal() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(home.hook(FORCE).status.code(), Some(2));
 }
+
+#[test]
+fn gb421_every_audit_entry_names_the_harness() {
+    let home = Home::new("harness");
+    home.hook(r#"{"toolCall":{"name":"run_command","args":{"CommandLine":"git status"}}}"#);
+    home.hook(PLAIN);
+    let dir = home.0.join(".local/state/stenio/gate/audit");
+    let mut text = String::new();
+    for entry in std::fs::read_dir(&dir).expect("audit dir") {
+        let path = entry.expect("entry").path();
+        text.push_str(&std::fs::read_to_string(path).expect("audit file"));
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].contains(r#""harness":"antigravity""#), "{text}");
+    // The test runner is no harness and the environment is empty.
+    assert!(
+        lines[1].contains(r#""harness":""#) && !lines[1].contains(r#""harness":null"#),
+        "{text}"
+    );
+}

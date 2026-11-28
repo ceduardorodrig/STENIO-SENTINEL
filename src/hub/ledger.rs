@@ -87,11 +87,13 @@ pub struct Worker {
     pub harness: String,
     pub account: String,
     pub last_beat: i64,
+    pub host: Option<String>,
+    pub parent: Option<String>,
 }
 
 pub fn worker(conn: &Connection, id: &str) -> HubResult<Worker> {
     conn.query_row(
-        "SELECT id, harness, account, last_beat FROM workers WHERE id = ?1",
+        "SELECT id, harness, account, last_beat, host, parent FROM workers WHERE id = ?1",
         [id],
         |r| {
             Ok(Worker {
@@ -99,6 +101,8 @@ pub fn worker(conn: &Connection, id: &str) -> HubResult<Worker> {
                 harness: r.get(1)?,
                 account: r.get(2)?,
                 last_beat: r.get(3)?,
+                host: r.get(4)?,
+                parent: r.get(5)?,
             })
         },
     )
@@ -291,7 +295,7 @@ pub fn join(store: &mut Store, cfg: &Config, request: &Join) -> HubResult<Value>
                 kind: "join",
                 resource: "",
                 payload: json!({"harness": harness, "model": request.model, "host": host,
-                    "parent": request.parent, "account": account}),
+                    "parent": request.parent, "account": account, "session": session}),
             },
         )?;
         let runs = open_runs(tx)?;
@@ -518,9 +522,29 @@ fn held(conn: &Connection, resource: &str) -> HubError {
     }
 }
 
-/// The run a claim belongs to: the named one, else the single open run that lists its rows.
+/// The one run in which the coordinator of `who` holds claims, if there is exactly one.
+fn parent_run(conn: &Connection, who: &Worker) -> HubResult<Option<String>> {
+    let Some(parent) = who.parent.as_deref() else {
+        return Ok(None);
+    };
+    let mut runs: Vec<String> = claims(conn, "WHERE released IS NULL AND holder = ?1", [parent])?
+        .into_iter()
+        .filter_map(|c| c.run)
+        .collect();
+    runs.sort();
+    runs.dedup();
+    Ok(match runs.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    })
+}
+
+/// The run a claim belongs to: the named one, else the single open run that lists its rows. A
+/// claim without a row joins a run only through its coordinator, never because one run happens
+/// to be open (GB-422).
 fn resolve_run(
     conn: &Connection,
+    who: &Worker,
     named: Option<&str>,
     wanted: &[Resource],
 ) -> HubResult<Option<String>> {
@@ -554,13 +578,7 @@ fn resolve_run(
             }
             match found.pop() {
                 Some(run) => Some(run),
-                None if rows.is_empty() => {
-                    let open = open_runs(conn)?;
-                    match open.as_slice() {
-                        [only] => only["run"].as_str().map(str::to_string),
-                        _ => None,
-                    }
-                }
+                None if rows.is_empty() => parent_run(conn, who)?,
                 None => None,
             }
         }
@@ -662,8 +680,61 @@ fn scopes(
     Ok(out)
 }
 
+/// A refusal is part of what happened (GB-416): it is recorded under the worker, and under the
+/// run of the request, after the refused transaction rolled back. A ledger that cannot take the
+/// record keeps the refusal as it was.
+fn noted(
+    store: &mut Store,
+    worker_id: &str,
+    operation: &str,
+    wanted: &[String],
+    run: Option<&str>,
+    outcome: HubResult<Value>,
+) -> HubResult<Value> {
+    // A write refused for the text it carries stores nothing at all (GB-355).
+    if let Err(HubError::Refused(r)) = &outcome
+        && !matches!(r.code, "secret_text" | "hidden_characters")
+    {
+        let (code, message) = (r.code, r.message.clone());
+        let _unrecorded = store.write(|tx| {
+            worker(tx, worker_id)?;
+            let mut runs: Vec<String> = run.map(str::to_string).into_iter().collect();
+            if runs.is_empty() {
+                for row in wanted.iter().filter_map(|w| w.strip_prefix("row:")) {
+                    runs.extend(open_runs_with_row(tx, row)?);
+                }
+            }
+            append(
+                tx,
+                NewEvent {
+                    worker: worker_id,
+                    run: runs.first().map(String::as_str),
+                    kind: "refused",
+                    resource: wanted.first().map_or("", String::as_str),
+                    payload: json!({"operation": operation, "code": code, "message": message,
+                        "requested": wanted}),
+                },
+            )
+            .map(|_| ())
+        });
+    }
+    outcome
+}
+
 /// All-or-nothing claim of every listed resource under one new fence.
 pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResult<Value> {
+    let outcome = claim_once(store, cfg, request);
+    noted(
+        store,
+        &request.worker,
+        "claim",
+        &request.resources,
+        request.run.as_deref(),
+        outcome,
+    )
+}
+
+fn claim_once(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResult<Value> {
     let wanted = resource::parse_list(&request.resources)?;
     let ttl = request.ttl_secs.unwrap_or(cfg.lease.default_ttl_secs);
     if ttl == 0 || ttl > cfg.lease.max_ttl_secs {
@@ -685,11 +756,19 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
     store.write(|tx| {
         sweep(tx)?;
         let who = worker(tx, &request.worker)?;
-        let run = resolve_run(tx, request.run.as_deref(), &wanted)?;
+        let run = resolve_run(tx, &who, request.run.as_deref(), &wanted)?;
         if wanted.iter().any(Resource::starts_work) {
             quota::gate(tx, &cfg.quota, &who)?;
         }
-        let ceiling = match &run {
+        // The slots of the only open run still bound the fleet, even for a claim outside it.
+        let bounding = match &run {
+            Some(run) => Some(run.clone()),
+            None => match open_runs(tx)?.as_slice() {
+                [only] => only["run"].as_str().map(str::to_string),
+                _ => None,
+            },
+        };
+        let ceiling = match &bounding {
             Some(run) => run_state(tx, run)?.1.min(cfg.fleet.ceiling),
             None => cfg.fleet.ceiling,
         };
@@ -735,10 +814,16 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
                 Err(e) => return Err(e.into()),
             }
             if let Some(old) = previous.filter(|c| c.reason.as_deref() == Some(EXPIRED)) {
-                takeovers.push(json!({"resource": name, "previous_holder": old.holder,
-                    "previous_fence": old.fence,
-                    "checkpoint": old.checkpoint
-                        .and_then(|c| serde_json::from_str::<Value>(&c).ok())}));
+                let mut told = json!({"resource": name, "previous_holder": old.holder,
+                    "previous_fence": old.fence, "checkpoint": Value::Null});
+                // GB-417: the newest checkpoint of the resource, even when later holders
+                // expired without recording one.
+                if let Some((checkpoint, by)) = last_checkpoint(tx, &name)? {
+                    told["checkpoint"] = checkpoint;
+                    told["checkpoint_by"] = json!(by.id);
+                    told["checkpoint_host"] = json!(by.host);
+                }
+                takeovers.push(told);
             }
             append(
                 tx,
@@ -762,6 +847,28 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
         }
         Ok(answer)
     })
+}
+
+/// The newest checkpoint recorded on `resource` since the last claim that ended with a result.
+fn last_checkpoint(conn: &Connection, resource: &str) -> HubResult<Option<(Value, Worker)>> {
+    let history = claims(
+        conn,
+        "WHERE resource = ?1 AND released IS NOT NULL",
+        [resource],
+    )?;
+    for old in history.iter().rev() {
+        if old.reason.as_deref() == Some(HANDBACK) {
+            break;
+        }
+        if let Some(found) = old
+            .checkpoint
+            .as_deref()
+            .and_then(|c| serde_json::from_str::<Value>(c).ok())
+        {
+            return Ok(Some((found, worker(conn, &old.holder)?)));
+        }
+    }
+    Ok(None)
 }
 
 fn refuse_final_row(conn: &Connection, row: &str, run: Option<&str>) -> HubResult<()> {
@@ -1061,6 +1168,15 @@ fn check_handback(h: &Handback) -> HubResult<()> {
 /// Stores the result of a row. Accepted only from the holder of the newest fence of that row; a
 /// late hand-back is still accepted when nobody took the row over.
 pub fn handback(store: &mut Store, request: &Handback) -> HubResult<Value> {
+    let outcome = handback_once(store, request);
+    let row = Some(request.row.trim().trim_start_matches("row:"))
+        .filter(|r| !r.is_empty())
+        .map(|r| format!("row:{r}"));
+    let wanted: Vec<String> = row.into_iter().collect();
+    noted(store, &request.worker, "handback", &wanted, None, outcome)
+}
+
+fn handback_once(store: &mut Store, request: &Handback) -> HubResult<Value> {
     check_handback(request)?;
     if request.row.trim().is_empty() {
         return handback_claim(store, request);

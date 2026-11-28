@@ -273,16 +273,16 @@ pub fn run_prepared(req: &Request, prepared: Prepared) -> Result<Outcome, String
                 .unwrap_or(false));
 
     let hub_default = PathBuf::from("/mnt/NVME_PCI/homelab/sumaenimahub/sumaenima-hub");
-    let scan_target = resolve_scan_target(
-        &scope,
-        &req.path,
-        &p_str,
-        if req.path_explicit {
-            None
-        } else {
-            Some(&hub_default)
-        },
-    );
+    // GB-433: inside a checkout that checkout is judged; the default tree only answers a run
+    // started outside every checkout, and it says so.
+    let fallback = hub_fallback(req.path_explicit, &req.path, &hub_default);
+    let scan_target = resolve_scan_target(&scope, &req.path, &p_str, fallback);
+    if !req.path_explicit && fallback == Some(scan_target.as_path()) {
+        eprintln!(
+            "stenio: WARNING: auditing {}, not the current directory (no --path and no checkout here)",
+            scan_target.display()
+        );
+    }
 
     let rules_run = rules.len();
     let engine = Engine::new(rules, whitelist).map_err(|e| e.to_string())?;
@@ -775,4 +775,38 @@ pub fn blockers(findings: &[Violation]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// The tree a hub run without `--path` may fall back to: none inside a checkout or with `--path`.
+fn hub_fallback<'a>(explicit: bool, here: &Path, default: &'a Path) -> Option<&'a Path> {
+    let in_checkout = here
+        .canonicalize()
+        .ok()
+        .is_some_and(|p| p.ancestors().any(|a| a.join(".git").exists()));
+    (!explicit && !in_checkout).then_some(default)
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::hub_fallback;
+    use std::path::Path;
+
+    #[test]
+    fn a_checkout_is_never_replaced_by_the_default_tree() -> std::io::Result<()> {
+        let root = std::env::temp_dir().join(format!("stenio-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("clone/.git"))?;
+        std::fs::create_dir_all(root.join("clone/src"))?;
+        std::fs::create_dir_all(root.join("plain"))?;
+        let default = Path::new("/default");
+        let answers = (
+            hub_fallback(false, &root.join("clone/src"), default),
+            hub_fallback(true, &root.join("plain"), default),
+            hub_fallback(false, &root.join("plain"), default),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        // The temporary folder itself is in no checkout.
+        assert_eq!(answers, (None, None, Some(default)));
+        Ok(())
+    }
 }

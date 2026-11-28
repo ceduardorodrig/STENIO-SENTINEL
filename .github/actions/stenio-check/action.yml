@@ -73,7 +73,7 @@ runs:
       run: |
         # This track (`@v1`: engine 4.x) never floats to a later major: the default is the
         # release of this very commit, and `cargo test` keeps it equal to Cargo.toml.
-        VERSION="${INPUT_VERSION:-v4.60.0}"
+        VERSION="${INPUT_VERSION:-v4.61.0}"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "🛡️ StenioSentinel: usando a release '$VERSION'"
 

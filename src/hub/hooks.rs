@@ -50,6 +50,31 @@ pub fn session_of(cfg: &Config, payload: &Value) -> Option<String> {
         .find(|s| !s.trim().is_empty())
 }
 
+/// The workers bound to the session of the calling shell, from the ledger in force.
+pub fn workers_of_this_session() -> HubResult<Vec<String>> {
+    let cfg = Config::load()?;
+    let Some(session) = join_session(&cfg, "") else {
+        return Ok(Vec::new());
+    };
+    if let Some(server) = super::remote::declared()? {
+        let found = server.call("session_workers", json!({"session": session}))?;
+        return Ok(found["workers"]
+            .as_array()
+            .map(|w| {
+                w.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default());
+    }
+    let path = super::config::db_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    Store::open(&path)?.read(|c| super::ledger::session_workers(c, &session))
+}
+
 /// The session `join` binds a worker of `harness` to, from the declared variables.
 pub fn join_session(cfg: &Config, harness: &str) -> Option<String> {
     let names = match cfg.session.harness.get(harness) {

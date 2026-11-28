@@ -35,8 +35,22 @@ struct Who {
 
 impl Who {
     fn id(&self) -> HubResult<String> {
-        config::worker_or_env(self.worker.as_deref())
-            .ok_or_else(|| HubError::Usage(format!("give --worker or set {WORKER_ENV}")))
+        if let Some(given) = config::worker_or_env(self.worker.as_deref()) {
+            return Ok(given);
+        }
+        // GB-420: a bound session names its worker. Sub-agents share the session, so several
+        // workers of one session still need the argument.
+        let bound = hooks::workers_of_this_session()?;
+        match bound.as_slice() {
+            [only] => Ok(only.clone()),
+            [] => Err(HubError::Usage(format!(
+                "no worker is bound to this session: run `stenio hub join`, give --worker or set {WORKER_ENV}"
+            ))),
+            many => Err(HubError::Usage(format!(
+                "this session has several workers ({}): give --worker",
+                many.join(", ")
+            ))),
+        }
     }
 }
 
