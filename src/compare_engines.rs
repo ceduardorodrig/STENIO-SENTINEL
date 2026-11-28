@@ -18,6 +18,11 @@
 //! `DEVELOPMENT` would have gained 42 errors (2026-11-24). A selected branch that carries no
 //! branch-triggered workflow of its own is listed as `NOCI` and not compared: no push runs there.
 //!
+//! GB-402: local checkouts (`--tree PATH[=scope,...]`, or a `--trees` list) are targets too, read
+//! only (no `--fix`), at the named scopes (`default` passes no `--scope`), else their CI scopes.
+//! Every target also compares the `--gate` verdict. A target fails the comparison when it gains an
+//! error line or a passing run starts failing; an exit code other than 0 or 1 proves nothing.
+//!
 //! Not wired into `release-engine` in this version: the step order of that command is guarded by
 //! `release_order` and needs its own mutation case.
 
@@ -48,6 +53,58 @@ struct Args {
     owners: Vec<String>,
     #[arg(long = "repo", help = "Single owner/name repository (repeatable)")]
     repos: Vec<String>,
+    #[arg(
+        long = "tree",
+        help = "Local checkout, read only, as PATH[=scope,...] (repeatable; scope `default` passes none)"
+    )]
+    trees: Vec<String>,
+    #[arg(
+        long = "trees",
+        help = "File of local checkouts, one `PATH[=scope,...]` per line, relative to the file; `#` comments"
+    )]
+    tree_lists: Vec<PathBuf>,
+}
+
+/// A local checkout and the scopes to compare there (empty: its CI scopes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tree {
+    pub path: PathBuf,
+    pub scopes: Vec<String>,
+}
+
+/// `PATH[=scope,...]`, a relative path resolved against `base`.
+pub fn parse_tree(spec: &str, base: &Path) -> Result<Tree, String> {
+    let (path, scopes) = spec.rsplit_once('=').unwrap_or((spec, ""));
+    let scopes: Vec<String> = scopes
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if path.trim().is_empty() || (spec.contains('=') && scopes.is_empty()) {
+        return Err(format!("tree `{spec}`: expected PATH[=scope,...]"));
+    }
+    Ok(Tree {
+        path: base.join(path.trim()),
+        scopes,
+    })
+}
+
+/// Every tree of a list file; an empty list is an error (it would compare nothing).
+pub fn read_tree_list(file: &Path) -> Result<Vec<Tree>, String> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let base = file.parent().unwrap_or_else(|| Path::new("."));
+    let trees = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| parse_tree(l, base))
+        .collect::<Result<Vec<_>, _>>()?;
+    if trees.is_empty() {
+        return Err(format!("{}: no tree declared", file.display()));
+    }
+    Ok(trees)
 }
 
 /// Distinct CI scopes of the workflows under `root`, in order of appearance; `["all"]` when no
@@ -74,11 +131,24 @@ pub fn ci_scopes(root: &Path) -> Vec<String> {
     out
 }
 
-/// Count of every `[ERROR]` line of an engine output.
+/// The finding of a gate line (`3. [RULE] file:line: ...`) without its position in the list.
+fn gate_finding(line: &str) -> Option<&str> {
+    let (number, rest) = line.split_once(". [")?;
+    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| &line[line.len() - rest.len() - 1..])
+}
+
+/// Count of every `[ERROR]` line and gate finding of an engine output.
 fn error_counts(out: &str) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    for l in out.lines().map(str::trim).filter(|l| l.contains("[ERROR]")) {
-        *m.entry(l.to_string()).or_insert(0) += 1;
+    for l in out.lines().map(str::trim) {
+        let found = match gate_finding(l) {
+            Some(finding) => Some(finding),
+            None => l.contains("[ERROR]").then_some(l),
+        };
+        if let Some(f) = found {
+            *m.entry(f.to_string()).or_insert(0) += 1;
+        }
     }
     m
 }
@@ -94,17 +164,27 @@ fn delta(old: &str, new: &str) -> (usize, usize, Vec<String>) {
     (o.values().sum(), n.values().sum(), added)
 }
 
-fn run_engine(r: &dyn Runner, bin: &str, scope: &str, dir: &Path) -> Result<String, String> {
-    let argv = vec![
-        bin.to_string(),
-        "--scope".to_string(),
-        scope.to_string(),
-        "--path".to_string(),
-        dir.display().to_string(),
-        "--strict".to_string(),
-        "--compact".to_string(),
-    ];
-    r.run(None, &argv, RUN_TIMEOUT).map(|o| o.stdout)
+/// The verdict mode that runs `--gate` instead of a scope.
+const GATE: &str = "gate";
+
+/// One read-only run: exit code and standard output. Exit codes other than 0 and 1 are failures.
+fn run_engine(r: &dyn Runner, bin: &str, mode: &str, dir: &Path) -> Result<(i32, String), String> {
+    let mut argv = vec![bin.to_string()];
+    match mode {
+        GATE => argv.push("--gate".to_string()),
+        "default" => {}
+        scope => argv.extend(["--scope".to_string(), scope.to_string()]),
+    }
+    argv.extend(["--path".to_string(), dir.display().to_string()]);
+    if mode != GATE {
+        argv.push("--strict".to_string());
+    }
+    argv.push("--compact".to_string());
+    let o = r.run(Some(dir), &argv, RUN_TIMEOUT)?;
+    if o.code != 0 && o.code != 1 {
+        return Err(format!("exit {}", o.code));
+    }
+    Ok((o.code, o.stdout))
 }
 
 /// `owner/name` of every non-archived repository of `owner`.
@@ -217,6 +297,7 @@ pub fn compare(
     new: &str,
     owners: &[String],
     extra: &[String],
+    trees: &[Tree],
     work: &Path,
 ) -> (Vec<String>, bool) {
     let mut lines = Vec::new();
@@ -248,7 +329,7 @@ pub fn compare(
             lines.push(format!("SKIP {full}: {e}"));
             continue;
         }
-        compare_target(r, &engines, full, &dir, &mut lines, &mut tally);
+        compare_target(r, &engines, full, &dir, &[], &mut lines, &mut tally);
         let mut filters = crate::ci::load_branch_filters(&dir);
         if filters.is_empty() {
             continue;
@@ -291,9 +372,29 @@ pub fn compare(
                 ));
                 continue;
             }
-            compare_target(r, &engines, &target, &dir, &mut lines, &mut tally);
+            compare_target(r, &engines, &target, &dir, &[], &mut lines, &mut tally);
             filters.extend(own);
         }
+    }
+    for tree in trees {
+        let target = format!("tree {}", tree.path.display());
+        tally.declared += 1;
+        // A declared tree that is not there is a blind spot, never a skip.
+        if !tree.path.is_dir() {
+            tally.broken = true;
+            tally.skipped += 1;
+            lines.push(format!("FAIL {target}: not a directory"));
+            continue;
+        }
+        compare_target(
+            r,
+            &engines,
+            &target,
+            &tree.path,
+            &tree.scopes,
+            &mut lines,
+            &mut tally,
+        );
     }
     if tally.broken {
         ok = false;
@@ -309,9 +410,10 @@ pub fn compare(
         ));
     }
     lines.push(format!(
-        "compare-engines: repos={} ci_branches={} targets declared={} compared={} skipped={} no_ci={} gained_error={} {}",
+        "compare-engines: repos={} ci_branches={} trees={} targets declared={} compared={} skipped={} no_ci={} gained_error={} {}",
         repos.len(),
         tally.branches,
+        trees.len(),
         tally.declared,
         tally.compared,
         tally.skipped,
@@ -340,28 +442,40 @@ struct Tally {
     broken: bool,
 }
 
-/// Runs both engines over one checkout at its CI scopes and reports the added ERROR lines.
+/// Runs both engines over one checkout at its scopes (else its CI scopes) and its gate, and
+/// reports the added error lines and the exit codes.
 fn compare_target(
     r: &dyn Runner,
     engines: &Engines<'_>,
     target: &str,
     dir: &Path,
+    declared_scopes: &[String],
     lines: &mut Vec<String>,
     tally: &mut Tally,
 ) {
-    let scopes = ci_scopes(dir);
+    let scopes = if declared_scopes.is_empty() {
+        ci_scopes(dir)
+    } else {
+        declared_scopes.to_vec()
+    };
     let (mut o_tot, mut n_tot, mut added) = (0, 0, Vec::new());
+    let (mut codes, mut broke) = (Vec::new(), false);
     tally.compared += 1;
-    for s in &scopes {
+    for s in scopes.iter().map(String::as_str).chain([GATE]) {
         match (
             run_engine(r, engines.old, s, dir),
             run_engine(r, engines.new, s, dir),
         ) {
-            (Ok(a), Ok(b)) => {
+            (Ok((old_code, a)), Ok((new_code, b))) => {
                 let (x, y, add) = delta(&a, &b);
                 o_tot += x;
                 n_tot += y;
                 added.extend(add.into_iter().map(|l| format!("[{s}] {l}")));
+                codes.push(format!("{s}:{old_code}->{new_code}"));
+                if old_code == 0 && new_code != 0 {
+                    broke = true;
+                    added.push(format!("[{s}] exit code 0 -> {new_code}"));
+                }
             }
             (a, b) => {
                 tally.broken = true;
@@ -375,11 +489,12 @@ fn compare_target(
         }
     }
     lines.push(format!(
-        "{target} scope={} old_err={o_tot} new_err={n_tot} added={}",
+        "{target} scope={} old_err={o_tot} new_err={n_tot} added={} rc {}",
         scopes.join(","),
-        added.len()
+        added.len(),
+        codes.join(" ")
     ));
-    if !added.is_empty() {
+    if broke || !added.is_empty() {
         tally.gained += 1;
         for l in added.iter().take(SHOWN) {
             lines.push(format!("  + {l}"));
@@ -401,17 +516,47 @@ pub fn run_cli(argv: &[String]) -> i32 {
             };
         }
     };
-    if a.owners.is_empty() && a.repos.is_empty() {
-        eprintln!("compare-engines: give at least one --owner or --repo");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let listed = a
+        .trees
+        .iter()
+        .map(|t| parse_tree(t, &cwd).map(|t| vec![t]))
+        .chain(a.tree_lists.iter().map(|f| read_tree_list(f)))
+        .collect::<Result<Vec<_>, _>>();
+    let trees: Vec<Tree> = match listed {
+        Ok(t) => t.into_iter().flatten().collect(),
+        Err(e) => {
+            eprintln!("compare-engines: {e}");
+            return 2;
+        }
+    };
+    if a.owners.is_empty() && a.repos.is_empty() && trees.is_empty() {
+        eprintln!("compare-engines: give at least one --owner, --repo, --tree or --trees");
         return 2;
     }
+    // The runs start inside each target, so a relative binary path would stop resolving.
+    let absolute = |bin: &str| {
+        if bin.contains('/') {
+            cwd.join(bin).display().to_string()
+        } else {
+            bin.to_string()
+        }
+    };
     let work = std::env::temp_dir().join(format!("stenio-compare-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     if std::fs::create_dir_all(&work).is_err() {
         eprintln!("compare-engines: cannot create {}", work.display());
         return 2;
     }
-    let (lines, ok) = compare(&Real, &a.old, &a.new, &a.owners, &a.repos, &work);
+    let (lines, ok) = compare(
+        &Real,
+        &absolute(&a.old),
+        &absolute(&a.new),
+        &a.owners,
+        &a.repos,
+        &trees,
+        &work,
+    );
     for l in &lines {
         println!("{l}");
     }
@@ -478,7 +623,9 @@ impl Runner for Fixture {
 }
 
 fn write_engine(path: &Path, extra_on_r2: bool) {
-    let mut body = String::from("echo '[ERROR] a.rs:1: [BASE] existing'\n");
+    let mut body = String::from(
+        "case \"$*\" in *--gate*) exit 0;; esac\necho '[ERROR] a.rs:1: [BASE] existing'\n",
+    );
     if extra_on_r2 {
         body.push_str("case \"$*\" in *o__r2*) echo '[ERROR] b.rs:2: [NEW-RULE] fresh';; esac\n");
         body.push_str(
@@ -504,10 +651,46 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
     let w2 = base.join("w2");
     let _ = std::fs::create_dir_all(&w1);
     let _ = std::fs::create_dir_all(&w2);
-    let (red, red_ok) = compare(&Fixture, &o, &n, &owners, &[], &w1);
+    let (red, red_ok) = compare(&Fixture, &o, &n, &owners, &[], &[], &w1);
     let red = red.join("\n");
-    let (green, green_ok) = compare(&Fixture, &o, &o, &owners, &[], &w2);
+    let (green, green_ok) = compare(&Fixture, &o, &o, &owners, &[], &[], &w2);
     let green = green.join("\n");
+    let local = base.join("tree");
+    let _ = std::fs::create_dir_all(&local);
+    let list = base.join("trees.txt");
+    let _ = std::fs::write(&list, "# local checkouts\ntree=homelab,default\n");
+    let declared = read_tree_list(&list).unwrap_or_default();
+    // A fake engine whose only new defect is on the gate, with a renumbered old finding.
+    let gate_old = base.join("gate_old.sh");
+    let gate_new = base.join("gate_new.sh");
+    let _ = std::fs::write(
+        &gate_old,
+        "case \"$*\" in *--gate*) echo '   1. [OLD] a.rs:1: seen';; esac\n",
+    );
+    let _ = std::fs::write(
+        &gate_new,
+        "case \"$*\" in *--gate*) echo '   1. [NEW] z.rs:9: fresh'; echo '   2. [OLD] a.rs:1: seen'; exit 1;; esac\n",
+    );
+    let crash = base.join("crash.sh");
+    let _ = std::fs::write(&crash, "exit 2\n");
+    let run_tree = |new: &Path, trees: &[Tree]| {
+        let (lines, ok) = compare(
+            &Fixture,
+            &gate_old.display().to_string(),
+            &new.display().to_string(),
+            &[],
+            &[],
+            trees,
+            &w1,
+        );
+        (lines.join("\n"), ok)
+    };
+    let (tree_red, tree_red_ok) = run_tree(&gate_new, &declared);
+    let (tree_green, tree_green_ok) = run_tree(&gate_old, &declared);
+    let (tree_crash, tree_crash_ok) = run_tree(&crash, &declared);
+    let missing = parse_tree("absent", &base).into_iter().collect::<Vec<_>>();
+    let (tree_missing, tree_missing_ok) = run_tree(&gate_old, &missing);
+    let tree_name = format!("tree {}", local.display());
     let _ = std::fs::remove_dir_all(&base);
     let selected = |on: &str| -> Vec<&str> {
         let filters = crate::ci::branch_filters(on);
@@ -523,6 +706,33 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         .collect()
     };
     vec![
+        (
+            "compare-engines: GB-402 mutation, an error added on a declared local tree gate fails naming tree and line"
+                .to_string(),
+            !tree_red_ok
+                && tree_red.contains(&format!("{tree_name} scope=homelab,default"))
+                && tree_red.contains("gate:0->1")
+                && tree_red.contains("+ [gate] [NEW] z.rs:9: fresh")
+                && !tree_red.contains("+ [gate] [OLD]")
+                && tree_red.contains("trees=1 targets declared=1 compared=1")
+                && tree_red.contains("gained_error=1 FAIL"),
+        ),
+        (
+            "compare-engines: GB-402 identical engines pass on a declared tree".to_string(),
+            tree_green_ok && tree_green.contains("gate:0->0"),
+        ),
+        (
+            "compare-engines: GB-402 an engine that exits 2 or a missing tree fails".to_string(),
+            !tree_crash_ok
+                && tree_crash.contains("new=exit 2")
+                && !tree_missing_ok
+                && tree_missing.contains("not a directory"),
+        ),
+        (
+            "compare-engines: GB-402 a tree spec without a scope after `=` is refused".to_string(),
+            parse_tree("x=", Path::new("/")).is_err()
+                && parse_tree("x", Path::new("/")).is_ok_and(|t| t.scopes.is_empty()),
+        ),
         (
             "compare-engines: GB-298 branch filters follow the GitHub pattern syntax".to_string(),
             selected("on:\n  push:\n    branches: ['release/*', '!release/old']\n") == ["release/1"]
@@ -570,7 +780,9 @@ pub fn self_test_cases() -> Vec<(String, bool)> {
         ),
         (
             "compare-engines: counts are derived (declared = compared + skipped)".to_string(),
-            red.contains("repos=3 ci_branches=3 targets declared=6 compared=4 skipped=1 no_ci=1"),
+            red.contains(
+                "repos=3 ci_branches=3 trees=0 targets declared=6 compared=4 skipped=1 no_ci=1",
+            ),
         ),
         (
             "compare-engines: GB-298 a branch without a workflow runs no CI and is only listed"

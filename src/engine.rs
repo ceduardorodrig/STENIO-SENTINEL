@@ -414,10 +414,10 @@ impl Engine {
         let path_str = path.to_string_lossy().to_string();
 
         let dot_file = crate::hidden::is_hidden(root, path);
-        let dotenv = dot_file
-            && crate::guardian::is_env_like_name(
-                &path.file_name().unwrap_or_default().to_string_lossy(),
-            );
+        // `prod.env` and `.env` alike (GB-401): the key-name heuristic judges every walked one.
+        let dotenv = crate::guardian::is_env_like_name(
+            &path.file_name().unwrap_or_default().to_string_lossy(),
+        );
         let read = if credentials_only {
             match crate::hidden::read_text(path) {
                 Ok(Some(text)) => Ok(text),
@@ -485,7 +485,7 @@ impl Engine {
         }
 
         let plaintext = crate::hidden::PLAINTEXT_ID;
-        if dot_file
+        if dotenv
             && tag_filter.is_none_or(|t| t == "sec")
             && only_rule.is_none_or(|r| r.eq_ignore_ascii_case(plaintext))
         {
