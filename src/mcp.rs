@@ -224,11 +224,20 @@ pub fn dispatch_mcp_request(
                     let only = arguments.get("only_rule").and_then(|v| v.as_str());
                     let target_path = repo_root.join(path_str);
 
-                    if !target_path.exists() {
+                    let unknown = tag
+                        .map(|t| crate::selectors::check_tag(t, engine.rules()))
+                        .into_iter()
+                        .chain(only.map(|o| crate::selectors::check_only(o, "", engine.rules())))
+                        .find_map(Result::err);
+                    if let Some(reason) = unknown {
+                        failed = true;
+                        reason
+                    } else if !target_path.exists() {
                         failed = true;
                         format!("Path '{}' does not exist.", path_str)
                     } else if target_path.is_file() {
-                        let violations = engine.scan_file(&target_path, tag, only);
+                        let parent = target_path.parent().unwrap_or(repo_root);
+                        let violations = engine.scan_file(parent, &target_path, tag, only);
                         failed = violations.iter().any(|v| v.severity == Severity::Error);
                         if violations.is_empty() {
                             format!("✨ File '{}' 100% compliant. Zero violations.", path_str)

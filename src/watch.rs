@@ -40,7 +40,7 @@ pub fn start_watch_mode(
                         }
                         if path.is_file() {
                             let t0 = std::time::Instant::now();
-                            let violations = engine.scan_file(&path, tag_filter, only_rule);
+                            let violations = engine.scan_file(root, &path, tag_filter, only_rule);
                             let elapsed = t0.elapsed();
                             if violations.is_empty() {
                                 println!(

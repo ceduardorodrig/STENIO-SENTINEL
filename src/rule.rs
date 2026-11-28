@@ -115,6 +115,12 @@ impl Rule {
         self
     }
 
+    /// Whether the rule's `path_include`/`path_exclude` lists accept this file.
+    pub fn covers_path(&self, path: &str) -> bool {
+        (self.path_includes.is_empty() || self.path_includes.iter().any(|i| path.contains(i)))
+            && !self.path_excludes.iter().any(|e| path.contains(e))
+    }
+
     pub fn matches_filter(
         &self,
         tag_filter: Option<&str>,

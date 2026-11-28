@@ -273,7 +273,9 @@ pub fn run(ctx: &Ctx, only: Option<&str>) -> Vec<Violation> {
 
 /// The tags of the custom rules the repository's `steniocheck.toml` declares.
 pub fn custom_tags(root: &Path) -> Vec<String> {
+    // An unparsable file is reported as CONFIG-INVALID; here it declares no tag.
     crate::config::SteniocheckConfig::load_from_dir(root)
+        .unwrap_or_default()
         .custom_rules
         .unwrap_or_default()
         .into_iter()

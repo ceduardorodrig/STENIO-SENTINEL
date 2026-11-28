@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -75,7 +75,7 @@ pub struct TopologyConfig {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, Default)]
 pub struct CustomRuleConfig {
     pub id: String,
     pub tag: Option<String>,
@@ -265,23 +265,102 @@ pub struct SteniocheckConfig {
     pub ci: Option<CiConfig>,
 }
 
-impl SteniocheckConfig {
-    pub fn load_from_file(toml_path: &Path) -> Self {
-        fs::read_to_string(toml_path)
-            .ok()
-            .and_then(|c| toml::from_str::<SteniocheckConfig>(&c).ok())
-            .unwrap_or_default()
-    }
+/// A configuration file that exists (or was named by the caller) but cannot be used. It is always
+/// an error: silently falling back to the defaults switches rules off while the run stays green.
+#[derive(Debug)]
+pub struct ConfigError {
+    pub path: PathBuf,
+    pub cause: String,
+}
 
-    pub fn load_from_dir(repo_root: &Path) -> Self {
-        let toml_path = repo_root.join("steniocheck.toml");
-        if toml_path.is_file() {
-            if let Ok(content) = fs::read_to_string(&toml_path) {
-                if let Ok(config) = toml::from_str::<SteniocheckConfig>(&content) {
-                    return config;
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "configuration error: {}: {}",
+            self.path.display(),
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+pub const FILE_NAME: &str = "steniocheck.toml";
+
+impl SteniocheckConfig {
+    /// Parses a configuration text and checks every custom rule (pattern, severity, id).
+    pub fn parse(content: &str) -> Result<Self, String> {
+        let config: SteniocheckConfig =
+            toml::from_str(content).map_err(|e| e.to_string().trim_end().to_string())?;
+        let mut seen = std::collections::HashSet::new();
+        for rule in config.custom_rules.iter().flatten() {
+            let id = &rule.id;
+            if id.trim().is_empty() {
+                return Err("custom rule with an empty id".to_string());
+            }
+            if !seen.insert(id.to_ascii_lowercase()) {
+                return Err(format!("custom rule id '{id}' is declared twice"));
+            }
+            if let Err(e) = regex::Regex::new(&rule.pattern) {
+                return Err(format!("custom rule '{id}': invalid pattern: {e}"));
+            }
+            if rule.extensions.is_empty() {
+                return Err(format!(
+                    "custom rule '{id}': empty `extensions` can never match a file"
+                ));
+            }
+            if let Some(s) = rule.severity.as_deref() {
+                if !["error", "warning", "warn"].contains(&s.to_ascii_lowercase().as_str()) {
+                    return Err(format!(
+                        "custom rule '{id}': unknown severity '{s}' (error, warning)"
+                    ));
                 }
             }
         }
-        Self::default()
+        Ok(config)
+    }
+
+    /// Loads a file the caller named: a missing file is an error.
+    pub fn load_from_file(toml_path: &Path) -> Result<Self, ConfigError> {
+        let fail = |cause: String| ConfigError {
+            path: toml_path.to_path_buf(),
+            cause,
+        };
+        let content = fs::read_to_string(toml_path).map_err(|e| fail(e.to_string()))?;
+        Self::parse(&content).map_err(fail)
+    }
+
+    /// Loads `<root>/steniocheck.toml`. Only a file that does not exist yields the defaults.
+    pub fn load_from_dir(repo_root: &Path) -> Result<Self, ConfigError> {
+        let toml_path = repo_root.join(FILE_NAME);
+        match fs::symlink_metadata(&toml_path) {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(Self::default())
+            }
+            _ => Self::load_from_file(&toml_path),
+        }
+    }
+
+    /// The configuration of a run over `root`: the explicit file when one is named, else the
+    /// tree's own. Every `steniocheck.toml` between `root` and the repository root must parse
+    /// too, because directory rules read the nearest one.
+    pub fn for_run(root: &Path, explicit: Option<&Path>) -> Result<Self, ConfigError> {
+        let absolute = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        for dir in absolute.ancestors() {
+            Self::load_from_dir(dir)?;
+            if dir.join(".git").exists() {
+                break;
+            }
+        }
+        match explicit {
+            Some(file) => Self::load_from_file(file),
+            None => Self::load_from_dir(root),
+        }
     }
 }

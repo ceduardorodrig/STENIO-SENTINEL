@@ -292,7 +292,7 @@ pub fn scan_git_history(root: &Path) -> Result<Vec<Violation>, String> {
         .current_dir(root)
         .args(["log", "-p", "--all", "-U0", "--no-color", "--no-ext-diff"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("cannot run git: {e}"))?;
     let stdout = child
@@ -339,7 +339,18 @@ pub fn scan_git_history(root: &Path) -> Result<Vec<Violation>, String> {
             });
         }
     }
-    let _ = child.wait();
+    // A failed walk judged nothing, whatever was read before it stopped.
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("cannot wait for git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "git log failed in {}: {}",
+            root.display(),
+            stderr.lines().next().unwrap_or("no message")
+        ));
+    }
     Ok(violations)
 }
 

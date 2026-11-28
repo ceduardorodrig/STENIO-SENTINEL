@@ -4,12 +4,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::baseline::Whitelist;
+use crate::config::{FILE_NAME, SteniocheckConfig};
 use crate::frontend::audit_frontend_file;
 use crate::rule::{Rule, Severity};
+use crate::testscope::TestLines;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Violation {
@@ -26,12 +27,118 @@ pub struct Violation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
     pub total_files_scanned: usize,
+    /// Files a rule should have judged and could not read.
+    pub total_files_skipped: usize,
     pub total_violations: usize,
     pub error_count: usize,
     pub warning_count: usize,
     pub total_fixed: usize,
     pub duration: Duration,
     pub violations: Vec<Violation>,
+}
+
+impl ScanReport {
+    /// The counters are derived from the findings, never kept by hand.
+    pub fn recount(&mut self) {
+        self.total_violations = self.violations.len();
+        self.error_count = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::Error)
+            .count();
+        self.warning_count = self.total_violations - self.error_count;
+    }
+}
+
+pub const UNREADABLE_ID: &str = "SCAN-FILE-UNREADABLE";
+pub const FIX_FAILED_ID: &str = "SCAN-FIX-NOT-WRITTEN";
+const CONFIG_INVALID_ID: &str = "SCAN-CONFIG-INVALID";
+
+/// The file selection could not be built (Git failed): the run judged nothing.
+#[derive(Debug)]
+pub struct ScanRefused(pub String);
+
+impl std::fmt::Display for ScanRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ScanRefused {}
+
+fn engine_finding(
+    rule_id: &str,
+    rule_name: &str,
+    path: &str,
+    message: String,
+    suggestion: &str,
+) -> Violation {
+    Violation {
+        rule_id: rule_id.to_string(),
+        rule_name: rule_name.to_string(),
+        severity: Severity::Error,
+        file_path: path.to_string(),
+        line_number: 1,
+        snippet: String::new(),
+        message,
+        suggestion: Some(suggestion.to_string()),
+    }
+}
+
+/// The path below the scanned tree, so that the folders above it exempt nothing.
+fn below<'a>(root: &Path, path: &'a Path) -> &'a Path {
+    path.strip_prefix(root).unwrap_or(path)
+}
+
+fn has_component(path: &Path, names: &[&str]) -> bool {
+    path.parent().is_some_and(|dir| {
+        dir.components()
+            .any(|c| names.iter().any(|n| c.as_os_str() == *n))
+    })
+}
+
+/// Build output, dependencies and caches: nobody authors these, no rule reads them.
+fn is_generated_path(root: &Path, path: &Path) -> bool {
+    has_component(
+        below(root, path),
+        &[
+            "target",
+            "node_modules",
+            ".venv",
+            ".git",
+            "dist",
+            ".obsidian",
+            "dependencies",
+            "llm_model_cache",
+            ".smart-env",
+        ],
+    )
+}
+
+/// True inside the checkout of this engine, identified by its package manifest.
+fn in_engine_tree(path: &Path) -> bool {
+    let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    absolute.ancestors().skip(1).any(|dir| {
+        fs::read_to_string(dir.join("Cargo.toml")).is_ok_and(|manifest| {
+            manifest
+                .lines()
+                .any(|l| l.trim() == "name = \"stenio-sentinel\"")
+        })
+    })
+}
+
+/// Files where only credential rules apply: fixtures and archives anywhere, and in the engine
+/// checkout the sources that define and test the rules. A name or a line of content exempts
+/// nothing in any other repository.
+fn secrets_only(root: &Path, path: &Path, content: &str) -> bool {
+    if has_component(below(root, path), &["fixtures", "archive", "cold-storage"]) {
+        return true;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let rule_source = matches!(name, "rule.rs" | "frontend.rs" | "explain.rs")
+        || content.contains("fn run_self_tests")
+        || path.components().any(|c| c.as_os_str() == "fixtures");
+    rule_source && in_engine_tree(path)
 }
 
 pub struct Engine {
@@ -59,6 +166,10 @@ impl Engine {
             compiled_requires,
             whitelist,
         })
+    }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
     }
 
     pub fn check_scope_isolation(file_paths: &[PathBuf]) -> Option<Violation> {
@@ -121,25 +232,31 @@ impl Engine {
         let t0 = Instant::now();
 
         let file_paths = if let Some(diff_spec) = diff_target {
-            self.get_diff_files(root, Some(diff_spec))
+            crate::gitfiles::changed(root, diff_spec).map_err(ScanRefused)?
         } else if fast_mode {
-            self.get_changed_files(root)
+            crate::gitfiles::changed(root, "").map_err(ScanRefused)?
         } else {
             self.collect_all_files(root)?
         };
 
-        let total_files_scanned = file_paths.len();
-
         let mut total_fixed = 0;
+        let mut fix_failures = Vec::new();
         if auto_fix {
-            total_fixed = self.apply_auto_fixes(&file_paths, tag_filter, only_rule);
+            (total_fixed, fix_failures) =
+                self.apply_auto_fixes(root, &file_paths, tag_filter, only_rule);
         }
 
         // Process all files in parallel with Rayon
         let mut violations: Vec<Violation> = file_paths
             .par_iter()
-            .flat_map(|path| self.scan_file(path, tag_filter, only_rule))
+            .flat_map(|path| self.scan_file(root, path, tag_filter, only_rule))
             .collect();
+        let total_files_skipped = violations
+            .iter()
+            .filter(|v| v.rule_id == UNREADABLE_ID)
+            .count();
+        let total_files_scanned = file_paths.len() - total_files_skipped;
+        violations.extend(fix_failures);
 
         // Automatic Scope Isolation Check (Single Responsibility Worktree)
         // Prevents an LLM from mixing application changes with Stenio engine modifications in diffs/commits
@@ -152,33 +269,31 @@ impl Engine {
             }
         }
 
-        let mut error_count = 0;
-        let mut warning_count = 0;
-        for v in &violations {
-            match v.severity {
-                Severity::Error => error_count += 1,
-                Severity::Warning => warning_count += 1,
-            }
-        }
-
-        Ok(ScanReport {
+        let mut report = ScanReport {
             total_files_scanned,
-            total_violations: violations.len(),
-            error_count,
-            warning_count,
+            total_files_skipped,
+            total_violations: 0,
+            error_count: 0,
+            warning_count: 0,
             total_fixed,
             duration: t0.elapsed(),
             violations,
-        })
+        };
+        report.recount();
+        Ok(report)
     }
 
+    /// Applies the fixes and counts only those whose new content reached the disk; every file
+    /// that could not be rewritten is a finding.
     fn apply_auto_fixes(
         &self,
+        root: &Path,
         paths: &[PathBuf],
         tag_filter: Option<&str>,
         only_rule: Option<&str>,
-    ) -> usize {
+    ) -> (usize, Vec<Violation>) {
         let mut fixed_count = 0;
+        let mut failures = Vec::new();
         for path in paths {
             let path_str = path.to_string_lossy();
             if path_str.contains("/configs-homelab/")
@@ -193,12 +308,16 @@ impl Engine {
             let Ok(content) = fs::read_to_string(path) else {
                 continue;
             };
+            if secrets_only(root, path, &content) {
+                continue;
+            }
 
             let mut new_content = content.clone();
-            let mut file_changed = false;
+            let mut file_fixes = 0;
 
             for (idx, rule) in self.rules.iter().enumerate() {
-                if !rule.matches_filter(tag_filter, only_rule, &ext) {
+                if !rule.matches_filter(tag_filter, only_rule, &ext) || !rule.covers_path(&path_str)
+                {
                     continue;
                 }
                 let Some(ref replacement) = rule.fix_replacement else {
@@ -212,17 +331,33 @@ impl Engine {
                         .to_string();
                     if replaced != new_content {
                         new_content = replaced;
-                        file_changed = true;
-                        fixed_count += 1;
+                        file_fixes += 1;
                     }
                 }
             }
 
-            if file_changed {
-                let _ = fs::write(path, new_content);
+            if file_fixes == 0 {
+                continue;
+            }
+            let written = fs::write(path, &new_content).and_then(|()| fs::read_to_string(path));
+            match written {
+                Ok(on_disk) if on_disk == new_content => fixed_count += file_fixes,
+                other => {
+                    let cause = match other {
+                        Err(e) => e.to_string(),
+                        Ok(_) => "the content on disk differs from what was written".to_string(),
+                    };
+                    failures.push(engine_finding(
+                        FIX_FAILED_ID,
+                        "Auto-fix Not Written",
+                        &path_str,
+                        format!("--fix could not rewrite this file: {cause}"),
+                        "Make the file writable, or fix it by hand.",
+                    ));
+                }
             }
         }
-        fixed_count
+        (fixed_count, failures)
     }
 
     fn collect_all_files(&self, root: &Path) -> Result<Vec<PathBuf>> {
@@ -233,139 +368,65 @@ impl Engine {
             let entry = result?;
             if entry.file_type().map_or(false, |ft| ft.is_file()) {
                 let path = entry.into_path();
-                let path_str = path.to_string_lossy();
-                if crate::baseline::is_common_ignored_path(&path_str)
-                    || path_str.contains("/llm_model_cache/")
-                    || path_str.contains("/.smart-env/")
-                    || path_str.contains("/fixtures/")
-                    || path_str.ends_with("/rule.rs")
-                    || path_str.ends_with("/frontend.rs")
-                    || path_str.ends_with("/explain.rs")
-                {
-                    continue;
+                if !is_generated_path(root, &path) {
+                    file_paths.push(path);
                 }
-                file_paths.push(path);
             }
         }
         Ok(file_paths)
     }
 
-    pub fn get_diff_files(&self, root: &Path, diff_target: Option<&str>) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-
-        // 1. Entrada via Stdin (ex: git diff --name-only | stenio --diff -)
-        if let Some(target) = diff_target {
-            if target == "-" {
-                use std::io::BufRead;
-                let stdin = std::io::stdin();
-                for line in stdin.lock().lines().flatten() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        let p = root.join(trimmed);
-                        if p.is_file() {
-                            files.push(p);
-                        }
-                    }
-                }
-                return files;
-            }
-        }
-
-        // 2. Consulta via git diff
-        let mut args = vec!["diff", "--name-only", "--diff-filter=ACMR"];
-        let mut custom_rev = None;
-        if let Some(target) = diff_target {
-            let t = target.trim();
-            if t == "staged" || t == "cached" {
-                args.push("--cached");
-            } else if !t.is_empty() {
-                custom_rev = Some(t);
-            }
-        }
-        if let Some(rev) = custom_rev {
-            args.push(rev);
-        }
-
-        let output = Command::new("git").current_dir(root).args(&args).output();
-
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            for line in stdout.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    let p = root.join(trimmed);
-                    if p.is_file() {
-                        files.push(p);
-                    }
-                }
-            }
-        }
-
-        // If diff is empty and no specific revision was provided, fallback to git status (untracked/staged/modified)
-        if files.is_empty()
-            && diff_target.map_or(true, |t| t.is_empty() || t == "staged" || t == "cached")
-        {
-            return self.get_changed_files(root);
-        }
-
-        files
-    }
-
-    pub fn get_changed_files(&self, root: &Path) -> Vec<PathBuf> {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(["status", "--porcelain"])
-            .output();
-
-        let mut files = Vec::new();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            for line in stdout.lines() {
-                let trimmed = line.trim();
-                if trimmed.len() > 3 {
-                    let path_part = trimmed[3..].trim();
-                    let actual_path = if let Some(idx) = path_part.find("->") {
-                        path_part[idx + 2..].trim()
-                    } else {
-                        path_part
-                    };
-                    let p = root.join(actual_path);
-                    if p.is_file() {
-                        files.push(p);
-                    }
-                }
-            }
-        }
-        files
-    }
-
     pub fn scan_file(
         &self,
+        root: &Path,
         path: &Path,
         tag_filter: Option<&str>,
         only_rule: Option<&str>,
     ) -> Vec<Violation> {
         let ext = crate::rule::effective_extension(path);
+        let path_str = path.to_string_lossy().to_string();
 
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                // A file no active rule reads (an image, a binary) is not a gap.
+                let judged = self
+                    .rules
+                    .iter()
+                    .any(|r| r.matches_filter(tag_filter, only_rule, &ext));
+                if !judged {
+                    return Vec::new();
+                }
+                return vec![engine_finding(
+                    UNREADABLE_ID,
+                    "File Skipped: Not Read",
+                    &path_str,
+                    format!("not judged: it could not be read as UTF-8 text: {e}"),
+                    "Save it as UTF-8, make it readable, or exclude it with .gitignore if it is not source.",
+                )];
+            }
         };
 
-        let path_str = path.to_string_lossy().to_string();
-        // Internal rule definitions and synthetic self-test files of the Stenio engine
-        // must not be sanctioned by the very rules they define and test
-        if path_str.ends_with("/rule.rs")
-            || path_str.ends_with("/frontend.rs")
-            || path_str.ends_with("/explain.rs")
-            || content.contains("fn run_self_tests")
-        {
-            return Vec::new();
-        }
+        let restricted = secrets_only(root, path, &content);
+        let test_lines = std::cell::OnceCell::new();
         let mut file_violations = Vec::new();
 
+        // Directory rules read the nearest configuration: every one of them must parse.
+        if !restricted && path.file_name().is_some_and(|n| n == FILE_NAME) {
+            if let Err(cause) = SteniocheckConfig::parse(&content) {
+                file_violations.push(engine_finding(
+                    CONFIG_INVALID_ID,
+                    "Configuration Not Readable",
+                    &path_str,
+                    format!("configuration error: {cause}"),
+                    "Fix the file: an unreadable configuration switches its rules off.",
+                ));
+            }
+        }
+
         // 1. Specialized Frontend and SEO Rules Audit
-        if (tag_filter.is_none() || tag_filter == Some("frontend") || tag_filter == Some("seo"))
+        if !restricted
+            && (tag_filter.is_none() || tag_filter == Some("frontend") || tag_filter == Some("seo"))
             && only_rule.map_or(true, |r| {
                 r.starts_with("FRONT-") || r.starts_with("PERF-") || r.starts_with("SEO-")
             })
@@ -387,15 +448,12 @@ impl Engine {
                 continue;
             }
 
-            if !rule.path_includes.is_empty()
-                && !rule.path_includes.iter().any(|inc| path_str.contains(inc))
-            {
+            if !rule.covers_path(&path_str) {
                 continue;
             }
 
-            if !rule.path_excludes.is_empty()
-                && rule.path_excludes.iter().any(|exc| path_str.contains(exc))
-            {
+            // Fixtures, archives and the engine rule sources: only credentials are judged.
+            if restricted && !rule.id.starts_with("SEC-SECRET") {
                 continue;
             }
 
@@ -494,12 +552,16 @@ impl Engine {
                     continue;
                 }
 
-                let mut in_test_scope = false;
+                // Rules exclusive to production Rust code skip the items marked as test code.
+                let production_only = matches!(
+                    rule.id.as_str(),
+                    "RUST-NO-UNWRAP"
+                        | "BACKEND-NO-PANIC"
+                        | "BACKEND-NO-HARDCODED-TEXT"
+                        | "RUST-NO-UNBOUNDED-CHANNEL"
+                );
                 for (line_idx, line) in content.lines().enumerate() {
                     let trimmed = line.trim();
-                    if trimmed.starts_with("#[cfg(test)]") || trimmed == "#[test]" {
-                        in_test_scope = true;
-                    }
 
                     if re.is_match(line) {
                         // Skip pure comments for hardcoded text rules
@@ -511,12 +573,10 @@ impl Engine {
                             continue;
                         }
 
-                        // If rule is exclusive to production Rust code, ignore within test scope
-                        if in_test_scope
-                            && (rule.id == "RUST-NO-UNWRAP"
-                                || rule.id == "BACKEND-NO-PANIC"
-                                || rule.id == "BACKEND-NO-HARDCODED-TEXT"
-                                || rule.id == "RUST-NO-UNBOUNDED-CHANNEL")
+                        if production_only
+                            && test_lines
+                                .get_or_init(|| TestLines::of(&content))
+                                .contains(line_idx + 1)
                         {
                             continue;
                         }
