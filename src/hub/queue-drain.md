@@ -27,8 +27,10 @@ unavailable.
    `--session <id>` or export `STENIO_HUB_WORKER=<id>` where your harness allows. `claude-code` and `opencode` have a
    declared account, so they may omit `--account`.
 2. `status`. A claim of a row or slot reads the declared source of your account when no fresh
-   sample exists (`quota refresh` reads them all). An unknown or stale quota allows one working
-   worker per account; 60% or more allows two; 80% or more allows no new row.
+   sample exists (`quota refresh` reads them all). The limits are declared (`stenio config
+   show`, `status`); shipped: a new row is refused only when a window is exhausted. A claim that
+   answers with a `warning` about the quota (80% or more) means: checkpoint now, and do not
+   start a release or rollout you cannot finish.
 3. `claim row:<ID> tree:<absolute path of your clone>` (all or nothing). Keep the `fence`.
 4. `beat` before the lease ends (default 20 minutes). A hook after each tool call runs
    `stenio hub beat --from-hook` (payload on stdin, always exit 0). It renews the worker named by

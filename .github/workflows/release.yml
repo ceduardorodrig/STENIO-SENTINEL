@@ -114,11 +114,16 @@ jobs:
       # usa `@v1` + `with: version: v3.8.3`.
       - name: Move major tag (action track) to this release
         shell: bash
-        env:
-          # Contrato de interface da action — ver comentário acima.
-          ACTION_MAJOR_TAG: "v1"
         run: |
           set -euo pipefail
+          # One action track per engine major, so a consumer moves only when it changes its
+          # own pin. A new major is declared here or the release fails.
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "${VERSION%%.*}" in
+            4) ACTION_MAJOR_TAG=v1 ;;
+            5) ACTION_MAJOR_TAG=v2 ;;
+            *) echo "no action track declared for $GITHUB_REF_NAME" >&2; exit 1 ;;
+          esac
           echo "🛡️ Movendo a trilha da action '$ACTION_MAJOR_TAG' → $GITHUB_REF_NAME"
           # A trilha aponta para o commit DA TAG DA RELEASE, nunca para `HEAD`
           # do checkout: num evento de tag o checkout pode estar detached num

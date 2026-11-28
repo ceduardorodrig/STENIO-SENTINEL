@@ -113,8 +113,72 @@ pub struct QuotaPolicy {
     pub unknown_workers: u32,
     pub resume_margin_secs: u64,
     pub command_timeout_secs: u64,
+    /// From this percentage a claim answers with a warning.
+    #[serde(default = "advisory_percent")]
+    pub advisory_percent: f64,
     #[serde(default)]
     pub source: Vec<QuotaSource>,
+    #[serde(default)]
+    pub limit: Vec<QuotaLimit>,
+}
+
+fn advisory_percent() -> f64 {
+    80.0
+}
+
+/// Limits of one account, or of one window of it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaLimit {
+    pub account: String,
+    pub window: Option<String>,
+    pub stop_percent: Option<f64>,
+    pub advisory_percent: Option<f64>,
+}
+
+impl QuotaPolicy {
+    /// `(stop, advisory)` of a window: its own entry, else the account's, else the general value.
+    pub fn limits(&self, account: &str, window: &str) -> (f64, f64) {
+        let find = |window: Option<&str>, pick: fn(&QuotaLimit) -> Option<f64>| {
+            self.limit
+                .iter()
+                .filter(|l| l.account == account && l.window.as_deref() == window)
+                .find_map(pick)
+        };
+        let value = |pick: fn(&QuotaLimit) -> Option<f64>, general: f64| {
+            find(Some(window), pick)
+                .or_else(|| find(None, pick))
+                .unwrap_or(general)
+        };
+        (
+            value(|l| l.stop_percent, self.stop_percent),
+            value(|l| l.advisory_percent, self.advisory_percent),
+        )
+    }
+
+    /// One line per value in force, for `config show`.
+    pub fn describe(&self, source: &str) -> String {
+        let mut out = String::new();
+        for (key, value) in [
+            ("stop_percent", self.stop_percent),
+            ("advisory_percent", self.advisory_percent),
+            ("throttle_percent", self.throttle_percent),
+            ("throttle_workers", f64::from(self.throttle_workers)),
+            ("unknown_workers", f64::from(self.unknown_workers)),
+        ] {
+            out.push_str(&format!("hub.quota.{key} = {value}  [applied; {source}]\n"));
+        }
+        for (n, l) in self.limit.iter().enumerate() {
+            out.push_str(&format!(
+                "hub.quota.limit.{n} = account {} window {} stop {:?} advisory {:?}  [applied; {source}]\n",
+                l.account,
+                l.window.as_deref().unwrap_or("every"),
+                l.stop_percent,
+                l.advisory_percent
+            ));
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,13 +200,17 @@ impl Config {
 
     /// The host override when one exists, else the embedded declaration. An override that is
     /// named but unreadable is an error: silently using other limits would be a bypass.
-    pub fn load() -> HubResult<Self> {
-        let named = env_path(CONFIG_ENV);
-        let file = named.clone().or_else(|| {
+    /// The override file in force on this host, if any.
+    pub fn override_file() -> Option<PathBuf> {
+        env_path(CONFIG_ENV).or_else(|| {
             xdg("XDG_CONFIG_HOME", ".config")
                 .map(|d| d.join("stenio/hub.toml"))
                 .filter(|p| p.is_file())
-        });
+        })
+    }
+
+    pub fn load() -> HubResult<Self> {
+        let file = Self::override_file();
         match file {
             Some(p) => {
                 let text = std::fs::read_to_string(&p).map_err(|e| {

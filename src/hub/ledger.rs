@@ -754,10 +754,13 @@ pub fn claim(store: &mut Store, cfg: &Config, request: &ClaimRequest) -> HubResu
             taken.push(name);
         }
         touch(tx, &who.id)?;
-        Ok(
-            json!({"ok": true, "fence": fence, "resources": taken, "run": run,
-            "expires": iso(expires), "takeover": takeovers}),
-        )
+        let mut answer = json!({"ok": true, "fence": fence, "resources": taken, "run": run,
+            "expires": iso(expires), "takeover": takeovers});
+        let told = quota::advisories(tx, &cfg.quota, &who.account)?;
+        if !told.is_empty() {
+            answer["warning"] = json!(told.join("; "));
+        }
+        Ok(answer)
     })
 }
 

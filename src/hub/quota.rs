@@ -163,13 +163,14 @@ pub fn gate(conn: &Connection, policy: &QuotaPolicy, who: &Worker) -> HubResult<
     // A stale high reading still blocks: usage does not fall before the window resets.
     let over: Vec<&Sample> = current
         .iter()
-        .filter(|s| s.used_pct.is_some_and(|u| u >= policy.stop_percent))
+        .filter(|s| {
+            s.used_pct
+                .is_some_and(|u| u >= policy.limits(&s.account, &s.window).0)
+        })
         .collect();
-    if !over.is_empty() {
-        let worst = over
-            .iter()
-            .filter_map(|s| s.used_pct)
-            .fold(0.0_f64, f64::max);
+    if let Some(first) = over.first() {
+        let worst = first.used_pct.unwrap_or_default();
+        let (stop, _) = policy.limits(&first.account, &first.window);
         let resume = over
             .iter()
             .filter_map(|s| s.resets_at)
@@ -178,8 +179,8 @@ pub fn gate(conn: &Connection, policy: &QuotaPolicy, who: &Worker) -> HubResult<
         return Err(HubError::refused(
             "quota",
             format!(
-                "account {} used {worst:.0}% (limit {:.0}%)",
-                who.account, policy.stop_percent
+                "account {} used {worst:.0}% of {} (limit {stop:.0}%)",
+                who.account, first.window
             ),
             format!(
                 "checkpoint and resume after resume_after; only the owner may authorize more, at a \
@@ -224,6 +225,29 @@ pub fn gate(conn: &Connection, policy: &QuotaPolicy, who: &Worker) -> HubResult<
     Ok(())
 }
 
+/// What a worker of `account` should be told with a claim: every window at its advisory level.
+pub fn advisories(
+    conn: &Connection,
+    policy: &QuotaPolicy,
+    account: &str,
+) -> HubResult<Vec<String>> {
+    let now = now_ms();
+    Ok(samples(conn)?
+        .into_iter()
+        .filter(|s| s.account == account && s.confidence(policy, now) != "unknown")
+        .filter_map(|s| {
+            let used = s.used_pct?;
+            let (_, advisory) = policy.limits(&s.account, &s.window);
+            (used >= advisory).then(|| {
+                format!(
+                    "account {account} used {used:.0}% of {} (advisory {advisory:.0}%): checkpoint now and do not start a release or rollout you cannot finish",
+                    s.window
+                )
+            })
+        })
+        .collect())
+}
+
 /// Every window of every account that is sampled, declared or used by a worker.
 pub fn show(conn: &Connection, policy: &QuotaPolicy) -> HubResult<Vec<Value>> {
     let now = now_ms();
@@ -239,7 +263,17 @@ pub fn show(conn: &Connection, policy: &QuotaPolicy) -> HubResult<Vec<Value>> {
                 }
                 _ => None,
             };
+            let (stop, advisory) = policy.limits(&s.account, &s.window);
+            let level = match s.used_pct.filter(|_| confidence != "unknown") {
+                None => "unknown",
+                Some(u) if u >= stop => "exhausted",
+                Some(u) if u >= advisory => "advisory: checkpoint",
+                Some(_) => "ok",
+            };
             json!({
+                "stop_percent": stop,
+                "advisory_percent": advisory,
+                "level": level,
                 "account": s.account,
                 "window": s.window,
                 "used_pct": if confidence == "unknown" { None } else { s.used_pct },
@@ -503,6 +537,7 @@ mod override_tests {
         let result = (|| {
             let mut cfg = Config::embedded()?;
             cfg.quota.source.clear();
+            cfg.quota.stop_percent = 80.0;
             let mut store = Store::open(&dir.join("hub.db"))?;
             let join = Join {
                 harness: "t".to_string(),

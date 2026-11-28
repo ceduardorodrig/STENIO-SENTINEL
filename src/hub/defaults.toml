@@ -16,12 +16,20 @@ ceiling = 5
 [quota]
 # A sample older than this is "stale" and no longer proves there is room.
 fresh_secs = 300
-# At this percentage no new row or slot is claimed.
-stop_percent = 80.0
-# At this percentage at most `throttle_workers` workers of one account hold work.
-throttle_percent = 60.0
-throttle_workers = 2
-unknown_workers = 1
+# Owner policy, 2026-11-28: "eu quero usar 100%, e isso deve estar previsto". New work is
+# refused only when a window is exhausted, that is when its source reports `stop_percent`.
+stop_percent = 100.0
+# From this percentage every claim answers with a warning: checkpoint, and do not start a
+# release or rollout that cannot be finished.
+advisory_percent = 80.0
+# At `throttle_percent` at most `throttle_workers` workers of one account hold work; an account
+# whose quota is unknown or stale allows `unknown_workers`. Both are the fleet ceiling, so only
+# exhaustion refuses.
+throttle_percent = 100.0
+throttle_workers = 5
+unknown_workers = 5
+# A `[[quota.limit]]` entry narrows `stop_percent` or `advisory_percent` for one account, or one
+# window of it: account = "anthropic", window = "Current week", stop_percent = 90.0
 resume_margin_secs = 120
 command_timeout_secs = 30
 
