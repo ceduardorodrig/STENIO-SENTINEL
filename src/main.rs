@@ -723,6 +723,7 @@ fn run_self_tests(rules: &[Rule]) -> Result<()> {
         .chain(opportunity::self_test_cases())
         .chain(sweep::self_test_cases())
         .chain(hub::self_test_cases())
+        .chain(hub::hygiene::self_test_cases())
         .chain(gate::self_test_cases())
         .chain(cv::self_test_cases())
         .chain(compare_engines::self_test_cases())

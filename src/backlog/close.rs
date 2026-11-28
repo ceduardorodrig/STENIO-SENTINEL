@@ -474,6 +474,12 @@ pub fn run_cli(argv: &[String]) -> i32 {
         .collect();
     prefixes.sort();
     prefixes.dedup();
+    // GB-354: a recorded proof that the tree has left behind does not close a row.
+    let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+    if let Err(e) = crate::hub::receipt::refuse_invalid(&ids) {
+        eprintln!("{e}");
+        return e.exit_code();
+    }
     // Planned and applied under one lock, so no other writer changes a file in between.
     let written =
         crate::hub::guard::guarded(&root, &prefixes, a.worker.as_deref(), a.dry_run, || {

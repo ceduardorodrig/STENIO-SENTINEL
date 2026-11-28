@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 use super::config::{self, Config, WORKER_ENV};
 use super::store::Store;
-use super::{HubError, HubResult, audit, backup, hooks, ledger, quota, remote, server, view};
+use super::{
+    HubError, HubResult, audit, backup, hooks, ledger, quota, receipt, remote, server, view,
+};
 
 /// The one-page instructions for workers draining a queue.
 pub const GUIDE: &str = include_str!("queue-drain.md");
@@ -264,6 +266,22 @@ enum Cmd {
         text: String,
         #[arg(long, default_value = "cli")]
         via: String,
+    },
+    /// Run a command on a tree and record commit, tree fingerprint, exit and output hash
+    Receipt {
+        #[command(flatten)]
+        who: Who,
+        #[arg(long)]
+        row: String,
+        #[arg(long, help = "Git checkout the command runs in")]
+        tree: std::path::PathBuf,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Fail unless the newest receipt of a row still matches its tree
+    Closable {
+        #[arg(long)]
+        row: String,
     },
     /// Questions waiting for the owner
     Questions {
@@ -544,6 +562,9 @@ fn execute_remote(server: &remote::Remote, command: Cmd) -> HubResult<Value> {
         }
         Cmd::Questions { all, cursor } => send("questions", json!({"all": all, "cursor": cursor})),
         local @ Cmd::Backlog { .. } => execute_local(local),
+        Cmd::Receipt { .. } | Cmd::Closable { .. } => Err(HubError::Usage(
+            "receipts run on the machine that holds the ledger".to_string(),
+        )),
         Cmd::Quota { command } => match command {
             QuotaCmd::Refresh => send("quota_refresh", json!({})),
             QuotaCmd::Put {
@@ -780,6 +801,13 @@ fn execute_local(command: Cmd) -> HubResult<Value> {
             ledger::ask(&mut open()?, &request)
         }
         Cmd::Answer { id, text, via } => ledger::answer(&mut open()?, id, &text, &via),
+        Cmd::Receipt {
+            who,
+            row,
+            tree,
+            command,
+        } => receipt::run(&mut open()?, &who.id()?, &row, &tree, &command),
+        Cmd::Closable { row } => receipt::closable(&mut open()?, &row),
         Cmd::ResetAttempts { row, reason } => {
             ledger::reset_attempts(&mut open()?, &row, &reason, std::io::stdin().is_terminal())
         }
@@ -928,6 +956,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             0
         }
         Ok(value) => {
+            let value = super::hygiene::label(value);
             // The warning of an unbound join must be seen even when stdout is captured.
             if let Some(warning) = value["warning"].as_str() {
                 eprintln!("WARNING: {warning}");
