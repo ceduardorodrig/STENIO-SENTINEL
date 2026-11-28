@@ -2,8 +2,9 @@
 //! list under test is the registry itself: a rule without a case, or whose pattern stops
 //! matching, turns `cargo test` red.
 
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::SteniocheckConfig;
@@ -26,6 +27,8 @@ struct Case {
     path: &'static str,
     bad: String,
     good: String,
+    /// `steniocheck.toml` of both trees, for a rule that judges only what is declared.
+    config: &'static str,
 }
 
 fn case(id: &'static str, path: &'static str, bad: &str, good: &str) -> Case {
@@ -35,6 +38,7 @@ fn case(id: &'static str, path: &'static str, bad: &str, good: &str) -> Case {
         path,
         bad: format!("{bad}\n"),
         good: format!("{good}\n"),
+        config: "",
     }
 }
 
@@ -291,12 +295,17 @@ fn cases() -> Vec<Case> {
             "text",
             "",
         ),
+        Case {
+            config: "[topology]\nbackend_nodes = [\"node-a\"]\n",
+            ..case(
+                "INFRA-TOPOLOGY-COMPLIANCE",
+                "deploy.sh",
+                "export DEPLOY_HOST=\"admin@old-node\"",
+                "export DEPLOY_HOST=\"admin@node-a.example.net:22\"\nDEPLOY_TARGET=$1",
+            )
+        },
     ]
 }
-
-/// Listed in the catalogue and emitted by no code path: it can have no positive fixture. The
-/// test fails when one of them gains a case or a new rule is added here without cause.
-const NO_EMITTER: [&str; 1] = ["INFRA-TOPOLOGY-COMPLIANCE"];
 
 struct Tree(PathBuf);
 
@@ -306,29 +315,29 @@ impl Drop for Tree {
     }
 }
 
-fn reported(case: &Case, content: &str, label: &str) -> Result<bool, String> {
+/// The tree of one case: its file (none for an empty text), its configuration and, for a staged
+/// case, a Git index.
+fn plant(root: &Path, case: &Case, content: &str) -> Result<(), String> {
     let text = |e: std::io::Error| e.to_string();
-    let root = Tree(std::env::temp_dir().join(format!(
-        "stenio-rule-{}-{}-{label}",
-        std::process::id(),
-        case.id
-    )));
-    let _ = fs::remove_dir_all(&root.0);
+    let _ = fs::remove_dir_all(root);
     // An empty text stands for the tree without the file.
-    fs::create_dir_all(&root.0).map_err(text)?;
+    fs::create_dir_all(root).map_err(text)?;
     if !content.trim().is_empty() {
-        let file = root.0.join(case.path);
+        let file = root.join(case.path);
         if let Some(dir) = file.parent() {
             fs::create_dir_all(dir).map_err(text)?;
         }
         fs::write(file, content).map_err(text)?;
     }
+    if !case.config.is_empty() {
+        fs::write(root.join("steniocheck.toml"), case.config).map_err(text)?;
+    }
     if case.how == How::Staged {
         // Scope isolation fires when the engine and an application change together.
-        fs::write(root.0.join("app.rs"), "fn app() {}\n").map_err(text)?;
+        fs::write(root.join("app.rs"), "fn app() {}\n").map_err(text)?;
         for args in [&["init", "-q"][..], &["add", "-A"][..]] {
             let status = Command::new("git")
-                .current_dir(&root.0)
+                .current_dir(root)
                 .args(args)
                 .status()
                 .map_err(text)?;
@@ -337,6 +346,16 @@ fn reported(case: &Case, content: &str, label: &str) -> Result<bool, String> {
             }
         }
     }
+    Ok(())
+}
+
+fn reported(case: &Case, content: &str, label: &str) -> Result<bool, String> {
+    let root = Tree(std::env::temp_dir().join(format!(
+        "stenio-rule-{}-{}-{label}",
+        std::process::id(),
+        case.id
+    )));
+    plant(&root.0, case, content)?;
     let request = Request {
         path: root.0.clone(),
         path_explicit: true,
@@ -363,7 +382,7 @@ fn every_rule_of_the_registry_fires_on_its_fixture_and_only_there() -> Result<()
     let uncovered: Vec<&str> = rules
         .iter()
         .map(|r| r.id.as_str())
-        .filter(|id| !NO_EMITTER.contains(id) && !cases.iter().any(|c| c.id == *id))
+        .filter(|id| !cases.iter().any(|c| c.id == *id))
         .collect();
     assert!(
         uncovered.is_empty(),
@@ -381,6 +400,75 @@ fn every_rule_of_the_registry_fires_on_its_fixture_and_only_there() -> Result<()
             wrong.push(format!("{}: fires on its negative fixture", case.id));
         }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    Ok(())
+}
+
+/// GB-375: the scan and the delivery gate are one pipeline. Under scope `all` they report
+/// the same errors on every fixture; under a narrow scope the gate only adds (it also judges
+/// governance, documentation and the queues, deliberately).
+#[test]
+fn the_gate_reports_what_the_scan_reports_on_every_fixture() -> Result<(), String> {
+    // Duplication and engine integrity are judged by the gate alone.
+    const GATE_ONLY: [&str; 2] = ["ARCH-DRY-DUPLICATION", "GUARDIAN-TAMPER"];
+    use rayon::prelude::*;
+    let judged = |case: &Case| -> Result<Vec<String>, String> {
+        let mut wrong = Vec::new();
+        if case.how == How::Staged {
+            return Ok(wrong);
+        }
+        let root = Tree(std::env::temp_dir().join(format!(
+            "stenio-parity-{}-{}",
+            std::process::id(),
+            case.id
+        )));
+        plant(&root.0, case, &case.bad)?;
+        let own = match case.how {
+            How::Scan(scope) => scope,
+            _ => "project",
+        };
+        for scope in ["all", own] {
+            let errors = |gate: bool| -> Result<BTreeSet<(String, String, usize)>, String> {
+                let outcome = pipeline::run(&Request {
+                    path: root.0.clone(),
+                    path_explicit: true,
+                    scope: Some(scope.to_string()),
+                    gate,
+                    ..Request::default()
+                })?;
+                Ok(outcome
+                    .report
+                    .violations
+                    .into_iter()
+                    .filter(|v| v.severity == crate::rule::Severity::Error)
+                    .filter(|v| !GATE_ONLY.contains(&v.rule_id.as_str()))
+                    .map(|v| (v.rule_id, v.file_path, v.line_number))
+                    .collect())
+            };
+            let (scan, gate) = (errors(false)?, errors(true)?);
+            let same = if scope == "all" {
+                scan == gate
+            } else {
+                scan.is_subset(&gate)
+            };
+            if !same {
+                wrong.push(format!(
+                    "{} scope={scope}: scan only {:?}, gate only {:?}",
+                    case.id,
+                    scan.difference(&gate).collect::<Vec<_>>(),
+                    gate.difference(&scan).collect::<Vec<_>>()
+                ));
+            }
+        }
+        Ok(wrong)
+    };
+    let all = cases();
+    // The wide scope reads outside the tree (GB-383), so the cases run side by side.
+    let wrong: Vec<String> = all
+        .par_iter()
+        .map(judged)
+        .collect::<Result<Vec<_>, _>>()?
+        .concat();
     assert!(wrong.is_empty(), "{wrong:#?}");
     Ok(())
 }

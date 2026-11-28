@@ -65,6 +65,9 @@ pub struct Rule {
     /// `None` means "do not report at all"; `Some(Warning)` keeps the finding
     /// visible instead of silently dropping it (no silent gap).
     pub severity_without_requires: Option<Severity>,
+    /// `Some`: the capture `target` of a match must be in this declared list (GB-399). An empty
+    /// list means nothing is declared, so the rule judges nothing.
+    pub declared_targets: Option<Vec<String>>,
 }
 
 impl Rule {
@@ -93,7 +96,36 @@ impl Rule {
             path_excludes: Vec::new(),
             requires_pattern: None,
             severity_without_requires: None,
+            declared_targets: None,
         }
+    }
+
+    /// Reports a match only when it names a target outside `declared` (see `declared_targets`).
+    pub fn limited_to(mut self, declared: Vec<String>) -> Self {
+        self.declared_targets = Some(declared);
+        self
+    }
+
+    /// True when a line the pattern matched names a target that is not declared.
+    pub fn names_undeclared(&self, captured: &str) -> bool {
+        let Some(declared) = &self.declared_targets else {
+            return true;
+        };
+        captured
+            .split([',', ' ', '\t'])
+            .map(|t| t.rsplit('@').next().unwrap_or(t))
+            .map(|t| t.split(':').next().unwrap_or(t))
+            // A variable or a template is resolved elsewhere.
+            .filter(|t| !t.is_empty() && !t.contains(['$', '{', '}', '<', '>']))
+            .any(|t| {
+                let short = match t.split_once('.') {
+                    Some((head, _)) if !head.bytes().all(|b| b.is_ascii_digit()) => head,
+                    _ => t,
+                };
+                !declared
+                    .iter()
+                    .any(|d| d.eq_ignore_ascii_case(t) || d.eq_ignore_ascii_case(short))
+            })
     }
 
     /// Makes the rule context-dependent: `requires_pattern` must match the file
@@ -141,6 +173,19 @@ impl Rule {
     }
 }
 
+/// `security.banned_python_packages` when the key is absent.
+pub const DEFAULT_BANNED_PACKAGES: [&str; 2] = ["torch", "ctranslate2"];
+/// `architecture.banned_modules` when the key is absent.
+pub const DEFAULT_BANNED_MODULES: [&str; 7] = [
+    "core.canvas",
+    "core.ocr_engine",
+    "worker_vision",
+    "run_vision",
+    "run_datavis",
+    "worker_datavis",
+    "core.whisper_pytorch",
+];
+
 pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     let mut rules = Vec::new();
 
@@ -161,7 +206,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         .security
         .as_ref()
         .and_then(|s| s.banned_python_packages.clone())
-        .unwrap_or_else(|| vec!["torch".to_string(), "ctranslate2".to_string()]);
+        .unwrap_or_else(|| DEFAULT_BANNED_PACKAGES.map(str::to_string).to_vec());
 
     for pkg in banned_pkgs {
         let pattern = format!(r"(?m)^\s*(import\s+{}\b|from\s+{}\b)", pkg, pkg);
@@ -188,17 +233,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
         .architecture
         .as_ref()
         .and_then(|a| a.banned_modules.clone())
-        .unwrap_or_else(|| {
-            vec![
-                "core.canvas".to_string(),
-                "core.ocr_engine".to_string(),
-                "worker_vision".to_string(),
-                "run_vision".to_string(),
-                "run_datavis".to_string(),
-                "worker_datavis".to_string(),
-                "core.whisper_pytorch".to_string(),
-            ]
-        });
+        .unwrap_or_else(|| DEFAULT_BANNED_MODULES.map(str::to_string).to_vec());
 
     let mod_joined = banned_mods
         .iter()
@@ -660,16 +695,25 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
     ));
 
     // ── 29. Infrastructure: Mesh Canonical Topology Compliance ────────────
-    rules.push(Rule::new(
-        "INFRA-TOPOLOGY-COMPLIANCE",
-        "infra",
-        Severity::Error,
-        "Deploy Target Outside Active Topology",
-        "Deployment scripts and stacks may only target active topology nodes (kavure, ybyra, psicopompo).",
-        r"(?m)^.*stenio-topology-marker.*$",
-        &["sh", "ini", "yml", "yaml"],
-        Some("Target canonical topology nodes (kavure for backend/docker, ybyra for edge/frontend)."),
-    ));
+    rules.push(
+        Rule::new(
+            "INFRA-TOPOLOGY-COMPLIANCE",
+            "infra",
+            Severity::Error,
+            "Deploy Target Outside Declared Topology",
+            "A deploy target names a host that no `[topology]` node list of steniocheck.toml declares.",
+            r#"(?im)^\s*(?:export\s+|-\s+|Environment=)?["']?deploy[_-]?(?:target|host|node)s?["']?\s*[=:]\s*["']?(?P<target>[^"'#;]*)"#,
+            &["sh", "ini", "yml", "yaml"],
+            Some("Declare the host in a `[topology]` node list, or deploy to a declared one."),
+        )
+        .limited_to(
+            config
+                .topology
+                .as_ref()
+                .map(crate::config::TopologyConfig::nodes)
+                .unwrap_or_default(),
+        ),
+    );
 
     // ── 30. Rust: Prohibition of Unbounded Asynchronous Channels ───────────
     rules.push(Rule::new(
@@ -780,6 +824,7 @@ pub fn get_rules_from_config(config: &SteniocheckConfig) -> Vec<Rule> {
                 // are engine-only, preventing artificial context rule creation.
                 requires_pattern: None,
                 severity_without_requires: None,
+                declared_targets: None,
             };
             rules.push(rule);
         }

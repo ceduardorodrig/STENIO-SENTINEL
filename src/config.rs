@@ -74,6 +74,23 @@ pub struct TopologyConfig {
     pub dev_gpu_nodes: Option<Vec<String>>,
 }
 
+impl TopologyConfig {
+    /// Every node any list declares.
+    pub fn nodes(&self) -> Vec<String> {
+        [
+            &self.authorized_hub_nodes,
+            &self.edge_nodes,
+            &self.backend_nodes,
+            &self.dev_gpu_nodes,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .cloned()
+        .collect()
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, serde::Serialize, Clone, Default)]
 pub struct CustomRuleConfig {
