@@ -325,8 +325,23 @@ pub fn backlog(
 pub fn export(store: &mut Store, run: Option<&str>) -> HubResult<String> {
     store.read(|conn| {
         let mut out = String::new();
-        for e in store::events(conn)? {
-            if run.is_some_and(|r| e.run != r) {
+        let events = store::events(conn)?;
+        // The members of a run are the workers it has events of: their joins and the refusals
+        // they received belong to the record of the run (GB-416).
+        let members: std::collections::BTreeSet<&str> = events
+            .iter()
+            .filter(|e| run.is_some_and(|r| e.run == r))
+            .map(|e| e.worker.as_str())
+            .filter(|w| !w.is_empty())
+            .collect();
+        for e in &events {
+            let belongs = |r: &str| {
+                e.run == r
+                    || e.run.is_empty()
+                        && matches!(e.kind.as_str(), "join" | "refused")
+                        && members.contains(e.worker.as_str())
+            };
+            if run.is_some_and(|r| !belongs(r)) {
                 continue;
             }
             let payload = serde_json::from_str::<Value>(&e.payload).unwrap_or(Value::Null);

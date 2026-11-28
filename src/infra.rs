@@ -921,7 +921,9 @@ fn keyword_secret_hit(trimmed: &str) -> bool {
         return keyword_secret_hit(rest.trim_start());
     }
     let value = maybe_value.trim().trim_matches(['"', '\'']);
-    let looks_like_secret_key = !key_is_code && key_looks_secret(key);
+    // An engine rule id (`GATE-SECRET: no; ...` in a table) names a rule, not a credential.
+    let looks_like_secret_key =
+        !key_is_code && !crate::registry::IDS.contains(&key) && key_looks_secret(key);
 
     let value_is_literal = value.len() >= 8
             && !value_is_placeholder(value)
@@ -1130,6 +1132,11 @@ pub fn self_test_cases() -> Vec<(&'static str, bool)> {
     let hits = |content: &str| plaintext_secret_violations("x.env", content, false).len();
     let gh = concat!("ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789");
     let mut cases = vec![
+        (
+            "GB-428 a rule id before prose is silent, a secret name fires",
+            hits("| Q4 | Should `GATE-SECRET`: no; others with match and 1 h |") == 0
+                && hits("API_SECRET: Zk39sLm4Qp7vRt8z") == 1,
+        ),
         (
             "GB-407 a reference before a command is silent",
             hits("DB_PASSWORD=\"$DB_SECRET\" ./backup.sh --now") == 0

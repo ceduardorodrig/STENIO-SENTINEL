@@ -261,6 +261,47 @@ fn audit_dir(host: &policy::Host, home: &str) -> PathBuf {
         .unwrap_or_else(|| state_dir().join("audit"))
 }
 
+/// The harness that called the hook (GB-421): the payload shape, else the nearest ancestor
+/// process that is a known harness, else its session variable, else `unknown`.
+fn harness_of(payload: &Value) -> String {
+    if payload.get("toolCall").is_some() {
+        return "antigravity".to_string();
+    }
+    let by_program = |name: &str| match name {
+        "claude" => Some("claude-code"),
+        "opencode" => Some("opencode"),
+        "hermes" => Some("hermes"),
+        "agy" | "antigravity" => Some("antigravity"),
+        _ => None,
+    };
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..4 {
+        let read = |file: &str| std::fs::read_to_string(format!("/proc/{pid}/{file}"));
+        if let Some(found) = read("comm").ok().and_then(|c| by_program(c.trim())) {
+            return found.to_string();
+        }
+        let parent = read("status").ok().and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("PPid:"))
+                .and_then(|p| p.trim().parse::<u32>().ok())
+        });
+        match parent {
+            Some(next) if next > 1 => pid = next,
+            _ => break,
+        }
+    }
+    config::Config::load()
+        .ok()
+        .and_then(|c| {
+            c.session
+                .harness
+                .into_iter()
+                .find(|(_, var)| std::env::var_os(var).is_some())
+                .map(|(name, _)| name)
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Writes the entry; a record that cannot be written never changes the decision.
 fn record(dir: &Path, payload: &Value, action: &Action, decision: &Decision) {
     let cfg = config::Config::load().ok();
@@ -274,6 +315,7 @@ fn record(dir: &Path, payload: &Value, action: &Action, decision: &Decision) {
     put("rules", json!(decision.rules));
     put("cwd", json!(action.cwd.display().to_string()));
     put("session", json!(session));
+    put("harness", json!(harness_of(payload)));
     put("agent", json!(payload.get("agent_id")));
     if let Some(text) = action.command.as_ref().or(action.code.as_ref()) {
         put("command", json!(audit::redact(text)));
