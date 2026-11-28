@@ -141,6 +141,8 @@ pub fn next_counter(conn: &Connection, key: &str) -> HubResult<i64> {
 
 /// Appends one event to the chain. Must run inside a write transaction.
 pub fn append(conn: &Connection, new: NewEvent<'_>) -> HubResult<i64> {
+    // Every write that stores text records an event, and the transaction rolls back with it.
+    super::hygiene::check(&new.payload)?;
     let seq = next_counter(conn, "head_seq")?;
     let prev_hash = meta(conn, "head_hash")?.unwrap_or_else(|| GENESIS.to_string());
     let mut event = Event {

@@ -338,7 +338,7 @@ pub fn is_ledger_tool(name: &str) -> bool {
 /// The tool result: a short text, the same data as `structuredContent`, and `isError`.
 pub fn tool_result(outcome: &HubResult<Value>) -> Value {
     let (data, failed) = match outcome {
-        Ok(v) => (v.clone(), v["ok"] == json!(false)),
+        Ok(v) => (super::hygiene::label(v.clone()), v["ok"] == json!(false)),
         Err(e) => (e.to_json(), true),
     };
     // Clients that ignore structured content still read the data in the text.
